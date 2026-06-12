@@ -571,7 +571,12 @@ impl Parser {
                     }
                     Err(e) => {
                         self.emit_error(e);
+                        let before = self.pos;
                         self.synchronize_past_nested_block();
+                        // 若同步点未前进且未到 EOF，强制前进一步，避免死循环
+                        if self.pos == before && !self.is_at_end() {
+                            self.advance();
+                        }
                         if self.check(&TokenKind::Dedent) || self.is_at_end() {
                             break;
                         }
@@ -960,7 +965,12 @@ impl Parser {
                     Err(e) => {
                         self.pos = save;
                         self.emit_error(e);
+                        let before = self.pos;
                         self.synchronize_past_nested_block();
+                        // 若同步点未前进且未到 EOF，强制前进一步，避免死循环
+                        if self.pos == before && !self.is_at_end() {
+                            self.advance();
+                        }
                         if self.check(&TokenKind::Dedent) || self.is_at_end() {
                             break;
                         }
@@ -1594,17 +1604,9 @@ impl Parser {
         let mut items = Vec::new();
         if !self.check(&TokenKind::RBracket) {
             loop {
-                let mut item_atoms =
+                let item_atoms =
                     self.parse_atoms_until(&[TokenKind::Comma, TokenKind::RBracket])?;
-                if item_atoms.len() != 1 {
-                    return Err(ParseError::UnexpectedToken {
-                        found: "compound list item".into(),
-                        expected: "single atom".into(),
-                        line: 0,
-                        col: 0,
-                    });
-                }
-                items.push(item_atoms.pop().unwrap());
+                items.push(item_atoms);
                 if self.matches(&TokenKind::Comma) {
                     continue;
                 }

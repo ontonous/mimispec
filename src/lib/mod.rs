@@ -807,6 +807,65 @@ module App:
             other => panic!("expected UnterminatedString, got {:?}", other),
         }
     }
+
+    #[test]
+    fn parse_nested_generic_type_hint() {
+        // 嵌套泛型列表字面量应作为类型提示正常解析。
+        let src = r#"type X:
+    handlers: Map[EventType, List[EventHandler]]
+"#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let Fragment::TypeDef { typedef } = &result.file.fragments[0] else {
+            panic!("expected type")
+        };
+        let TypeBody::Record { fields } = &typedef.body else {
+            panic!("expected record")
+        };
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].name.name, "handlers");
+        // type_hint: Map [EventType, List[EventHandler]]
+        assert_eq!(fields[0].type_hint.len(), 2);
+        let Atom::List { items } = &fields[0].type_hint[1] else {
+            panic!("expected list atom")
+        };
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].len(), 1);
+        assert_eq!(items[1].len(), 2);
+    }
+
+    #[test]
+    fn error_recovery_does_not_hang_on_invalid_token() {
+        // 非法字符应被快速报告，而不是进入无限循环或 panic。
+        let src = "func Compute(x):\n    steps:\n        result = ~x\n";
+        let result = parse(src);
+        assert!(!result.errors.is_empty(), "expected errors for invalid token");
+    }
+
+    #[test]
+    fn module_error_recovery_at_fragment_boundary() {
+        // module 内错误后紧跟合法 fragment，同步点停在 fragment 开头不应死循环。
+        let src = r#"module App:
+    func Broken(:
+    func Good(): ...
+"#;
+        let result = parse(src);
+        assert!(!result.errors.is_empty(), "expected errors");
+
+        let module = result.file.fragments.iter().find_map(|f| match f {
+            Fragment::Module { module } if module.name.name == "App" => Some(module),
+            _ => None,
+        });
+        assert!(module.is_some(), "module App should be preserved");
+        let module = module.unwrap();
+        assert!(
+            module
+                .items
+                .iter()
+                .any(|f| matches!(f, Fragment::Func { func } if func.name.name == "Good")),
+            "func Good should be parsed after error recovery"
+        );
+    }
 }
 
 #[cfg(test)]

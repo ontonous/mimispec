@@ -377,7 +377,7 @@ pub enum SimpleValue {
         keyword_commitment: Commitment,
     },
     List {
-        items: Vec<Atom>,
+        items: Vec<Vec<Atom>>,
     },
 }
 
@@ -459,7 +459,7 @@ pub enum Atom {
     String { value: FString },
     Number { value: String },
     Symbol { value: String },
-    List { items: Vec<Atom> },
+    List { items: Vec<Vec<Atom>> },
 }
 
 // ── UI 块 ──────────────────────────────────────────────────────────────────
