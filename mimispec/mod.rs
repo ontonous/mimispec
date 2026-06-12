@@ -1,0 +1,1019 @@
+pub mod ast;
+pub mod error;
+pub mod lexer;
+pub mod parser;
+
+use error::ParseResult;
+use lexer::Lexer;
+use parser::Parser;
+
+/// 解析 MimiSpec 源字符串，返回 AST 和错误列表（编辑器场景：尽可能解析）。
+pub fn parse(source: &str) -> ParseResult {
+    match Lexer::new(source).tokenize() {
+        Ok(tokens) => Parser::new(tokens).parse_file(),
+        Err(e) => ParseResult {
+            file: ast::File {
+                imports: vec![],
+                rules: vec![],
+                fragments: vec![],
+            },
+            errors: vec![e],
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mimispec::error::ParseError;
+    use ast::*;
+
+    #[test]
+    fn parse_ui_minimal() {
+        let src = r#"
+module App:
+    ui CounterView binds CounterModel:
+        stack:
+            "当前计数" desc "大号数字"
+"#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let file = result.file;
+        assert_eq!(file.fragments.len(), 1);
+        let Fragment::Module { module } = &file.fragments[0] else {
+            panic!("expected module")
+        };
+        let Fragment::Ui { ui } = &module.items[0] else {
+            panic!("expected ui")
+        };
+        assert_eq!(ui.name.name, "CounterView");
+        assert_eq!(ui.binds.as_ref().unwrap().name, "CounterModel");
+    }
+
+    #[test]
+    fn parse_ui_full_task_manager() {
+        let src = r#"
+module TaskManager:
+    ui TaskPanel binds state:
+        stack "整个面板垂直排列":
+            parallel "水平工具栏":
+                "任务列表" desc "标题，加粗"
+                parallel "右侧按钮组":
+                    "全部" desc "过滤按钮" on tap: SetFilter("all")
+                    "已完成" desc "过滤按钮" on tap: SetFilter("done") requires state.selectedFilter != "done"
+            parallel "输入区":
+                "输入新任务..." desc "文本输入框"
+                "添加" desc "主按钮" on tap: AddTask(state, inputValue) requires inputValue != ""
+            stack "弹性高度，可滚动":
+                parallel "单行任务":
+                    "复选框" desc "勾选表示完成" on tap: ToggleTask(state, task.id)
+                    "@task.title" desc "任务标题"
+                    "删除" desc "按钮" on tap: DeleteTask(state, task.id)
+            "暂无任务" desc "当过滤后列表为空时显示" requires state.tasks.len() == 0
+"#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let file = result.file;
+        assert_eq!(file.fragments.len(), 1);
+        let Fragment::Module { module } = &file.fragments[0] else {
+            panic!("expected module")
+        };
+        let Fragment::Ui { ui } = &module.items[0] else {
+            panic!("expected ui")
+        };
+        assert_eq!(ui.name.name, "TaskPanel");
+    }
+
+    #[test]
+    fn parse_ui_action_variants() {
+        let src = r#"
+module App:
+    ui Detail:
+        stack:
+            "返回" desc "按钮" on tap: to TaskPanel
+            "保存" desc "按钮" on "提交": Save(state), to HomeScreen
+            "搜索" desc "按钮" on tap: state.query = inputValue
+            "执行" desc "按钮" on tap: "执行搜索并刷新列表"
+"#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let file = result.file;
+        let Fragment::Module { module } = &file.fragments[0] else {
+            panic!("expected module")
+        };
+        let Fragment::Ui { ui } = &module.items[0] else {
+            panic!("expected ui")
+        };
+        let UiNode::Stack { stack } = &ui.root else {
+            panic!("expected stack")
+        };
+        assert_eq!(stack.children.len(), 4);
+
+        // Check navigation action
+        let UiNode::Leaf { leaf } = &stack.children[0] else {
+            panic!("expected leaf")
+        };
+        let on = leaf.on.as_ref().unwrap();
+        assert!(
+            matches!(&on.action.actions[0], Action::Navigate { target } if target.name == "TaskPanel")
+        );
+
+        // Check composite action
+        let UiNode::Leaf { leaf } = &stack.children[1] else {
+            panic!("expected leaf")
+        };
+        let on = leaf.on.as_ref().unwrap();
+        assert_eq!(on.action.actions.len(), 2);
+
+        // Check assign action
+        let UiNode::Leaf { leaf } = &stack.children[2] else {
+            panic!("expected leaf")
+        };
+        let on = leaf.on.as_ref().unwrap();
+        assert!(matches!(&on.action.actions[0], Action::Assign { .. }));
+
+        // Check natural language action
+        let UiNode::Leaf { leaf } = &stack.children[3] else {
+            panic!("expected leaf")
+        };
+        let on = leaf.on.as_ref().unwrap();
+        assert!(matches!(&on.action.actions[0], Action::Natural { .. }));
+    }
+
+    #[test]
+    fn parse_ui_event_name_string() {
+        let src = r#"
+module App:
+    ui Test:
+        stack:
+            "提交" on "双击": DoSomething()
+"#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let file = result.file;
+        let Fragment::Module { module } = &file.fragments[0] else {
+            panic!("expected module")
+        };
+        let Fragment::Ui { ui } = &module.items[0] else {
+            panic!("expected ui")
+        };
+        let UiNode::Stack { stack } = &ui.root else {
+            panic!("expected stack")
+        };
+        let UiNode::Leaf { leaf } = &stack.children[0] else {
+            panic!("expected leaf")
+        };
+        let on = leaf.on.as_ref().unwrap();
+        assert!(matches!(&on.event_name, EventName::Natural { text } if text.value == "双击"));
+    }
+
+    #[test]
+    fn parse_parasteps() {
+        let src = r#"
+module App:
+    func LoadDashboard:
+        steps:
+            parasteps "同时请求多个数据源":
+                loadUsers desc "GET /users"
+                loadOrders desc "GET /orders"
+                loadMetrics desc "GET /metrics"
+            combine results to done
+"#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let file = result.file;
+        let Fragment::Module { module } = &file.fragments[0] else {
+            panic!("expected module")
+        };
+        let Fragment::Func { func } = &module.items[0] else {
+            panic!("expected func")
+        };
+        assert_eq!(func.steps.len(), 2);
+        match &func.steps[0] {
+            Step::Parasteps { step: p } => {
+                assert_eq!(p.description.as_ref().unwrap().value, "同时请求多个数据源");
+                assert_eq!(p.steps.len(), 3);
+            }
+            _ => panic!("expected parasteps"),
+        }
+    }
+
+    // ── v0.3 新增测试 ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_standalone_steps_fragment() {
+        // v0.3: 裸 steps 可以作为顶层 Fragment
+        let src = r#"
+steps:
+    check inventory
+    if stock < qty:
+        error "out of stock"
+    charge payment
+"#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let file = result.file;
+        assert_eq!(file.fragments.len(), 1);
+        let Fragment::Steps { steps } = &file.fragments[0] else {
+            panic!("expected steps")
+        };
+        assert_eq!(steps.len(), 3);
+        assert!(matches!(&steps[0], Step::Action { .. }));
+        assert!(matches!(&steps[1], Step::If { .. }));
+        assert!(matches!(&steps[2], Step::Action { .. }));
+    }
+
+    #[test]
+    fn rule_scope_test() {
+        // 场景1: 顶层 rule 附着给下一个 fragment（无空行）
+        let src1 = r#"rule "约束module"
+module Shop:
+    func Pay:
+        steps:
+            check balance"#;
+        let result1 = parse(src1);
+        println!("=== 场景1: 顶层 rule 附着给 module ===");
+        println!("file.rules: {}", result1.file.rules.len());
+        let Fragment::Module { module } = &result1.file.fragments[0] else {
+            panic!()
+        };
+        println!("module.rules: {}", module.rules.len());
+        for r in &module.rules {
+            println!("  - {}", r.desc.content.value);
+        }
+        assert_eq!(result1.file.rules.len(), 0, "顶层 rule 不应留在 file.rules");
+        assert_eq!(module.rules.len(), 1, "rule 应附着给 module");
+        assert_eq!(module.rules[0].desc.content.value, "约束module");
+
+        // 场景2: 空行阻断，rule 变为全局
+        let src2 = r#"rule "全局约束"
+
+module Shop:
+    func Pay:
+        steps:
+            check balance"#;
+        let result2 = parse(src2);
+        println!("\n=== 场景2: 空行阻断 ===");
+        println!("file.rules: {}", result2.file.rules.len());
+        for r in &result2.file.rules {
+            println!("  - {}", r.desc.content.value);
+        }
+        assert_eq!(result2.file.rules.len(), 1, "空行阻断后 rule 应变为全局");
+        assert_eq!(result2.file.rules[0].desc.content.value, "全局约束");
+
+        // 场景3: module 内 rule 约束 module 本身（不因内部空行中断）
+        let src3 = r#"module Shop:
+    rule "模块级约束"
+    
+    type Order:
+        id: u64
+    
+    func Pay:
+        steps:
+            check balance"#;
+        let result3 = parse(src3);
+        println!("\n=== 场景3: module 内 rule 不因空行中断 ===");
+        let Fragment::Module { module } = &result3.file.fragments[0] else {
+            panic!()
+        };
+        println!("module.rules: {}", module.rules.len());
+        for r in &module.rules {
+            println!("  - {}", r.desc.content.value);
+        }
+        assert_eq!(module.rules.len(), 1);
+        assert_eq!(module.rules[0].desc.content.value, "模块级约束");
+        assert_eq!(module.items.len(), 2, "module 应包含 type 和 func");
+    }
+
+    #[test]
+    fn parse_multiple_top_level_fragments() {
+        // v0.3.1: rule 作为前置约束修饰符，不再是独立 Fragment
+        let src = r#"
+type OrderStatus: New | Pending | Paid | Shipped | Cancelled
+
+rule "支付幂等"
+
+steps:
+    check inventory
+    charge payment
+"#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let file = result.file;
+        // rule 作为前置约束修饰符附着到 steps，所以只有 2 个 fragment
+        assert_eq!(file.fragments.len(), 2);
+        assert!(matches!(&file.fragments[0], Fragment::TypeDef { .. }));
+        // steps 带有前置 rule
+        assert!(matches!(&file.fragments[1], Fragment::Steps { .. }));
+        // 全局 rule 被收集到 file.rules
+        assert_eq!(file.rules.len(), 1);
+    }
+
+    #[test]
+    fn parse_expr_fragment() {
+        // v0.3: 裸表达式可以作为顶层 Fragment
+        let src = "order.status == Pending and amount > 0";
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let file = result.file;
+        assert_eq!(file.fragments.len(), 1);
+        let Fragment::Expr { expr } = &file.fragments[0] else {
+            panic!("expected expr")
+        };
+        assert!(matches!(expr, Expr::And { .. }));
+    }
+
+    #[test]
+    fn parse_placeholder_step() {
+        // v0.3: ... 占位符
+        let src = r#"
+func Pay(order, amount):
+    steps:
+        check funds
+        ...
+        order.status = Paid to done
+"#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let file = result.file;
+        let Fragment::Func { func } = &file.fragments[0] else {
+            panic!("expected func")
+        };
+        assert_eq!(func.steps.len(), 3);
+        assert!(matches!(&func.steps[1], Step::Placeholder { .. }));
+    }
+
+    #[test]
+    fn parse_standalone_uinode() {
+        // v0.3: 裸 UI 节点可以作为顶层 Fragment
+        let src = r#"stack "工具栏":
+    "全部" desc "过滤"
+    "进行中" desc "过滤"
+"#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let file = result.file;
+        assert_eq!(file.fragments.len(), 1);
+        assert!(matches!(&file.fragments[0], Fragment::UiNode { .. }));
+        let Fragment::UiNode { node } = &file.fragments[0] else {
+            panic!("expected uinode")
+        };
+        assert!(matches!(node, UiNode::Stack { .. }));
+    }
+
+    #[test]
+    fn parse_placeholder_fragment() {
+        // v0.3: 单独的 ... 作为顶层 Fragment
+        let src = "...";
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let file = result.file;
+        assert_eq!(file.fragments.len(), 1);
+        assert!(matches!(&file.fragments[0], Fragment::Placeholder));
+    }
+
+    #[test]
+    fn parse_func_single_line_placeholder() {
+        // v0.3: func Pay(order): ... 作为单行函数体占位
+        let src = "func Pay(order): ...";
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let file = result.file;
+        assert_eq!(file.fragments.len(), 1);
+        let Fragment::Func { func } = &file.fragments[0] else {
+            panic!("expected func")
+        };
+        assert_eq!(func.name.name, "Pay");
+        assert_eq!(func.params.len(), 1);
+        assert!(func.requires.is_none());
+        assert!(func.ensures.is_none());
+        assert!(func.steps.is_empty());
+    }
+
+    #[test]
+    fn parse_func_block_placeholder() {
+        // v0.3: func Pay(order):\n    ... 作为 block 内占位
+        let src = "func Pay(order):\n    ...";
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let file = result.file;
+        assert_eq!(file.fragments.len(), 1);
+        let Fragment::Func { func } = &file.fragments[0] else {
+            panic!("expected func")
+        };
+        assert_eq!(func.name.name, "Pay");
+        assert!(func.steps.is_empty());
+    }
+
+    #[test]
+    fn parse_requires_placeholder() {
+        // v0.3: requires: ... 作为条件占位
+        let src = r#"
+func Pay(order):
+    requires: ...
+    steps:
+        charge payment to done
+"#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let file = result.file;
+        let Fragment::Func { func } = &file.fragments[0] else {
+            panic!("expected func")
+        };
+        assert!(func.requires.is_some());
+        let cond = func.requires.as_ref().unwrap();
+        assert!(matches!(
+            cond,
+            Condition::Structured {
+                expr: Expr::Placeholder { .. }
+            }
+        ));
+    }
+
+    #[test]
+    fn parse_type_placeholder() {
+        // v0.3: type Order: ... 作为单行类型定义占位
+        let src = "type Order: ...";
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let file = result.file;
+        assert_eq!(file.fragments.len(), 1);
+        let Fragment::TypeDef { typedef } = &file.fragments[0] else {
+            panic!("expected type")
+        };
+        assert_eq!(typedef.name.name, "Order");
+        assert!(matches!(&typedef.body, TypeBody::Record { fields } if fields.is_empty()));
+    }
+
+    #[test]
+    fn parse_flow_placeholder() {
+        // v0.3: flow Lifecycle: ... 作为单行 flow 占位
+        let src = "flow Lifecycle: ...";
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let file = result.file;
+        assert_eq!(file.fragments.len(), 1);
+        let Fragment::Flow { flow } = &file.fragments[0] else {
+            panic!("expected flow")
+        };
+        assert_eq!(flow.name.name, "Lifecycle");
+        assert!(flow.entries.is_empty());
+    }
+
+    #[test]
+    fn parse_ui_placeholder() {
+        // v0.3: ui View: ... 作为单行 UI 占位
+        let src = "ui View: ...";
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let file = result.file;
+        assert_eq!(file.fragments.len(), 1);
+        let Fragment::Ui { ui } = &file.fragments[0] else {
+            panic!("expected ui")
+        };
+        assert_eq!(ui.name.name, "View");
+        assert!(matches!(ui.root, UiNode::Stack { .. }));
+    }
+
+    #[test]
+    fn parse_assignment_placeholder() {
+        // v0.3: order.status = ... 作为赋值右侧占位
+        let src = r#"
+func Pay(order):
+    steps:
+        order.status = ...
+"#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let file = result.file;
+        let Fragment::Func { func } = &file.fragments[0] else {
+            panic!("expected func")
+        };
+        assert_eq!(func.steps.len(), 1);
+        let Step::Assign { step } = &func.steps[0] else {
+            panic!("expected assign")
+        };
+        assert!(matches!(step.value, SimpleValue::Ident { ref value } if value.name == "..."));
+    }
+
+    #[test]
+    fn parse_import_directive() {
+        let src = r#"@import "common/types.mms"
+
+module UserDomain:
+    func GetUser(id):
+        requires: id > 0
+        steps:
+            query database
+            return user to done
+"#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let file = result.file;
+        assert_eq!(file.imports.len(), 1);
+        assert_eq!(file.imports[0], "common/types.mms");
+        assert_eq!(file.fragments.len(), 1);
+        let Fragment::Module { module } = &file.fragments[0] else {
+            panic!("expected module")
+        };
+        assert_eq!(module.name.name, "UserDomain");
+    }
+
+    #[test]
+    fn parse_multiple_imports() {
+        let src = r#"@import "a.mms"
+@import "b.mms"
+
+type X: A | B
+"#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let file = result.file;
+        assert_eq!(file.imports.len(), 2);
+        assert_eq!(file.imports[0], "a.mms");
+        assert_eq!(file.imports[1], "b.mms");
+    }
+
+    // ── 多错误报告测试 ────────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_multiple_errors_recover_at_fragment_boundary() {
+        // func 缺少 `)`，内部 steps 被当作独立 fragment 解析，后续 type 仍能正常解析
+        let src = r#"func Broken(order:
+    steps:
+        do something
+
+type Order: A | B | C
+"#;
+        let result = parse(src);
+        assert_eq!(
+            result.errors.len(),
+            1,
+            "expected 1 error, got {:?}",
+            result.errors
+        );
+        // steps 块被当作独立顶层 fragment 恢复解析
+        assert!(result
+            .file
+            .fragments
+            .iter()
+            .any(|f| matches!(f, Fragment::Steps { .. })));
+        assert!(result
+            .file
+            .fragments
+            .iter()
+            .any(|f| matches!(f, Fragment::TypeDef { typedef } if typedef.name.name == "Order")));
+    }
+
+    #[test]
+    fn parse_error_recovery_between_fragments() {
+        // 语法错误 fragment 后紧跟合法 fragment
+        let src = r#"func Broken(:
+    steps:
+        do something
+
+func Good(): ...
+
+flow Lifecycle:
+    Idle to Active: desc "启动"
+"#;
+        let result = parse(src);
+        assert!(
+            !result.errors.is_empty(),
+            "expected at least one error, got {:?}",
+            result.errors
+        );
+        // 应该能解析出 func Good 和 flow Lifecycle（中间的 steps 被当作独立 fragment）
+        assert!(result
+            .file
+            .fragments
+            .iter()
+            .any(|f| matches!(f, Fragment::Func { func } if func.name.name == "Good")));
+        assert!(result
+            .file
+            .fragments
+            .iter()
+            .any(|f| matches!(f, Fragment::Flow { flow } if flow.name.name == "Lifecycle")));
+    }
+
+    #[test]
+    fn parse_import_error_recovery() {
+        // @import 后面缺少路径，后续的 fragment 仍能解析
+        let src = r#"@import
+
+func Main(): ...
+"#;
+        let result = parse(src);
+        assert_eq!(result.errors.len(), 1);
+        assert_eq!(result.file.fragments.len(), 1);
+        assert!(
+            matches!(&result.file.fragments[0], Fragment::Func { func } if func.name.name == "Main")
+        );
+    }
+
+    #[test]
+    fn parse_field_level_rules() {
+        // type body 内的 rule 应作为字段级约束附着给下一个 field
+        let src = r#"
+type Order:
+    rule "id 必须大于 0"
+    id: u64
+    rule "status 必须有效"
+    rule "status 不能是 Cancelled"
+    status: OrderStatus
+    amount: Money
+"#;
+        let result = parse(src);
+        assert!(
+            result.errors.is_empty(),
+            "parse errors: {:?}",
+            result.errors
+        );
+        let file = result.file;
+        assert_eq!(file.fragments.len(), 1);
+        let Fragment::TypeDef { typedef } = &file.fragments[0] else {
+            panic!("expected type")
+        };
+        let TypeBody::Record { fields } = &typedef.body else {
+            panic!("expected record")
+        };
+        assert_eq!(fields.len(), 3);
+
+        assert_eq!(fields[0].name.name, "id");
+        assert_eq!(fields[0].rules.len(), 1);
+        assert_eq!(fields[0].rules[0].desc.content.value, "id 必须大于 0");
+
+        assert_eq!(fields[1].name.name, "status");
+        assert_eq!(fields[1].rules.len(), 2);
+        assert_eq!(fields[1].rules[0].desc.content.value, "status 必须有效");
+        assert_eq!(
+            fields[1].rules[1].desc.content.value,
+            "status 不能是 Cancelled"
+        );
+
+        assert_eq!(fields[2].name.name, "amount");
+        assert_eq!(fields[2].rules.len(), 0);
+    }
+
+    #[test]
+    fn parse_type_level_and_field_level_rules() {
+        // 外部 rule 给 type，内部 rule 给 field
+        let src = r#"
+rule "type-level constraint"
+type Order:
+    rule "field-level constraint"
+    id: u64
+"#;
+        let result = parse(src);
+        assert!(
+            result.errors.is_empty(),
+            "parse errors: {:?}",
+            result.errors
+        );
+        let file = result.file;
+        let Fragment::TypeDef { typedef } = &file.fragments[0] else {
+            panic!("expected type")
+        };
+
+        assert_eq!(typedef.rules.len(), 1);
+        assert_eq!(typedef.rules[0].desc.content.value, "type-level constraint");
+
+        let TypeBody::Record { fields } = &typedef.body else {
+            panic!("expected record")
+        };
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].rules.len(), 1);
+        assert_eq!(
+            fields[0].rules[0].desc.content.value,
+            "field-level constraint"
+        );
+    }
+
+    #[test]
+    fn parse_module_inner_error_recovery() {
+        // module 内部有错误时不应丢失整个 module，
+        // 而应跳过错误 fragment，继续解析 module 内后续实体及顶层 fragment。
+        let src = r#"module App:
+    func Broken(:
+        steps:
+            do something
+
+    func Good(): ...
+
+type Status: A | B
+"#;
+        let result = parse(src);
+        assert!(!result.errors.is_empty(), "expected errors");
+
+        // module App 应该保留，且内部包含 func Good
+        let module = result.file.fragments.iter().find_map(|f| match f {
+            Fragment::Module { module } if module.name.name == "App" => Some(module),
+            _ => None,
+        });
+        assert!(module.is_some(), "module App should be preserved");
+        let module = module.unwrap();
+        assert!(
+            module
+                .items
+                .iter()
+                .any(|f| matches!(f, Fragment::Func { func } if func.name.name == "Good")),
+            "func Good should be parsed after error recovery"
+        );
+
+        // 后续顶层 type Status 仍能解析
+        assert!(
+            result.file.fragments.iter().any(
+                |f| matches!(f, Fragment::TypeDef { typedef } if typedef.name.name == "Status")
+            ),
+            "expected type Status to be parsed"
+        );
+    }
+    #[test]
+    fn parse_func_inner_step_error_recovery() {
+        // func body 内的错误 step 不应导致整个函数丢失，
+        // 后续合法 step 仍应被解析。
+        let src = r#"func Compute(x):
+    steps:
+        if :
+        result = x
+"#;
+        let result = parse(src);
+        assert!(
+            !result.errors.is_empty(),
+            "expected errors for invalid step"
+        );
+
+        let func = result.file.fragments.iter().find_map(|f| match f {
+            Fragment::Func { func } if func.name.name == "Compute" => Some(func),
+            _ => None,
+        });
+        assert!(func.is_some(), "func Compute should be preserved");
+        let func = func.unwrap();
+        assert_eq!(
+            func.steps.len(),
+            1,
+            "expected 1 step after skipping invalid 'if :'"
+        );
+        assert!(
+            matches!(&func.steps[0], Step::Assign { .. }),
+            "step should be assignment 'result = x'"
+        );
+    }
+
+    #[test]
+    fn parse_type_def_field_error_recovery() {
+        // type record 内某个 field 解析失败不应丢失整个 type，
+        // 后续 field 仍应被解析。
+        let src = r#"type Cat:
+    name: String
+    : String
+    color: String
+"#;
+        let result = parse(src);
+        assert!(
+            !result.errors.is_empty(),
+            "expected errors for malformed field"
+        );
+
+        let typedef = result.file.fragments.iter().find_map(|f| match f {
+            Fragment::TypeDef { typedef } if typedef.name.name == "Cat" => Some(typedef),
+            _ => None,
+        });
+        assert!(typedef.is_some(), "type Cat should be preserved");
+        let typedef = typedef.unwrap();
+        let fields = match &typedef.body {
+            TypeBody::Record { fields } => fields,
+            _ => panic!("expected record body"),
+        };
+        assert_eq!(fields.len(), 2, "expected 2 fields: name and color");
+        assert_eq!(fields[0].name.name, "name");
+        assert_eq!(fields[1].name.name, "color");
+    }
+
+    #[test]
+    fn parse_unterminated_string_line() {
+        // 未闭合字符串应当在开引号所在行报错，而不是漂移到很后面。
+        let src = r#"desc "missing close
+module App:
+    func Good(): ...
+"#;
+        let result = parse(src);
+        assert_eq!(result.errors.len(), 1, "expected exactly one error");
+        match &result.errors[0] {
+            ParseError::UnterminatedString { line, col } => {
+                assert_eq!(*line, 1, "error should be on line 1 (opening quote)");
+                assert_eq!(*col, 6, "error should be at column 6 (opening quote)");
+            }
+            other => panic!("expected UnterminatedString, got {:?}", other),
+        }
+    }
+}
+
+#[cfg(test)]
+mod default_code_test {
+    use super::*;
+    use crate::mimispec::ast::*;
+    #[test]
+    fn parse_default_code() {
+        let src = r#"desc "Meowthos 的元气猫咖营业手册喵！"
+rule "所有咖啡必须加猫爪拉花，这是底线喵"
+
+module NekoCafe:
+    desc "一家由猫娘（和冒失AI）经营的梦幻咖啡屋"
+
+    type OrderStatus: New | Brewing | Served | Spilled | Refunded | Done
+
+    type Drink:
+        name: String
+        price: Number
+        desc "这杯饮料的描述，比如'超烫的焦糖玛奇朵'"
+
+    rule "热饮不得低于 60°C，不然客人会投诉喵"
+    func Brew(drink, temp):
+        requires: temp >= 60
+        ensures: drink.status == Served
+        steps:
+            desc "先把咖啡豆磨成粉... 啊，磨太细了喵！"
+            grind beans
+            if temp > 90:
+                desc "太烫了会烫到舌头喵！"
+                cool down
+            else:
+                ...
+            pour milk
+            desc "拉花环节！画个猫爪... 哎呀画成狗了喵"
+            drink.status = Served
+
+    flow OrderLifecycle:
+        Pending:
+            to Brewing: desc "交给我吧！大概不会出事的喵"
+        Brewing:
+            to Served: desc "上菜的时候要喊'请慢用喵'"
+            to Spilled: desc "... 又是谁撞翻了托盘"
+        Served:
+            to Done: desc "客人喝完啦，收杯子喵"
+        Spilled:
+            to Refunded: desc "赔钱赔钱喵"
+
+    func HandleRefund(order):
+        steps:
+            desc "客人生气了... 先鞠躬道歉喵"
+            apologize deeply
+            for item in order.items:
+                check item.spill_level
+                if item.spill_level > 5:
+                    desc "这杯完全洒了，全额退喵"
+                    refund item.price
+                else:
+                    desc "还好只洒了一点，打个折吧"
+                    discount item.price
+            desc "道歉完毕！下次会小心的... 大概喵"
+"#;
+        let result = parse(src);
+        assert!(
+            result.errors.is_empty(),
+            "parse errors: {:?}",
+            result.errors
+        );
+        assert_eq!(
+            result.file.fragments.len(),
+            2,
+            "expected 2 fragments: Steps(Desc) + Module"
+        );
+        assert!(matches!(&result.file.fragments[0], Fragment::Steps { .. }));
+        let Fragment::Module { module } = &result.file.fragments[1] else {
+            panic!("expected Module fragment at index 1");
+        };
+        assert_eq!(module.name.name, "NekoCafe");
+        assert_eq!(module.rules.len(), 1, "module should have 1 rule");
+        assert_eq!(module.items.len(), 5, "module should have 5 items: type enum, type record, func Brew, flow, func HandleRefund");
+    }
+}
+
+#[cfg(test)]
+mod lock_suffix_tests {
+    use super::*;
+    use crate::mimispec::error::ParseError;
+    use ast::*;
+
+    #[test]
+    fn parse_lock_suffix_on_keyword() {
+        let src = r#"module$ Shop:
+    type$$ Order:
+        id: String
+"#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let Fragment::Module { module } = &result.file.fragments[0] else {
+            panic!("expected module")
+        };
+        assert_eq!(module.keyword_commitment, Commitment::Locked);
+
+        let Fragment::TypeDef { typedef } = &module.items[0] else {
+            panic!("expected type")
+        };
+        assert_eq!(typedef.keyword_commitment, Commitment::StrongLocked);
+    }
+
+    #[test]
+    fn parse_lock_suffix_on_identifier() {
+        let src = r#"module Shop$:
+    func Pay$?():
+        steps:
+            check balance
+"#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let Fragment::Module { module } = &result.file.fragments[0] else {
+            panic!("expected module")
+        };
+        assert_eq!(module.name.commitment, Commitment::Locked);
+
+        let Fragment::Func { func } = &module.items[0] else {
+            panic!("expected func")
+        };
+        assert_eq!(func.name.commitment, Commitment::LockedQuestion);
+    }
+
+    #[test]
+    fn parse_lock_suffix_on_string_content() {
+        // rule 与 module 之间无空行，会作为前置约束附着给 module
+        let src = r#"rule$? "支付必须幂等"$
+module Shop:
+    func Pay:
+        steps:
+            desc$?? "检查余额"
+"#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let Fragment::Module { module } = &result.file.fragments[0] else {
+            panic!("expected module")
+        };
+        assert_eq!(
+            module.rules[0].keyword_commitment,
+            Commitment::LockedQuestion
+        );
+        assert_eq!(module.rules[0].desc.content.commitment, Commitment::Locked);
+        let Fragment::Func { func } = &module.items[0] else {
+            panic!("expected func")
+        };
+        let Step::Desc { content } = &func.steps[0] else {
+            panic!("expected desc step")
+        };
+        assert_eq!(content.need_commitment, Commitment::LockedQuestionQuestion);
+        assert_eq!(content.content.commitment, Commitment::None);
+    }
+
+    #[test]
+    fn parse_strong_lock_with_question() {
+        let src = r#"module Shop:
+    func Pay() with PaymentCap$$?:
+        steps:
+            charge payment
+"#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let Fragment::Module { module } = &result.file.fragments[0] else {
+            panic!("expected module")
+        };
+        let Fragment::Func { func } = &module.items[0] else {
+            panic!("expected func")
+        };
+        assert_eq!(
+            func.capabilities[0].name.commitment,
+            Commitment::StrongLockedQuestion
+        );
+    }
+
+    #[test]
+    fn parse_invalid_lock_order_question_before_lock() {
+        let src = r#"rule$? "合法"
+rule?$ "非法：不确定在锁之前"
+"#;
+        let result = parse(src);
+        // 第一个合法，第二个非法
+        assert!(
+            result.errors.iter().any(|e| matches!(e, ParseError::UnexpectedToken { expected, .. } if expected.contains("锁后缀必须在不确定后缀之前"))),
+            "expected invalid suffix order error, got {:?}", result.errors
+        );
+    }
+
+    #[test]
+    fn parse_lock_density_does_not_break_existing_fuzzy() {
+        let src = r#"module? Shop:
+    func Pay??():
+        steps:
+            check balance
+"#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let Fragment::Module { module } = &result.file.fragments[0] else {
+            panic!("expected module")
+        };
+        assert_eq!(module.keyword_commitment, Commitment::Question);
+        let Fragment::Func { func } = &module.items[0] else {
+            panic!("expected func")
+        };
+        assert_eq!(func.name.commitment, Commitment::QuestionQuestion);
+    }
+}
