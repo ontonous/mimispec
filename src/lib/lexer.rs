@@ -1,4 +1,4 @@
-use crate::mimispec::error::ParseError;
+use crate::error::ParseError;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TokenKind {

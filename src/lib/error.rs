@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::mimispec::ast::File;
+use crate::ast::File;
 
 /// 解析结果：即使出错也返回尽可能完整的 AST + 所有错误
 #[derive(Debug, Clone, PartialEq)]

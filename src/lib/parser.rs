@@ -1,6 +1,6 @@
-use crate::mimispec::ast::*;
-use crate::mimispec::error::{ParseError, ParseResult};
-use crate::mimispec::lexer::{Token, TokenKind};
+use crate::ast::*;
+use crate::error::{ParseError, ParseResult};
+use crate::lexer::{Token, TokenKind};
 
 pub struct Parser {
     tokens: Vec<Token>,

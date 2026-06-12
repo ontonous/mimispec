@@ -25,7 +25,7 @@ pub fn parse(source: &str) -> ParseResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mimispec::error::ParseError;
+    use crate::error::ParseError;
     use ast::*;
 
     #[test]
@@ -812,7 +812,7 @@ module App:
 #[cfg(test)]
 mod default_code_test {
     use super::*;
-    use crate::mimispec::ast::*;
+    use crate::ast::*;
     #[test]
     fn parse_default_code() {
         let src = r#"desc "Meowthos 的元气猫咖营业手册喵！"
@@ -893,7 +893,7 @@ module NekoCafe:
 #[cfg(test)]
 mod lock_suffix_tests {
     use super::*;
-    use crate::mimispec::error::ParseError;
+    use crate::error::ParseError;
     use ast::*;
 
     #[test]
