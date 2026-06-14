@@ -31,3 +31,25 @@ pub enum ParseError {
     #[error("unterminated string at line {line}, col {col}")]
     UnterminatedString { line: usize, col: usize },
 }
+
+impl ParseError {
+    pub fn line(&self) -> usize {
+        match self {
+            ParseError::UnexpectedEof => 0,
+            ParseError::UnexpectedToken { line, .. } => *line,
+            ParseError::IndentError { line, .. } => *line,
+            ParseError::InvalidEscape { line, .. } => *line,
+            ParseError::UnterminatedString { line, .. } => *line,
+        }
+    }
+
+    pub fn col(&self) -> usize {
+        match self {
+            ParseError::UnexpectedEof => 0,
+            ParseError::UnexpectedToken { col, .. } => *col,
+            ParseError::IndentError { .. } => 0,
+            ParseError::InvalidEscape { col, .. } => *col,
+            ParseError::UnterminatedString { col, .. } => *col,
+        }
+    }
+}

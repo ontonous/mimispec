@@ -1,5 +1,6 @@
 use clap::Parser;
 use mimispec::parse;
+use serde::Serialize;
 use std::fs;
 use std::path::PathBuf;
 
@@ -13,9 +14,34 @@ struct Args {
     /// Show AST structure
     #[arg(short, long)]
     ast: bool,
+
+    /// Output results as JSON (useful for editor integrations)
+    #[arg(short, long)]
+    json: bool,
 }
 
-fn parse_one(path: &PathBuf, ast: bool) -> (bool, usize) {
+#[derive(Serialize)]
+struct JsonError {
+    line: usize,
+    col: usize,
+    message: String,
+}
+
+#[derive(Serialize)]
+struct JsonResult {
+    path: String,
+    success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ast: Option<serde_json::Value>,
+    errors: Vec<JsonError>,
+}
+
+#[derive(Serialize)]
+struct JsonOutput {
+    results: Vec<JsonResult>,
+}
+
+fn parse_one(path: &PathBuf, ast: bool, json: bool) -> (bool, usize, JsonResult) {
     let source = if path == &PathBuf::from("-") {
         use std::io::Read;
         let mut input = String::new();
@@ -25,30 +51,69 @@ fn parse_one(path: &PathBuf, ast: bool) -> (bool, usize) {
         match fs::read_to_string(path) {
             Ok(s) => s,
             Err(e) => {
-                println!("✗ Failed to read {}: {}", path.display(), e);
-                return (false, 1);
+                let message = format!("Failed to read {}: {}", path.display(), e);
+                if !json {
+                    println!("✗ {}", message);
+                }
+                let json_result = JsonResult {
+                    path: path.display().to_string(),
+                    success: false,
+                    ast: None,
+                    errors: vec![JsonError {
+                        line: 0,
+                        col: 0,
+                        message,
+                    }],
+                };
+                return (false, 1, json_result);
             }
         }
     };
 
     let result = parse(&source);
-
-    if result.errors.is_empty() {
-        println!("✓ Parsing successful: {}", path.display());
-        if ast {
-            println!("{:#?}", result.file);
-        }
-        (true, 0)
+    let success = result.errors.is_empty();
+    let ast_value = if ast || json {
+        serde_json::to_value(&result.file).ok()
     } else {
-        println!(
-            "✗ Parsing failed for {} with {} error(s)",
-            path.display(),
-            result.errors.len()
-        );
-        for err in &result.errors {
-            println!("  - {:?}", err);
+        None
+    };
+
+    let errors: Vec<JsonError> = result
+        .errors
+        .iter()
+        .map(|err| JsonError {
+            line: err.line(),
+            col: err.col(),
+            message: err.to_string(),
+        })
+        .collect();
+
+    let json_result = JsonResult {
+        path: path.display().to_string(),
+        success,
+        ast: ast_value,
+        errors,
+    };
+
+    if json {
+        (success, result.errors.len(), json_result)
+    } else {
+        if success {
+            println!("✓ Parsing successful: {}", path.display());
+            if ast {
+                println!("{:#?}", result.file);
+            }
+        } else {
+            println!(
+                "✗ Parsing failed for {} with {} error(s)",
+                path.display(),
+                result.errors.len()
+            );
+            for err in &result.errors {
+                println!("  - {:?}", err);
+            }
         }
-        (false, result.errors.len())
+        (success, result.errors.len(), json_result)
     }
 }
 
@@ -57,18 +122,27 @@ fn main() {
 
     let mut total_errors = 0usize;
     let mut any_failure = false;
+    let mut json_results = Vec::new();
 
     // 串行处理每个文件，避免并行占用过高
     for path in &args.files {
-        let (ok, errs) = parse_one(path, args.ast);
+        let (ok, errs, json_result) = parse_one(path, args.ast, args.json);
         if !ok {
             any_failure = true;
         }
         total_errors += errs;
+        json_results.push(json_result);
+    }
+
+    if args.json {
+        let output = JsonOutput { results: json_results };
+        println!("{}", serde_json::to_string_pretty(&output).unwrap_or_default());
     }
 
     if any_failure {
-        eprintln!("\nTotal error(s): {}", total_errors);
+        if !args.json {
+            eprintln!("\nTotal error(s): {}", total_errors);
+        }
         std::process::exit(1);
     }
 }
