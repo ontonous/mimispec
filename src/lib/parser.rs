@@ -68,13 +68,24 @@ impl Parser {
 
             // 跳过 fragment 后面的 newline，然后收集前置 rule
             self.skip_newlines();
-            let rule_errors = self.consume_pending_rules();
+            let mut rule_errors = self.consume_pending_rules();
             errors.extend(rule_errors);
 
             // 跳过 newline，检测空行阻断（lexer 下无空行=2 个 newline，有空行>=3 个）
-            let newline_count = self.skip_newlines_and_count();
+            let mut newline_count = self.skip_newlines_and_count();
             if newline_count >= 3 {
                 global_rules.extend(self.take_pending_rules());
+            }
+
+            // 空行之后如果仍是 rule，说明是新的一组约束，继续收集。
+            // 循环处理“rule 组 → 空行 → rule 组 → ...”的情况。
+            while self.check(&TokenKind::Rule) {
+                rule_errors = self.consume_pending_rules();
+                errors.extend(rule_errors);
+                newline_count = self.skip_newlines_and_count();
+                if newline_count >= 3 {
+                    global_rules.extend(self.take_pending_rules());
+                }
             }
 
             if self.is_at_end() {
@@ -198,9 +209,35 @@ impl Parser {
 
     /// 消费连续的 rule 语句，收集到 pending_rules
     /// 返回解析过程中遇到的错误（不会 panic）。
+    ///
+    /// 连续的 rule 之间允许由普通换行（<=2 个 Newline token）分隔；
+    /// 遇到 3 个及以上 Newline token 时视为空行，阻断附着链，交给外层处理。
     fn consume_pending_rules(&mut self) -> Vec<ParseError> {
         let mut errors = Vec::new();
-        while self.check(&TokenKind::Rule) {
+        loop {
+            // 前瞻统计连续 Newline token 数量
+            let mut lookahead = self.pos;
+            let mut newline_count = 0;
+            while matches!(
+                self.tokens.get(lookahead).map(|t| &t.kind),
+                Some(TokenKind::Newline)
+            ) {
+                lookahead += 1;
+                newline_count += 1;
+            }
+
+            // 空行阻断：保留 Newline 给外层的 skip_newlines_and_count 处理
+            if newline_count >= 3 {
+                break;
+            }
+            if newline_count > 0 {
+                self.pos = lookahead;
+            }
+
+            if !self.check(&TokenKind::Rule) {
+                break;
+            }
+
             match self.parse_rule_def() {
                 Ok(rule) => self.pending_rules.push(rule),
                 Err(e) => {
@@ -221,6 +258,10 @@ impl Parser {
     /// 将 pending_rules 附着到 fragment
     fn attach_rules_to_fragment(&mut self, fragment: &mut Fragment) {
         let rules = self.take_pending_rules();
+        Self::attach_rules_to_fragment_from(rules, fragment);
+    }
+
+    fn attach_rules_to_fragment_from(rules: Vec<RuleDef>, fragment: &mut Fragment) {
         if rules.is_empty() {
             return;
         }
@@ -538,6 +579,7 @@ impl Parser {
         let mut desc = None;
         let mut rules = Vec::new();
         let mut items = Vec::new();
+        let mut pending_item_rules: Vec<RuleDef> = Vec::new();
 
         self.skip_newlines();
         self.expect(TokenKind::Indent, "indented block")?;
@@ -545,17 +587,37 @@ impl Parser {
         loop {
             self.skip_newlines();
             if self.check(&TokenKind::Dedent) || self.is_at_end() {
+                rules.extend(pending_item_rules.drain(..));
                 break;
             }
 
-            // 收集 block 内的前置 rule
+            // 收集 block 内的 rule 链；空行阻断时变为 module 级约束，
+            // 否则附着给下一个实体。
             while self.check(&TokenKind::Rule) {
-                rules.push(self.parse_rule_def()?);
+                let rule_errors = self.consume_pending_rules();
+                for e in rule_errors {
+                    self.emit_error(e);
+                }
+                let collected = std::mem::take(&mut self.pending_rules);
+                let newline_count = self.skip_newlines_and_count();
+                if newline_count >= 3 {
+                    // 空行阻断：已收集的 rule 全部归为 module 级
+                    rules.extend(collected);
+                } else {
+                    pending_item_rules = collected;
+                    break;
+                }
             }
-            self.skip_newlines();
+
+            if self.check(&TokenKind::Dedent) || self.is_at_end() {
+                rules.extend(pending_item_rules.drain(..));
+                break;
+            }
 
             if self.check(&TokenKind::Desc) {
                 let d = self.parse_desc_entity()?;
+                // desc 不接收 rule；若 rule 链后紧跟 desc，提升为 module 级约束
+                rules.extend(pending_item_rules.drain(..));
                 if desc.is_none() {
                     desc = Some(d);
                 } else {
@@ -566,10 +628,17 @@ impl Parser {
                 }
             } else {
                 match self.parse_fragment() {
-                    Ok(fragment) => {
+                    Ok(mut fragment) => {
+                        if !pending_item_rules.is_empty() {
+                            Self::attach_rules_to_fragment_from(
+                                std::mem::take(&mut pending_item_rules),
+                                &mut fragment,
+                            );
+                        }
                         items.push(fragment);
                     }
                     Err(e) => {
+                        pending_item_rules.clear();
                         self.emit_error(e);
                         let before = self.pos;
                         self.synchronize_past_nested_block();
@@ -751,6 +820,7 @@ impl Parser {
 
     /// 解析 rule "string"（无标签）
     fn parse_rule_def(&mut self) -> Result<RuleDef, ParseError> {
+        let line = self.peek().map(|t| t.line).unwrap_or(0);
         let keyword_commitment = self.expect_kw(TokenKind::Rule, "`rule`")?;
         let content = self.fuzzy_string()?;
         let desc = Desc {
@@ -760,6 +830,7 @@ impl Parser {
         Ok(RuleDef {
             desc,
             keyword_commitment,
+            line,
         })
     }
 
@@ -932,9 +1003,19 @@ impl Parser {
                 self.advance();
                 continue;
             }
-            // 收集前置 rule
+            // 收集前置 rule 链；func body 内的 rule 全部归为 func 级约束。
+            // 允许普通换行分隔连续 rule，空行分隔多组 rule。
             while self.check(&TokenKind::Rule) {
-                rules.push(self.parse_rule_def()?);
+                let rule_errors = self.consume_pending_rules();
+                for e in rule_errors {
+                    self.emit_error(e);
+                }
+                let collected = std::mem::take(&mut self.pending_rules);
+                rules.extend(collected);
+                let newline_count = self.skip_newlines_and_count();
+                if newline_count < 3 {
+                    break;
+                }
             }
             self.skip_newlines();
             if self.check(&TokenKind::Desc) {

@@ -158,6 +158,8 @@ pub struct RuleDef {
     pub desc: Desc,
     #[serde(default)]
     pub keyword_commitment: Commitment,
+    #[serde(default)]
+    pub line: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

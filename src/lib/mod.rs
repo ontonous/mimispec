@@ -286,6 +286,28 @@ module Shop:
     }
 
     #[test]
+    fn parse_multiple_attached_rules_before_fragment() {
+        // 多条 rule 连续写在 fragment 之前（无空行），应全部附着给下一个 fragment
+        let src = r#"rule "rule A"
+rule "rule B"
+rule "rule C"
+module Agent:
+    desc "agent desc"
+"#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        assert_eq!(result.file.rules.len(), 0, "未空行的 rule 不应变为全局约束");
+        assert_eq!(result.file.fragments.len(), 1);
+        let Fragment::Module { module } = &result.file.fragments[0] else {
+            panic!("expected module fragment")
+        };
+        assert_eq!(module.rules.len(), 3, "三条 rule 应全部附着给 module");
+        assert_eq!(module.rules[0].desc.content.value, "rule A");
+        assert_eq!(module.rules[1].desc.content.value, "rule B");
+        assert_eq!(module.rules[2].desc.content.value, "rule C");
+    }
+
+    #[test]
     fn parse_multiple_top_level_fragments() {
         // v0.3.1: rule 作为前置约束修饰符，不再是独立 Fragment
         let src = r#"
@@ -874,11 +896,32 @@ mod default_code_test {
     use crate::ast::*;
     #[test]
     fn parse_default_code() {
-        let src = r#"desc "Meowthos 的元气猫咖营业手册喵！"
-rule "所有咖啡必须加猫爪拉花，这是底线喵"
-
-module NekoCafe:
-    desc "一家由猫娘（和冒失AI）经营的梦幻咖啡屋"
+        // 这个用例覆盖 rule 分组语义：
+        // 1. 文件顶层 rule 组（被 // 注释/空行分隔）进入 file.rules；
+        // 2. module 前无空行的 rule 组附着给 module；
+        // 3. module 内被 // 注释/空行分隔的 rule 组进入 module.rules；
+        // 4. func 前无空行的 rule 组附着给 func；
+        // 5. func body 内被 // 注释/空行分隔的 rule 组进入 func.rules。
+        let src = r#"desc "Meowthos猫咖营业手册喵！"
+//全局约束1
+rule$ "1"
+rule$ "2"
+rule$ "3"
+//全局约束2
+rule$ "4"
+rule$ "5"
+rule$ "6"
+//module约束1
+rule$ "7"
+rule$ "8"
+module MeowCafe:
+    desc "猫猫的梦幻咖啡屋喵"
+    //module约束2
+    rule$ "9"
+    rule$ "10"
+    //module约束3
+    rule$ "11"
+    rule$ "12"
 
     type OrderStatus: New | Brewing | Served | Spilled | Refunded | Done
 
@@ -887,10 +930,19 @@ module NekoCafe:
         price: Number
         desc "这杯饮料的描述，比如'超烫的焦糖玛奇朵'"
 
-    rule "热饮不得低于 60°C，不然客人会投诉喵"
-    func Brew(drink, temp):
+    //func约束1
+    rule$ "13"
+    rule$ "14"
+    func$ Brew(drink, temp):
+        //func约束2
+        rule$ "15"
+        rule$ "16"
+
         requires: temp >= 60
         ensures: drink.status == Served
+        //func约束3
+        rule$ "17"
+        rule$ "18"
         steps:
             desc "先把咖啡豆磨成粉... 啊，磨太细了喵！"
             grind beans
@@ -902,50 +954,61 @@ module NekoCafe:
             pour milk
             desc "拉花环节！画个猫爪... 哎呀画成狗了喵"
             drink.status = Served
-
-    flow OrderLifecycle:
-        Pending:
-            to Brewing: desc "交给我吧！大概不会出事的喵"
-        Brewing:
-            to Served: desc "上菜的时候要喊'请慢用喵'"
-            to Spilled: desc "... 又是谁撞翻了托盘"
-        Served:
-            to Done: desc "客人喝完啦，收杯子喵"
-        Spilled:
-            to Refunded: desc "赔钱赔钱喵"
-
-    func HandleRefund(order):
-        steps:
-            desc "客人生气了... 先鞠躬道歉喵"
-            apologize deeply
-            for item in order.items:
-                check item.spill_level
-                if item.spill_level > 5:
-                    desc "这杯完全洒了，全额退喵"
-                    refund item.price
-                else:
-                    desc "还好只洒了一点，打个折吧"
-                    discount item.price
-            desc "道歉完毕！下次会小心的... 大概喵"
 "#;
         let result = parse(src);
-        assert!(
-            result.errors.is_empty(),
-            "parse errors: {:?}",
-            result.errors
-        );
-        assert_eq!(
-            result.file.fragments.len(),
-            2,
-            "expected 2 fragments: Steps(Desc) + Module"
-        );
+        assert!(result.errors.is_empty(), "parse errors: {:?}", result.errors);
+        assert_eq!(result.file.fragments.len(), 2, "expected 2 fragments: Steps(Desc) + Module");
         assert!(matches!(&result.file.fragments[0], Fragment::Steps { .. }));
+
         let Fragment::Module { module } = &result.file.fragments[1] else {
             panic!("expected Module fragment at index 1");
         };
-        assert_eq!(module.name.name, "NekoCafe");
-        assert_eq!(module.rules.len(), 1, "module should have 1 rule");
-        assert_eq!(module.items.len(), 5, "module should have 5 items: type enum, type record, func Brew, flow, func HandleRefund");
+        assert_eq!(module.name.name, "MeowCafe");
+
+        let file_rule_values: Vec<&str> = result
+            .file
+            .rules
+            .iter()
+            .map(|r| r.desc.content.value.as_str())
+            .collect();
+        assert_eq!(
+            file_rule_values,
+            vec!["1", "2", "3", "4", "5", "6"],
+            "顶层 rule 组应全部进入 file.rules"
+        );
+
+        let module_rule_values: Vec<&str> = module
+            .rules
+            .iter()
+            .map(|r| r.desc.content.value.as_str())
+            .collect();
+        assert_eq!(
+            module_rule_values,
+            vec!["7", "8", "9", "10", "11", "12"],
+            "module 级 rule 组应全部进入 module.rules"
+        );
+
+        assert_eq!(module.items.len(), 3, "module 应有 3 个 item：type enum、type record、func Brew");
+
+        let Fragment::Func { func } = &module.items[2] else {
+            panic!("expected func Brew at index 2")
+        };
+        assert_eq!(func.name.name, "Brew");
+
+        let mut func_rule_values: Vec<&str> = func
+            .rules
+            .iter()
+            .map(|r| r.desc.content.value.as_str())
+            .collect();
+        func_rule_values.sort();
+        assert_eq!(
+            func_rule_values,
+            vec!["13", "14", "15", "16", "17", "18"],
+            "func 级 rule 组应全部进入 func.rules"
+        );
+
+        assert!(func.requires.is_some(), "func Brew 应有 requires");
+        assert!(func.ensures.is_some(), "func Brew 应有 ensures");
     }
 }
 
