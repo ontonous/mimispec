@@ -2,6 +2,7 @@ pub mod ast;
 pub mod error;
 pub mod lexer;
 pub mod parser;
+pub mod render;
 
 use error::ParseResult;
 use lexer::Lexer;
@@ -986,6 +987,27 @@ func Test():
     }
 
     #[test]
+    fn parse_math_multi_subscript() {
+        let src = r#"
+func Test():
+    math:
+        v = x[i, j]
+        last = tensor[-1, -2]
+"#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let Fragment::Func { func } = &result.file.fragments[0] else {
+            panic!("expected func")
+        };
+        let math = func.math.as_ref().unwrap();
+        assert_eq!(math.statements.len(), 2);
+        let MathStatement::Define { target, .. } = &math.statements[0] else {
+            panic!("expected define")
+        };
+        assert!(matches!(target, Expr::Ident { .. }));
+    }
+
+    #[test]
     fn parse_math_type_enum_still_works() {
         let src = r#"
 type Status: New | Pending | Paid
@@ -1300,5 +1322,175 @@ rule?$ "非法：不确定在锁之前"
             panic!("expected func")
         };
         assert_eq!(func.name.commitment, Commitment::QuestionQuestion);
+    }
+}
+
+#[cfg(test)]
+mod render_tests {
+    use super::*;
+    use crate::render::render_file;
+
+    #[test]
+    fn render_and_reparse_simple_module() {
+        let src = r#"module Shop:
+    type OrderStatus: New | Pending | Paid
+
+    rule "支付必须幂等"
+    func Pay(order, amount):
+        desc "处理支付"
+        requires: order.status == Pending and amount > 0
+        ensures: order.status == Paid
+        steps:
+            check balance
+            charge payment
+            order.status = Paid to done
+"#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let rendered = render_file(&result.file);
+        let reparsed = parse(&rendered);
+        assert!(reparsed.errors.is_empty(), "rendered source failed to parse: {:?}\nrendered:\n{}", reparsed.errors, rendered);
+    }
+
+    #[test]
+    fn render_preserves_math_precedence() {
+        let src = r#"func Compute(x, y):
+    math:
+        a = (x - y) / 4
+        b = x + y * 2
+        c = a ** b ** 2
+"#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let rendered = render_file(&result.file);
+        assert!(rendered.contains("(x - y) / 4"), "rendered should preserve parentheses:\n{}", rendered);
+        let reparsed = parse(&rendered);
+        assert!(reparsed.errors.is_empty(), "{:?}", reparsed.errors);
+    }
+
+    #[test]
+    fn render_multi_subscript() {
+        let src = r#"func Test():
+    math:
+        v = x[i, j]
+"#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let rendered = render_file(&result.file);
+        assert!(rendered.contains("x[i, j]"), "rendered should contain multi-subscript:\n{}", rendered);
+        let reparsed = parse(&rendered);
+        assert!(reparsed.errors.is_empty(), "{:?}", reparsed.errors);
+    }
+
+    #[test]
+    fn render_ui_with_event_binding() {
+        let src = r#"module App:
+    ui CounterView binds CounterModel:
+        stack:
+            "当前计数" desc "大号数字"
+            "加" desc "按钮" on tap: Increment()
+"#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let rendered = render_file(&result.file);
+        let reparsed = parse(&rendered);
+        assert!(reparsed.errors.is_empty(), "{:?}", reparsed.errors);
+    }
+
+    #[test]
+    fn render_lock_suffixes() {
+        let src = r#"module$ Shop:
+    func Pay$?():
+        steps:
+            desc$?? "检查余额"
+"#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let rendered = render_file(&result.file);
+        assert!(rendered.contains("module$ Shop:"), "rendered should preserve lock suffixes:\n{}", rendered);
+        let reparsed = parse(&rendered);
+        assert!(reparsed.errors.is_empty(), "{:?}", reparsed.errors);
+    }
+
+    #[test]
+    fn render_placeholders() {
+        let src = r#"type Order: ...
+flow Lifecycle: ...
+func Pay(order): ...
+ui View: ...
+"#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let rendered = render_file(&result.file);
+        assert!(rendered.contains("type Order: ..."), "rendered:\n{}", rendered);
+        assert!(rendered.contains("flow Lifecycle: ..."), "rendered:\n{}", rendered);
+        assert!(rendered.contains("func Pay(order): ..."), "rendered:\n{}", rendered);
+        assert!(rendered.contains("ui View: ..."), "rendered:\n{}", rendered);
+        let reparsed = parse(&rendered);
+        assert!(reparsed.errors.is_empty(), "{:?}", reparsed.errors);
+    }
+
+    #[test]
+    fn render_flow_compact_arm() {
+        let src = r#"flow Lifecycle:
+    New to Active: desc "启动"
+    Active:
+        to Done: desc "完成"
+"#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let rendered = render_file(&result.file);
+        assert!(rendered.contains("New to Active: desc \"启动\""), "rendered:\n{}", rendered);
+        let reparsed = parse(&rendered);
+        assert!(reparsed.errors.is_empty(), "{:?}", reparsed.errors);
+    }
+
+    #[test]
+    fn render_natural_condition() {
+        let src = r#"func Pay():
+    requires: "payment captured or error"
+    ensures: "status is Paid"
+    steps:
+        charge payment
+"#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let rendered = render_file(&result.file);
+        let reparsed = parse(&rendered);
+        assert!(reparsed.errors.is_empty(), "{:?}", reparsed.errors);
+    }
+
+    #[test]
+    fn render_type_hint_with_generics() {
+        let src = r#"type X:
+    handlers: Map[EventType, List[EventHandler]]
+"#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let rendered = render_file(&result.file);
+        assert!(
+            rendered.contains("handlers: Map[EventType, List[EventHandler]]"),
+            "rendered:\n{}",
+            rendered
+        );
+        let reparsed = parse(&rendered);
+        assert!(reparsed.errors.is_empty(), "{:?}", reparsed.errors);
+    }
+
+    #[test]
+    fn render_top_level_fragments() {
+        let src = r#"order.status == Pending and amount > 0
+
+steps:
+    check inventory
+    charge payment
+
+...
+"#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let rendered = render_file(&result.file);
+        let reparsed = parse(&rendered);
+        assert!(reparsed.errors.is_empty(), "{:?}", reparsed.errors);
     }
 }

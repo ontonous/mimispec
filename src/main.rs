@@ -18,6 +18,10 @@ struct Args {
     /// Output results as JSON (useful for editor integrations)
     #[arg(short, long)]
     json: bool,
+
+    /// Render AST back to MimiSpec source
+    #[arg(short, long)]
+    render: bool,
 }
 
 #[derive(Serialize)]
@@ -33,6 +37,8 @@ struct JsonResult {
     success: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     ast: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    render: Option<String>,
     errors: Vec<JsonError>,
 }
 
@@ -41,7 +47,7 @@ struct JsonOutput {
     results: Vec<JsonResult>,
 }
 
-fn parse_one(path: &PathBuf, ast: bool, json: bool) -> (bool, usize, JsonResult) {
+fn parse_one(path: &PathBuf, ast: bool, json: bool, render: bool) -> (bool, usize, JsonResult) {
     let source = if path == &PathBuf::from("-") {
         use std::io::Read;
         let mut input = String::new();
@@ -59,6 +65,7 @@ fn parse_one(path: &PathBuf, ast: bool, json: bool) -> (bool, usize, JsonResult)
                     path: path.display().to_string(),
                     success: false,
                     ast: None,
+                    render: None,
                     errors: vec![JsonError {
                         line: 0,
                         col: 0,
@@ -78,6 +85,12 @@ fn parse_one(path: &PathBuf, ast: bool, json: bool) -> (bool, usize, JsonResult)
         None
     };
 
+    let rendered = if render || json {
+        Some(mimispec::render::render_file(&result.file))
+    } else {
+        None
+    };
+
     let errors: Vec<JsonError> = result
         .errors
         .iter()
@@ -92,6 +105,7 @@ fn parse_one(path: &PathBuf, ast: bool, json: bool) -> (bool, usize, JsonResult)
         path: path.display().to_string(),
         success,
         ast: ast_value,
+        render: rendered,
         errors,
     };
 
@@ -99,18 +113,29 @@ fn parse_one(path: &PathBuf, ast: bool, json: bool) -> (bool, usize, JsonResult)
         (success, result.errors.len(), json_result)
     } else {
         if success {
-            println!("✓ Parsing successful: {}", path.display());
-            if ast {
-                println!("{:#?}", result.file);
+            if render && !ast {
+                if let Some(source) = &json_result.render {
+                    print!("{}", source);
+                }
+            } else {
+                println!("✓ Parsing successful: {}", path.display());
+                if ast {
+                    println!("{:#?}", result.file);
+                }
+                if render {
+                    if let Some(source) = &json_result.render {
+                        println!("{}", source);
+                    }
+                }
             }
         } else {
-            println!(
+            eprintln!(
                 "✗ Parsing failed for {} with {} error(s)",
                 path.display(),
                 result.errors.len()
             );
             for err in &result.errors {
-                println!("  - {:?}", err);
+                eprintln!("  - {:?}", err);
             }
         }
         (success, result.errors.len(), json_result)
@@ -126,7 +151,7 @@ fn main() {
 
     // 串行处理每个文件，避免并行占用过高
     for path in &args.files {
-        let (ok, errs, json_result) = parse_one(path, args.ast, args.json);
+        let (ok, errs, json_result) = parse_one(path, args.ast, args.json, args.render);
         if !ok {
             any_failure = true;
         }

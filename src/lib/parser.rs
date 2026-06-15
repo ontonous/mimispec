@@ -1453,11 +1453,17 @@ impl Parser {
                 }
             } else if self.check(&TokenKind::LBracket) {
                 self.advance();
-                let index = self.parse_expr(0)?;
+                let mut indices = Vec::new();
+                if !self.check(&TokenKind::RBracket) {
+                    indices.push(self.parse_expr(0)?);
+                    while self.matches(&TokenKind::Comma) {
+                        indices.push(self.parse_expr(0)?);
+                    }
+                }
                 self.expect(TokenKind::RBracket, "`]`")?;
                 expr = Expr::Subscript {
                     object: Box::new(expr),
-                    index: Box::new(index),
+                    indices,
                 };
             } else {
                 break;

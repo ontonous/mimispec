@@ -357,7 +357,7 @@ pub enum Expr {
     },
     Subscript {
         object: Box<Expr>,
-        index: Box<Expr>,
+        indices: Vec<Expr>,
     },
     Call {
         callee: Box<Expr>,
