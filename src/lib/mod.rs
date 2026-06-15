@@ -888,6 +888,169 @@ module App:
             "func Good should be parsed after error recovery"
         );
     }
+
+    // ── math 块测试 ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_math_block_basic() {
+        let src = r#"
+func CrossAttention(query, key, value):
+    math:
+        d_k = dim(key, -1)
+        scores = query @ key.T / sqrt(d_k)
+        weights = softmax(scores, -1)
+        context = weights @ value
+"#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let Fragment::Func { func } = &result.file.fragments[0] else {
+            panic!("expected func")
+        };
+        let math = func.math.as_ref().expect("expected math block");
+        assert_eq!(math.statements.len(), 4);
+        assert!(matches!(math.statements[0], MathStatement::Define { .. }));
+        assert!(matches!(math.statements[1], MathStatement::Define { .. }));
+    }
+
+    #[test]
+    fn parse_math_arithmetic_and_bitwise() {
+        let src = r#"
+func Compute(x, y):
+    math:
+        a = x + y * 2
+        b = (x - y) / 4
+        c = a ** 3
+        mask = x & 255 | y << 8
+        inv = ~x ^ y
+"#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let Fragment::Func { func } = &result.file.fragments[0] else {
+            panic!("expected func")
+        };
+        let math = func.math.as_ref().unwrap();
+        assert_eq!(math.statements.len(), 5);
+    }
+
+    #[test]
+    fn parse_math_in_requires() {
+        let src = r#"
+func MultiHead(Q, num_heads, head_dim):
+    requires: dim(Q, -1) == num_heads * head_dim
+    steps:
+        return output
+"#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let Fragment::Func { func } = &result.file.fragments[0] else {
+            panic!("expected func")
+        };
+        let requires = func.requires.as_ref().unwrap();
+        let Condition::Structured { expr } = requires else {
+            panic!("expected structured condition")
+        };
+        assert!(matches!(expr, Expr::Compare { .. }));
+    }
+
+    #[test]
+    fn parse_math_subscript_and_unary() {
+        let src = r#"
+func Last(x):
+    math:
+        last = x[-1]
+        neg = -last
+        bits = ~neg
+"#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let Fragment::Func { func } = &result.file.fragments[0] else {
+            panic!("expected func")
+        };
+        let math = func.math.as_ref().unwrap();
+        assert_eq!(math.statements.len(), 3);
+    }
+
+    #[test]
+    fn parse_math_precedence_and_associativity() {
+        let src = r#"
+func Test():
+    math:
+        a = x + y * z
+        b = x - -y
+        c = a ** b ** 2
+        d = p | q & r
+        e = x << 2 + 1
+"#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+    }
+
+    #[test]
+    fn parse_math_type_enum_still_works() {
+        let src = r#"
+type Status: New | Pending | Paid
+
+func Check(s):
+    math:
+        flags = s | 1
+"#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+    }
+
+    #[test]
+    fn parse_math_decimal_numbers() {
+        let src = r#"
+func Configure():
+    math:
+        lr = 1e-4
+        dropout = 0.15
+        scale = 1.5e-3
+"#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let Fragment::Func { func } = &result.file.fragments[0] else {
+            panic!("expected func")
+        };
+        let math = func.math.as_ref().unwrap();
+        assert_eq!(math.statements.len(), 3);
+    }
+
+    #[test]
+    fn parse_math_in_module() {
+        let src = r#"
+module Physics:
+    math:
+        E = m * c ** 2
+
+    func Energy(m, c):
+        steps:
+            return E
+"#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let Fragment::Module { module } = &result.file.fragments[0] else {
+            panic!("expected module")
+        };
+        assert!(module.math.is_some());
+    }
+
+    #[test]
+    fn parse_math_in_type() {
+        let src = r#"
+type Rectangle:
+    width: Number
+    height: Number
+    math:
+        area == width * height
+"#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let Fragment::TypeDef { typedef } = &result.file.fragments[0] else {
+            panic!("expected type")
+        };
+        assert!(typedef.math.is_some());
+    }
 }
 
 #[cfg(test)]

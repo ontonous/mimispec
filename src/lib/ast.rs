@@ -120,6 +120,8 @@ pub struct Module {
     pub desc: Option<Desc>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rules: Vec<RuleDef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub math: Option<MathBlock>,
     #[serde(default)]
     pub items: Vec<Fragment>, // v0.3: Vec<Item> → Vec<Fragment>
     #[serde(default)]
@@ -133,6 +135,8 @@ pub struct TypeDef {
     pub desc: Option<Desc>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rules: Vec<RuleDef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub math: Option<MathBlock>,
     pub body: TypeBody,
     #[serde(default)]
     pub keyword_commitment: Commitment,
@@ -211,6 +215,8 @@ pub struct FuncDef {
     pub requires: Option<Condition>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ensures: Option<Condition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub math: Option<MathBlock>,
     pub steps: Vec<Step>,
     #[serde(default)]
     pub keyword_commitment: Commitment,
@@ -295,9 +301,63 @@ pub enum Expr {
         op: CompareOp,
         right: Box<Expr>,
     },
+    Neg {
+        expr: Box<Expr>,
+    },
+    Add {
+        left: Box<Expr>,
+        right: Box<Expr>,
+    },
+    Sub {
+        left: Box<Expr>,
+        right: Box<Expr>,
+    },
+    Mul {
+        left: Box<Expr>,
+        right: Box<Expr>,
+    },
+    Div {
+        left: Box<Expr>,
+        right: Box<Expr>,
+    },
+    Pow {
+        left: Box<Expr>,
+        right: Box<Expr>,
+    },
+    MatMul {
+        left: Box<Expr>,
+        right: Box<Expr>,
+    },
+    BitAnd {
+        left: Box<Expr>,
+        right: Box<Expr>,
+    },
+    BitOr {
+        left: Box<Expr>,
+        right: Box<Expr>,
+    },
+    BitXor {
+        left: Box<Expr>,
+        right: Box<Expr>,
+    },
+    BitNot {
+        expr: Box<Expr>,
+    },
+    Shl {
+        left: Box<Expr>,
+        right: Box<Expr>,
+    },
+    Shr {
+        left: Box<Expr>,
+        right: Box<Expr>,
+    },
     Index {
         object: Box<Expr>,
         field: Ident,
+    },
+    Subscript {
+        object: Box<Expr>,
+        index: Box<Expr>,
     },
     Call {
         callee: Box<Expr>,
@@ -307,6 +367,23 @@ pub enum Expr {
         #[serde(default)]
         keyword_commitment: Commitment,
     },
+}
+
+/// math: 块，包含一组数学语句（定义、约束或推导）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MathBlock {
+    pub statements: Vec<MathStatement>,
+    #[serde(default)]
+    pub keyword_commitment: Commitment,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind")]
+pub enum MathStatement {
+    /// 定义/赋值式：target = value
+    Define { target: Expr, value: Expr },
+    /// 纯表达式语句（约束、等式、推导等）
+    Expr { expr: Expr },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

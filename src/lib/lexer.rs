@@ -15,6 +15,7 @@ pub enum TokenKind {
     Requires,
     Ensures,
     Steps,
+    Math,
     Parasteps,
     If,
     Else,
@@ -35,6 +36,7 @@ pub enum TokenKind {
     False,
     Import,   // v0.3 新增：@import 跨文件指令
     Ellipsis, // v0.3 新增：... 占位符
+    At,       // `@` 矩阵乘法运算符
 
     // Literals
     Ident(String),
@@ -44,7 +46,7 @@ pub enum TokenKind {
     // Punctuation / operators
     Colon,
     Comma,
-    Pipe,
+    Pipe,     // `|` used as enum separator and bitwise OR in math
     LParen,
     RParen,
     LBracket,
@@ -57,6 +59,18 @@ pub enum TokenKind {
     Gt,
     Le,
     Ge,
+
+    // Math / arithmetic / bitwise operators
+    Plus,        // `+`
+    Minus,       // `-`
+    Star,        // `*`
+    Slash,       // `/`
+    Power,       // `**`
+    BitAnd,      // `&`
+    BitXor,      // `^`
+    BitNot,      // `~`
+    Shl,         // `<<`
+    Shr,         // `>>`
 
     // Fuzzy
     Question,
@@ -90,6 +104,7 @@ impl TokenKind {
             TokenKind::Requires => Some("requires"),
             TokenKind::Ensures => Some("ensures"),
             TokenKind::Steps => Some("steps"),
+            TokenKind::Math => Some("math"),
             TokenKind::If => Some("if"),
             TokenKind::Else => Some("else"),
             TokenKind::For => Some("for"),
@@ -129,6 +144,7 @@ impl std::fmt::Display for TokenKind {
             TokenKind::Requires => "requires".into(),
             TokenKind::Ensures => "ensures".into(),
             TokenKind::Steps => "steps".into(),
+            TokenKind::Math => "math".into(),
             TokenKind::If => "if".into(),
             TokenKind::Else => "else".into(),
             TokenKind::For => "for".into(),
@@ -148,6 +164,7 @@ impl std::fmt::Display for TokenKind {
             TokenKind::False => "false".into(),
             TokenKind::Import => "@import".into(),
             TokenKind::Ellipsis => "...".into(),
+            TokenKind::At => "@".into(),
             TokenKind::Ident(n) => format!("identifier `{}`", n),
             TokenKind::String(_) => "string literal".into(),
             TokenKind::Number(_) => "number".into(),
@@ -166,6 +183,16 @@ impl std::fmt::Display for TokenKind {
             TokenKind::Gt => ">".into(),
             TokenKind::Le => "<=".into(),
             TokenKind::Ge => ">=".into(),
+            TokenKind::Plus => "+".into(),
+            TokenKind::Minus => "-".into(),
+            TokenKind::Star => "*".into(),
+            TokenKind::Slash => "/".into(),
+            TokenKind::Power => "**".into(),
+            TokenKind::BitAnd => "&".into(),
+            TokenKind::BitXor => "^".into(),
+            TokenKind::BitNot => "~".into(),
+            TokenKind::Shl => "<<".into(),
+            TokenKind::Shr => ">>".into(),
             TokenKind::Question => "?".into(),
             TokenKind::QuestionQuestion => "??".into(),
             TokenKind::Dollar => "$".into(),
@@ -366,6 +393,39 @@ impl<'a> Lexer<'a> {
                 self.bump();
                 Ok(Token::new(TokenKind::Pipe, line, col))
             }
+            Some('&') => {
+                self.bump();
+                Ok(Token::new(TokenKind::BitAnd, line, col))
+            }
+            Some('^') => {
+                self.bump();
+                Ok(Token::new(TokenKind::BitXor, line, col))
+            }
+            Some('~') => {
+                self.bump();
+                Ok(Token::new(TokenKind::BitNot, line, col))
+            }
+            Some('+') => {
+                self.bump();
+                Ok(Token::new(TokenKind::Plus, line, col))
+            }
+            Some('-') => {
+                self.bump();
+                Ok(Token::new(TokenKind::Minus, line, col))
+            }
+            Some('*') => {
+                self.bump();
+                if self.peek() == Some('*') {
+                    self.bump();
+                    Ok(Token::new(TokenKind::Power, line, col))
+                } else {
+                    Ok(Token::new(TokenKind::Star, line, col))
+                }
+            }
+            Some('/') => {
+                self.bump();
+                Ok(Token::new(TokenKind::Slash, line, col))
+            }
             Some('(') => {
                 self.bump();
                 Ok(Token::new(TokenKind::LParen, line, col))
@@ -410,6 +470,9 @@ impl<'a> Lexer<'a> {
                 if self.peek() == Some('=') {
                     self.bump();
                     Ok(Token::new(TokenKind::Le, line, col))
+                } else if self.peek() == Some('<') {
+                    self.bump();
+                    Ok(Token::new(TokenKind::Shl, line, col))
                 } else {
                     Ok(Token::new(TokenKind::Lt, line, col))
                 }
@@ -419,6 +482,9 @@ impl<'a> Lexer<'a> {
                 if self.peek() == Some('=') {
                     self.bump();
                     Ok(Token::new(TokenKind::Ge, line, col))
+                } else if self.peek() == Some('>') {
+                    self.bump();
+                    Ok(Token::new(TokenKind::Shr, line, col))
                 } else {
                     Ok(Token::new(TokenKind::Gt, line, col))
                 }
@@ -444,24 +510,16 @@ impl<'a> Lexer<'a> {
             }
             Some('@') => {
                 self.bump();
-                let mut import_str = String::new();
-                for _ in 0..6 {
-                    if let Some(c) = self.peek() {
-                        import_str.push(c);
+                let ahead = self.peek_string(7);
+                if ahead.starts_with("import")
+                    && (ahead.len() == 6 || !is_ident_continue(ahead.chars().nth(6).unwrap()))
+                {
+                    for _ in 0..6 {
                         self.bump();
-                    } else {
-                        break;
                     }
-                }
-                if import_str == "import" && !self.peek().map_or(false, is_ident_continue) {
                     Ok(Token::new(TokenKind::Import, line, col))
                 } else {
-                    Err(ParseError::UnexpectedToken {
-                        found: format!("@{}", import_str),
-                        expected: "`@import`".into(),
-                        line,
-                        col,
-                    })
+                    Ok(Token::new(TokenKind::At, line, col))
                 }
             }
             Some('?') => {
@@ -520,6 +578,10 @@ impl<'a> Lexer<'a> {
         let mut it = self.chars.clone();
         it.next()?;
         it.next()
+    }
+
+    fn peek_string(&self, n: usize) -> String {
+        self.chars.clone().take(n).collect()
     }
 
     fn emit_dedents(&mut self, target: usize) -> Result<Token, ParseError> {
@@ -616,6 +678,42 @@ impl<'a> Lexer<'a> {
                 break;
             }
         }
+        // 支持小数：123.45
+        if self.peek() == Some('.') && self.peek_second().map_or(false, |c| c.is_ascii_digit()) {
+            value.push('.');
+            self.bump();
+            while let Some(c) = self.peek() {
+                if c.is_ascii_digit() {
+                    value.push(c);
+                    self.bump();
+                } else {
+                    break;
+                }
+            }
+        }
+        // 支持科学计数法：1e-4, 1.5e-3, 1E+6
+        if matches!(self.peek(), Some('e') | Some('E')) {
+            let lookahead = self.peek_string(4);
+            let chars: Vec<char> = lookahead.chars().collect();
+            let valid_exp = chars.len() >= 2
+                && (chars[1].is_ascii_digit() || matches!(chars[1], '+' | '-'))
+                && (chars[1].is_ascii_digit()
+                    || (matches!(chars[1], '+' | '-') && chars.get(2).map_or(false, |c| c.is_ascii_digit())));
+            if valid_exp {
+                value.push(self.bump().unwrap()); // e/E
+                if matches!(self.peek(), Some('+') | Some('-')) {
+                    value.push(self.bump().unwrap());
+                }
+                while let Some(c) = self.peek() {
+                    if c.is_ascii_digit() {
+                        value.push(c);
+                        self.bump();
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
         Ok(Token::new(TokenKind::Number(value), line, col))
     }
 
@@ -640,6 +738,7 @@ impl<'a> Lexer<'a> {
             "stack" => TokenKind::Stack,
             "binds" => TokenKind::Binds,
             "parasteps" => TokenKind::Parasteps,
+            "math" => TokenKind::Math,
             "requires" => TokenKind::Requires,
             "ensures" => TokenKind::Ensures,
             "steps" => TokenKind::Steps,

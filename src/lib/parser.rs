@@ -578,6 +578,7 @@ impl Parser {
 
         let mut desc = None;
         let mut rules = Vec::new();
+        let mut math = None;
         let mut items = Vec::new();
         let mut pending_item_rules: Vec<RuleDef> = Vec::new();
 
@@ -626,6 +627,9 @@ impl Parser {
                         steps: vec![Step::Desc { content: d }],
                     });
                 }
+            } else if self.check(&TokenKind::Math) {
+                rules.extend(pending_item_rules.drain(..));
+                math = Some(self.parse_math_block()?);
             } else {
                 match self.parse_fragment() {
                     Ok(mut fragment) => {
@@ -662,6 +666,7 @@ impl Parser {
             name,
             desc,
             rules,
+            math,
             items,
             keyword_commitment,
         })
@@ -692,6 +697,7 @@ impl Parser {
                 name,
                 desc: None,
                 rules: Vec::new(),
+                math: None,
                 body: TypeBody::Record { fields: vec![] },
                 keyword_commitment,
             });
@@ -702,6 +708,7 @@ impl Parser {
                 name,
                 desc: None,
                 rules: Vec::new(),
+                math: None,
                 body: TypeBody::Enum {
                     variants: self.parse_variant_list()?,
                 },
@@ -714,6 +721,7 @@ impl Parser {
         self.expect(TokenKind::Indent, "indented block")?;
 
         let mut desc = None;
+        let mut math = None;
         let mut fields = Vec::new();
         let mut pending_field_rules: Vec<RuleDef> = Vec::new();
 
@@ -738,6 +746,8 @@ impl Parser {
                     desc = Some(d);
                 }
                 // 额外的 desc 在 type body 中暂时没有独立载体，保持忽略
+            } else if self.check(&TokenKind::Math) {
+                math = Some(self.parse_math_block()?);
             } else if self.check(&TokenKind::Ellipsis) {
                 self.advance();
             } else {
@@ -767,6 +777,7 @@ impl Parser {
             name,
             desc,
             rules: Vec::new(),
+            math,
             body: TypeBody::Record { fields },
             keyword_commitment,
         })
@@ -974,6 +985,7 @@ impl Parser {
                 capabilities,
                 requires: None,
                 ensures: None,
+                math: None,
                 steps: vec![],
                 keyword_commitment,
                 requires_keyword_commitment: Commitment::None,
@@ -990,6 +1002,7 @@ impl Parser {
         let mut requires_keyword_commitment = Commitment::None;
         let mut ensures = None;
         let mut ensures_keyword_commitment = Commitment::None;
+        let mut math = None;
         let mut steps = Vec::new();
         let mut steps_keyword_commitment = Commitment::None;
 
@@ -1030,10 +1043,41 @@ impl Parser {
                 requires_keyword_commitment = self.expect_kw(TokenKind::Requires, "`requires`")?;
                 self.expect(TokenKind::Colon, "`:`")?;
                 requires = Some(self.parse_condition()?);
+                if !self.line_will_end() {
+                    let (found, line, col) = match self.peek() {
+                        Some(t) => (t.kind.to_string(), t.line, t.col),
+                        None => ("EOF".into(), 0, 0),
+                    };
+                    return Err(ParseError::UnexpectedToken {
+                        found,
+                        expected: "newline after requires condition".into(),
+                        line,
+                        col,
+                    });
+                }
             } else if self.check(&TokenKind::Ensures) {
                 ensures_keyword_commitment = self.expect_kw(TokenKind::Ensures, "`ensures`")?;
                 self.expect(TokenKind::Colon, "`:`")?;
                 ensures = Some(self.parse_condition()?);
+                if !self.line_will_end() {
+                    let (found, line, col) = match self.peek() {
+                        Some(t) => (t.kind.to_string(), t.line, t.col),
+                        None => ("EOF".into(), 0, 0),
+                    };
+                    return Err(ParseError::UnexpectedToken {
+                        found,
+                        expected: "newline after ensures condition".into(),
+                        line,
+                        col,
+                    });
+                }
+            } else if self.check(&TokenKind::Math) {
+                let keyword_commitment = self.expect_kw(TokenKind::Math, "`math`")?;
+                self.expect(TokenKind::Colon, "`:`")?;
+                math = Some(MathBlock {
+                    statements: self.parse_block(|p| p.parse_math_statement())?,
+                    keyword_commitment,
+                });
             } else if self.check(&TokenKind::Steps) {
                 steps_keyword_commitment = self.expect_kw(TokenKind::Steps, "`steps`")?;
                 self.expect(TokenKind::Colon, "`:`")?;
@@ -1071,6 +1115,7 @@ impl Parser {
             capabilities,
             requires,
             ensures,
+            math,
             steps,
             keyword_commitment,
             requires_keyword_commitment,
@@ -1135,19 +1180,68 @@ impl Parser {
         Ok(Condition::Structured { expr })
     }
 
+    fn parse_math_block(&mut self) -> Result<MathBlock, ParseError> {
+        let keyword_commitment = self.expect_kw(TokenKind::Math, "`math`")?;
+        self.expect(TokenKind::Colon, "`:`")?;
+        let statements = self.parse_block(|p| p.parse_math_statement())?;
+        Ok(MathBlock {
+            statements,
+            keyword_commitment,
+        })
+    }
+
+    fn parse_math_statement(&mut self) -> Result<MathStatement, ParseError> {
+        let expr = self.parse_expr(0)?;
+        let stmt = if self.check(&TokenKind::Assign) {
+            self.advance();
+            let value = self.parse_expr(0)?;
+            MathStatement::Define { target: expr, value }
+        } else {
+            MathStatement::Expr { expr }
+        };
+        if !self.line_will_end() {
+            let (found, line, col) = match self.peek() {
+                Some(t) => (t.kind.to_string(), t.line, t.col),
+                None => ("EOF".into(), 0, 0),
+            };
+            return Err(ParseError::UnexpectedToken {
+                found,
+                expected: "end of math statement".into(),
+                line,
+                col,
+            });
+        }
+        Ok(stmt)
+    }
+
     fn parse_expr(&mut self, min_prec: u8) -> Result<Expr, ParseError> {
         let mut lhs = self.parse_primary()?;
         loop {
             let (op, prec, right_assoc) = match self.peek_kind() {
+                // Logical
                 Some(TokenKind::Or) => (BinOp::Or, 1u8, false),
                 Some(TokenKind::And) => (BinOp::And, 2u8, false),
-                Some(TokenKind::In) => (BinOp::In, 4u8, false),
-                Some(TokenKind::EqEq) => (BinOp::Cmp(CompareOp::Eq), 5u8, false),
-                Some(TokenKind::NotEq) => (BinOp::Cmp(CompareOp::Ne), 5u8, false),
-                Some(TokenKind::Lt) => (BinOp::Cmp(CompareOp::Lt), 5u8, false),
-                Some(TokenKind::Gt) => (BinOp::Cmp(CompareOp::Gt), 5u8, false),
-                Some(TokenKind::Le) => (BinOp::Cmp(CompareOp::Le), 5u8, false),
-                Some(TokenKind::Ge) => (BinOp::Cmp(CompareOp::Ge), 5u8, false),
+                // Membership / comparison
+                Some(TokenKind::In) => (BinOp::In, 3u8, false),
+                Some(TokenKind::EqEq) => (BinOp::Cmp(CompareOp::Eq), 3u8, false),
+                Some(TokenKind::NotEq) => (BinOp::Cmp(CompareOp::Ne), 3u8, false),
+                Some(TokenKind::Lt) => (BinOp::Cmp(CompareOp::Lt), 3u8, false),
+                Some(TokenKind::Gt) => (BinOp::Cmp(CompareOp::Gt), 3u8, false),
+                Some(TokenKind::Le) => (BinOp::Cmp(CompareOp::Le), 3u8, false),
+                Some(TokenKind::Ge) => (BinOp::Cmp(CompareOp::Ge), 3u8, false),
+                // Bitwise
+                Some(TokenKind::Pipe) => (BinOp::BitOr, 4u8, false),
+                Some(TokenKind::BitXor) => (BinOp::BitXor, 5u8, false),
+                Some(TokenKind::BitAnd) => (BinOp::BitAnd, 6u8, false),
+                Some(TokenKind::Shl) => (BinOp::Shl, 7u8, false),
+                Some(TokenKind::Shr) => (BinOp::Shr, 7u8, false),
+                // Arithmetic
+                Some(TokenKind::Plus) => (BinOp::Add, 8u8, false),
+                Some(TokenKind::Minus) => (BinOp::Sub, 8u8, false),
+                Some(TokenKind::Star) => (BinOp::Mul, 9u8, false),
+                Some(TokenKind::Slash) => (BinOp::Div, 9u8, false),
+                Some(TokenKind::Power) => (BinOp::Pow, 10u8, true),
+                Some(TokenKind::At) => (BinOp::MatMul, 9u8, false),
                 _ => break,
             };
             if prec < min_prec {
@@ -1157,7 +1251,7 @@ impl Parser {
                 BinOp::Or => self.expect_kw(TokenKind::Or, "`or`")?,
                 BinOp::And => self.expect_kw(TokenKind::And, "`and`")?,
                 BinOp::In => self.expect_kw(TokenKind::In, "`in`")?,
-                BinOp::Cmp(_) => {
+                _ => {
                     self.advance();
                     Commitment::None
                 }
@@ -1185,18 +1279,78 @@ impl Parser {
                     op,
                     right: Box::new(rhs),
                 },
+                BinOp::BitOr => Expr::BitOr {
+                    left: Box::new(lhs),
+                    right: Box::new(rhs),
+                },
+                BinOp::BitXor => Expr::BitXor {
+                    left: Box::new(lhs),
+                    right: Box::new(rhs),
+                },
+                BinOp::BitAnd => Expr::BitAnd {
+                    left: Box::new(lhs),
+                    right: Box::new(rhs),
+                },
+                BinOp::Shl => Expr::Shl {
+                    left: Box::new(lhs),
+                    right: Box::new(rhs),
+                },
+                BinOp::Shr => Expr::Shr {
+                    left: Box::new(lhs),
+                    right: Box::new(rhs),
+                },
+                BinOp::Add => Expr::Add {
+                    left: Box::new(lhs),
+                    right: Box::new(rhs),
+                },
+                BinOp::Sub => Expr::Sub {
+                    left: Box::new(lhs),
+                    right: Box::new(rhs),
+                },
+                BinOp::Mul => Expr::Mul {
+                    left: Box::new(lhs),
+                    right: Box::new(rhs),
+                },
+                BinOp::Div => Expr::Div {
+                    left: Box::new(lhs),
+                    right: Box::new(rhs),
+                },
+                BinOp::Pow => Expr::Pow {
+                    left: Box::new(lhs),
+                    right: Box::new(rhs),
+                },
+                BinOp::MatMul => Expr::MatMul {
+                    left: Box::new(lhs),
+                    right: Box::new(rhs),
+                },
             };
         }
         Ok(lhs)
     }
 
     fn parse_primary(&mut self) -> Result<Expr, ParseError> {
+        // 前缀一元运算符：not、-、~
+        // 操作数用 min_prec=12 解析，禁止内部出现低优先级中缀，但保留 postfix
         if self.check(&TokenKind::Not) {
             let keyword_commitment = self.expect_kw(TokenKind::Not, "`not`")?;
-            let inner = self.parse_expr(4)?;
+            let inner = self.parse_expr(12)?;
             return Ok(Expr::Not {
                 expr: Box::new(inner),
                 keyword_commitment,
+            });
+        }
+        if self.check(&TokenKind::Minus) {
+            self.advance();
+            let inner = self.parse_expr(12)?;
+            return Ok(Expr::Neg {
+                expr: Box::new(inner),
+            });
+        }
+        if self.check(&TokenKind::BitNot) {
+            self.advance();
+            let inner = self.parse_expr(12)?;
+            return Ok(Expr::BitNot {
+                expr: Box::new(inner),
             });
         }
         match self.peek_kind() {
@@ -1297,6 +1451,14 @@ impl Parser {
                     self.pos = save;
                     break;
                 }
+            } else if self.check(&TokenKind::LBracket) {
+                self.advance();
+                let index = self.parse_expr(0)?;
+                self.expect(TokenKind::RBracket, "`]`")?;
+                expr = Expr::Subscript {
+                    object: Box::new(expr),
+                    index: Box::new(index),
+                };
             } else {
                 break;
             }
@@ -1828,6 +1990,17 @@ impl Parser {
 enum BinOp {
     Or,
     And,
+    BitOr,
+    BitXor,
+    BitAnd,
+    Shl,
+    Shr,
+    Add,
+    Sub,
+    Mul,
+    Div,
+    MatMul,
+    Pow,
     In,
     Cmp(CompareOp),
 }
