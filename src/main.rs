@@ -1,4 +1,5 @@
 use clap::Parser;
+use mimispec::latex::render_file_latex;
 use mimispec::parse;
 use serde::Serialize;
 use std::fs;
@@ -22,6 +23,10 @@ struct Args {
     /// Render AST back to MimiSpec source
     #[arg(short, long)]
     render: bool,
+
+    /// Render math expressions as LaTeX (lightweight, for MathJax/KaTeX)
+    #[arg(short, long)]
+    latex: bool,
 }
 
 #[derive(Serialize)]
@@ -39,6 +44,8 @@ struct JsonResult {
     ast: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     render: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    latex: Option<String>,
     errors: Vec<JsonError>,
 }
 
@@ -47,7 +54,13 @@ struct JsonOutput {
     results: Vec<JsonResult>,
 }
 
-fn parse_one(path: &PathBuf, ast: bool, json: bool, render: bool) -> (bool, usize, JsonResult) {
+fn parse_one(
+    path: &PathBuf,
+    ast: bool,
+    json: bool,
+    render: bool,
+    latex: bool,
+) -> (bool, usize, JsonResult) {
     let source = if path == &PathBuf::from("-") {
         use std::io::Read;
         let mut input = String::new();
@@ -66,6 +79,7 @@ fn parse_one(path: &PathBuf, ast: bool, json: bool, render: bool) -> (bool, usiz
                     success: false,
                     ast: None,
                     render: None,
+                    latex: None,
                     errors: vec![JsonError {
                         line: 0,
                         col: 0,
@@ -91,6 +105,12 @@ fn parse_one(path: &PathBuf, ast: bool, json: bool, render: bool) -> (bool, usiz
         None
     };
 
+    let latex_rendered = if latex || json {
+        Some(render_file_latex(&result.file))
+    } else {
+        None
+    };
+
     let errors: Vec<JsonError> = result
         .errors
         .iter()
@@ -106,6 +126,7 @@ fn parse_one(path: &PathBuf, ast: bool, json: bool, render: bool) -> (bool, usiz
         success,
         ast: ast_value,
         render: rendered,
+        latex: latex_rendered,
         errors,
     };
 
@@ -113,9 +134,13 @@ fn parse_one(path: &PathBuf, ast: bool, json: bool, render: bool) -> (bool, usiz
         (success, result.errors.len(), json_result)
     } else {
         if success {
-            if render && !ast {
+            if render && !ast && !latex {
                 if let Some(source) = &json_result.render {
                     print!("{}", source);
+                }
+            } else if latex && !ast && !render {
+                if let Some(source) = &json_result.latex {
+                    println!("{}", source);
                 }
             } else {
                 println!("✓ Parsing successful: {}", path.display());
@@ -125,6 +150,11 @@ fn parse_one(path: &PathBuf, ast: bool, json: bool, render: bool) -> (bool, usiz
                 if render {
                     if let Some(source) = &json_result.render {
                         println!("{}", source);
+                    }
+                }
+                if latex {
+                    if let Some(source) = &json_result.latex {
+                        println!("LaTeX:\n{}", source);
                     }
                 }
             }
@@ -151,7 +181,7 @@ fn main() {
 
     // 串行处理每个文件，避免并行占用过高
     for path in &args.files {
-        let (ok, errs, json_result) = parse_one(path, args.ast, args.json, args.render);
+        let (ok, errs, json_result) = parse_one(path, args.ast, args.json, args.render, args.latex);
         if !ok {
             any_failure = true;
         }
