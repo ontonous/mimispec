@@ -147,15 +147,19 @@ impl Parser {
                 node: self.parse_ui_node()?,
             }),
             Some(TokenKind::Ellipsis) => {
-                let _keyword_commitment = self.expect_kw(TokenKind::Ellipsis, "`...`")?;
-                Ok(Fragment::Placeholder)
+                let keyword_commitment = self.expect_kw(TokenKind::Ellipsis, "`...`")?;
+                Ok(Fragment::Placeholder { keyword_commitment })
             }
             Some(TokenKind::If)
             | Some(TokenKind::For)
             | Some(TokenKind::While)
-            | Some(TokenKind::Parasteps) => Ok(Fragment::Steps {
-                steps: vec![self.parse_step()?],
-            }),
+            | Some(TokenKind::Parasteps) => {
+                let step = self.parse_step()?;
+                Ok(Fragment::Steps {
+                    keyword_commitment: Self::step_keyword_commitment(&step),
+                    steps: vec![step],
+                })
+            }
             _ => {
                 // 尝试作为裸表达式解析（v0.3: Expr Fragment）
                 let save = self.pos;
@@ -166,8 +170,10 @@ impl Parser {
                 }
                 self.pos = save;
                 // 回退为单步 Steps fragment 解析（裸表达式或动作）
+                let step = self.parse_step()?;
                 Ok(Fragment::Steps {
-                    steps: vec![self.parse_step()?],
+                    keyword_commitment: Self::step_keyword_commitment(&step),
+                    steps: vec![step],
                 })
             }
         }
@@ -175,10 +181,24 @@ impl Parser {
 
     /// 解析独立的 steps: 块（v0.3 新增）
     fn parse_steps_fragment(&mut self) -> Result<Fragment, ParseError> {
-        let _keyword_commitment = self.expect_kw(TokenKind::Steps, "`steps`")?;
+        let keyword_commitment = self.expect_kw(TokenKind::Steps, "`steps`")?;
         self.expect(TokenKind::Colon, "`:`")?;
         let steps = self.parse_block(|p| p.parse_step())?;
-        Ok(Fragment::Steps { steps })
+        Ok(Fragment::Steps {
+            keyword_commitment,
+            steps,
+        })
+    }
+
+    /// 从单步控制流 Step 提取其关键字 commitment，用于裸 `if$`/ `for$` 等顶层 fragment。
+    fn step_keyword_commitment(step: &Step) -> Commitment {
+        match step {
+            Step::If { step } => step.if_keyword_commitment,
+            Step::For { step } => step.keyword_commitment,
+            Step::While { step } => step.keyword_commitment,
+            Step::Parasteps { step } => step.keyword_commitment,
+            _ => Commitment::None,
+        }
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────
@@ -624,6 +644,7 @@ impl Parser {
                 } else {
                     // 额外的 desc 作为 Fragment::Desc
                     items.push(Fragment::Steps {
+                        keyword_commitment: Commitment::None,
                         steps: vec![Step::Desc { content: d }],
                     });
                 }

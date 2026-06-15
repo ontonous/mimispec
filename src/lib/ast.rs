@@ -106,10 +106,19 @@ pub enum Fragment {
     Flow { flow: FlowDef },
     Func { func: FuncDef },
     Ui { ui: UiDef },
-    Steps { steps: Vec<Step> }, // v0.3 新增：独立 steps 块
-    Expr { expr: Expr },        // v0.3 新增：裸表达式
-    UiNode { node: UiNode },    // v0.3 新增：裸 UI 节点
-    Placeholder,                // v0.3 新增：... 占位符
+    Steps {
+        // v0.3 新增：独立 steps 块
+        #[serde(default)]
+        keyword_commitment: Commitment,
+        steps: Vec<Step>,
+    },
+    Expr { expr: Expr },     // v0.3 新增：裸表达式
+    UiNode { node: UiNode }, // v0.3 新增：裸 UI 节点
+    Placeholder {
+        // v0.3 新增：... 占位符
+        #[serde(default)]
+        keyword_commitment: Commitment,
+    },
 }
 
 /// 模块或子模块。

@@ -107,9 +107,14 @@ impl Renderer {
             Fragment::Flow { flow } => self.render_flow(flow),
             Fragment::Func { func } => self.render_func(func),
             Fragment::Ui { ui } => self.render_ui(ui),
-            Fragment::Steps { steps } => {
+            Fragment::Steps {
+                keyword_commitment,
+                steps,
+            } => {
                 self.write_indent();
-                self.push("steps:");
+                self.push("steps");
+                self.push(&commitment_suffix(*keyword_commitment));
+                self.push(":");
                 self.newline();
                 self.render_steps_block(steps);
             }
@@ -122,9 +127,10 @@ impl Renderer {
                 self.render_ui_node(node);
                 self.newline();
             }
-            Fragment::Placeholder => {
+            Fragment::Placeholder { keyword_commitment } => {
                 self.write_indent();
                 self.push("...");
+                self.push(&commitment_suffix(*keyword_commitment));
                 self.newline();
             }
         }

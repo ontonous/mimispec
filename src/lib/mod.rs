@@ -215,7 +215,7 @@ steps:
         assert!(result.errors.is_empty(), "{:?}", result.errors);
         let file = result.file;
         assert_eq!(file.fragments.len(), 1);
-        let Fragment::Steps { steps } = &file.fragments[0] else {
+        let Fragment::Steps { steps, .. } = &file.fragments[0] else {
             panic!("expected steps")
         };
         assert_eq!(steps.len(), 3);
@@ -392,7 +392,7 @@ func Pay(order, amount):
         assert!(result.errors.is_empty(), "{:?}", result.errors);
         let file = result.file;
         assert_eq!(file.fragments.len(), 1);
-        assert!(matches!(&file.fragments[0], Fragment::Placeholder));
+        assert!(matches!(&file.fragments[0], Fragment::Placeholder { .. }));
     }
 
     #[test]
