@@ -24,6 +24,45 @@ pub fn parse(source: &str) -> ParseResult {
     }
 }
 
+/// 解析单个 Fragment（用于 IDE 片段验证）。
+pub fn parse_fragment(source: &str) -> ParseResult {
+    match Lexer::new(source).tokenize() {
+        Ok(tokens) => {
+            let mut parser = Parser::new(tokens);
+            let mut errors = Vec::new();
+            let mut fragments = Vec::new();
+            parser.skip_newlines();
+            match parser.parse_fragment() {
+                Ok(f) => fragments.push(f),
+                Err(e) => errors.push(e),
+            }
+            let mut all_errors = parser.take_errors();
+            all_errors.extend(errors);
+            ParseResult {
+                file: ast::File {
+                    imports: vec![],
+                    rules: Vec::new(),
+                    fragments,
+                },
+                errors: all_errors,
+            }
+        }
+        Err(e) => ParseResult {
+            file: ast::File {
+                imports: vec![],
+                rules: vec![],
+                fragments: vec![],
+            },
+            errors: vec![e],
+        },
+    }
+}
+
+/// 词法分析。
+pub fn tokenize(source: &str) -> Result<Vec<lexer::Token>, error::ParseError> {
+    Lexer::new(source).tokenize()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
