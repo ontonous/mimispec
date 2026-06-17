@@ -210,7 +210,7 @@ func Withdraw(account, amount):
         validate account
         deduct amount from account
         record transaction
-        return success to done
+        return success >>> done
 ```
 
 > 注意：自然语言字符串中的 `old.balance` 由 AI 或工具层解释；结构化比较条件则可直接静态检查。
@@ -229,7 +229,7 @@ func DiscountedPrice(original, rate):
     ensures: discounted < original or rate == 0
     steps:
         apply discount rate
-        return discounted to done
+        return discounted >>> done
 ```
 
 ```mimispec
@@ -240,7 +240,7 @@ func VectorNorm(v, p):
         result = norm(v, p)
     steps:
         compute norm
-        return result to done
+        return result >>> done
 ```
 
 ### 3.3 错误路径与补偿
@@ -255,14 +255,14 @@ func PlaceOrder(order):
     steps:
         reserve inventory
         on failure:
-            error "库存不足" to exit
+            error "库存不足" >>> exit
 
         charge payment
         on failure:
             release inventory desc "补偿：释放库存"
-            error "支付失败" to exit
+            error "支付失败" >>> exit
 
-        order.status = Paid to done
+        order.status = Paid >>> done
 ```
 
 ### 3.4 副作用顺序
@@ -277,7 +277,7 @@ func ProcessOrder(order):
         reserve inventory
         charge payment
         ship order
-        order.status = Completed to done
+        order.status = Completed >>> done
 ```
 
 ---
@@ -291,17 +291,17 @@ func ProcessOrder(order):
 ```mimispec
 flow OrderLifecycle:
     New:
-        to Pending: desc "提交订单"
-        to Cancelled: desc "直接取消"
+        >>> Pending: desc "提交订单"
+        >>> Cancelled: desc "直接取消"
     Pending:
-        to Paid: desc "支付成功" requires: payment.success
-        to Cancelled: desc "超时取消" requires: "elapsed > 30min"
+        >>> Paid: desc "支付成功" requires: payment.success
+        >>> Cancelled: desc "超时取消" requires: "elapsed > 30min"
     Paid:
-        to Shipped: desc "发货"
-        to Refunded: desc "退款" requires: refund.approved
+        >>> Shipped: desc "发货"
+        >>> Refunded: desc "退款" requires: refund.approved
     Shipped:
-        to Delivered: desc "确认收货"
-        to Returned: desc "退货" requires: return.approved
+        >>> Delivered: desc "确认收货"
+        >>> Returned: desc "退货" requires: return.approved
 ```
 
 ### 4.2 发布流水线状态机
@@ -309,18 +309,18 @@ flow OrderLifecycle:
 ```mimispec
 flow ReleasePipeline:
     Development:
-        to Staging: desc "代码合并到 release 分支"
+        >>> Staging: desc "代码合并到 release 分支"
     Staging:
-        to Testing: desc "部署到测试环境"
-        to RolledBack: desc "预发布检查失败"
+        >>> Testing: desc "部署到测试环境"
+        >>> RolledBack: desc "预发布检查失败"
     Testing:
-        to Production: desc "测试通过"
-        to Staging: desc "测试失败，修复后重试"
+        >>> Production: desc "测试通过"
+        >>> Staging: desc "测试失败，修复后重试"
     Production:
-        to Monitoring: desc "开始灰度监控"
+        >>> Monitoring: desc "开始灰度监控"
     Monitoring:
-        to Stable: desc "监控通过"
-        to RolledBack: desc "发现异常，回滚"
+        >>> Stable: desc "监控通过"
+        >>> RolledBack: desc "发现异常，回滚"
 ```
 
 ---
@@ -334,7 +334,7 @@ func BatchProcess(items):
     desc "批量处理订单项"
     steps:
         if items.len() == 0:
-            error "empty batch" to exit
+            error "empty batch" >>> exit
 
         for item in items:
             validate item
@@ -407,7 +407,7 @@ ui OrderManagement binds orderState:
                 "@order.id" desc "订单号"
                 "@order.status" desc "状态"
                 "@order.total" desc "金额"
-                "详情" on tap: to OrderDetail
+                "详情" on tap: >>> OrderDetail
         parallel "底部分页":
             "上一页" on tap: PrevPage()
             "@currentPage / @totalPages" desc "页码"
@@ -493,7 +493,7 @@ module UserService:
             check email uniqueness
             hash password
             create user
-            publish UserRegistered event to done
+            publish UserRegistered event >>> done
 
 module OrderService:
     desc "订单服务"
@@ -504,7 +504,7 @@ module OrderService:
             verify user exists
             validate items
             create order
-            publish OrderCreated event to done
+            publish OrderCreated event >>> done
 ```
 
 ### 8.2 事件驱动架构
@@ -554,20 +554,20 @@ module CheckoutSaga:
         steps:
             create order
             on failure:
-                error "创建订单失败" to exit
+                error "创建订单失败" >>> exit
 
             reserve inventory
             on failure:
                 cancel order desc "补偿：取消订单"
-                error "库存预留失败" to exit
+                error "库存预留失败" >>> exit
 
             charge payment
             on failure:
                 release inventory desc "补偿：释放库存"
                 cancel order desc "补偿：取消订单"
-                error "支付失败" to exit
+                error "支付失败" >>> exit
 
-            confirm order to done
+            confirm order >>> done
 ```
 
 ### 8.4 AI / LLM 工作流
@@ -590,13 +590,13 @@ module LLMWorkflow:
             generate response
             on failure:
                 retry with exponential backoff
-                error "生成失败" to exit
+                error "生成失败" >>> exit
 
             validate safety
             if not safe:
-                error "内容不安全" to exit
+                error "内容不安全" >>> exit
 
-            return response to done
+            return response >>> done
 ```
 
 ### 8.5 前端状态管理
@@ -785,7 +785,7 @@ module Kinematics:
             v = v0 + a * t
         steps:
             compute velocity
-            return v to done
+            return v >>> done
 
     func Displacement(v0, a, t):
         desc "匀加速直线运动位移"
@@ -793,7 +793,7 @@ module Kinematics:
             s = v0 * t + 0.5 * a * t ** 2
         steps:
             compute displacement
-            return s to done
+            return s >>> done
 ```
 
 ### 10.3 金融计算
@@ -811,7 +811,7 @@ module Finance:
             interest = amount - principal
         steps:
             compute amount
-            return amount to done
+            return amount >>> done
 
     func LoanPayment(principal, rate, n):
         desc "等额本息月供"
@@ -822,7 +822,7 @@ module Finance:
             payment = principal * (rate * (1 + rate) ** n) / ((1 + rate) ** n - 1)
         steps:
             compute payment
-            return payment to done
+            return payment >>> done
 ```
 
 ### 10.4 位运算与掩码
@@ -836,7 +836,7 @@ func HasFlag(flags, bit):
         is_set = masked != 0
     steps:
         check bit
-        return is_set to done
+        return is_set >>> done
 ```
 
 ### 10.5 形状与维度约束
@@ -848,7 +848,7 @@ func MatMulCompatible(A, B):
         dim(A, -1) == dim(B, -2)
     steps:
         verify shapes
-        return true to done
+        return true >>> done
 
 func BatchMatMul(A, B):
     desc "批量矩阵乘法"
@@ -860,7 +860,7 @@ func BatchMatMul(A, B):
         rank(C) == max(rank(A), rank(B))
     steps:
         compute batched product
-        return C to done
+        return C >>> done
 ```
 
 ---
@@ -908,7 +908,7 @@ module$ Shop:
         steps:
             check$ balance
             charge$ payment
-            order.status$ = Paid to done
+            order.status$ = Paid >>> done
 ```
 
 ### 11.3 锁定关键设计决策
@@ -928,7 +928,7 @@ module OrderService:
         desc "通过事件重放恢复订单状态"
         steps:
             fold events into state
-            return order to done
+            return order >>> done
 ```
 
 ---

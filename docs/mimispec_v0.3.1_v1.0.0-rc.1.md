@@ -384,9 +384,9 @@ module Shop:
 
 ```mimispec
 flow FlowName:
-    StateA to StateB: desc "说明"
+    StateA >>> StateB: desc "说明"
     StateB:
-        to StateC: desc "..."
+        >>> StateC: desc "..."
 ```
 
 - `FlowName` 可与某个 `type` 枚举名对应，表明该状态机的作用域
@@ -430,7 +430,7 @@ func 函数名[(参数列表)] [with 能力列表]:
 steps:
     validate input desc "check mandatory fields"
     process data
-    return result to done
+    return result >>> done
 ```
 
 **`desc` 作为独立步骤**：
@@ -447,8 +447,8 @@ steps:
 在步骤末尾使用 `to 目标`，目标可以是状态名、`done`（正常结束）或 `exit`（异常退出）。
 
 ```mimispec
-order.status = Paid to done
-mark order Shipped to done
+order.status = Paid >>> done
+mark order Shipped >>> done
 ```
 
 **赋值 (`=`)**：
@@ -457,7 +457,7 @@ mark order Shipped to done
 - 不允许多重赋值或计算表达式
 
 ```mimispec
-order.status = Paid to done
+order.status = Paid >>> done
 tags = [Urgent, Internal]
 ```
 
@@ -470,7 +470,7 @@ tags = [Urgent, Internal]
 紧接在某步骤后（同级缩进），表示该步骤失败时的补偿逻辑。语法：`on 条件:` + 缩进块，块内语法与 `steps` 相同。支持多个 `on` 分支（如 `on timeout:`、`on lock error:`）。
 
 **错误终止 (`error`)**：
-`error "消息" [to exit]` 表示显式失败，终止当前路径。`to exit` 为可选；若省略，仅终止当前分支而不显式标记为异常退出。
+`error "消息" [>>> exit]` 表示显式失败，终止当前路径。`>>> exit` 为可选；若省略，仅终止当前分支而不显式标记为异常退出。
 
 #### 完整示例
 
@@ -482,18 +482,18 @@ func Pay(order, amount) with PaymentCap?:
     steps:
         check funds desc "verify account balance"
         if insufficient:
-            error "insufficient funds" to exit
+            error "insufficient funds" >>> exit
         reserve inventory:
             for item in order.items:
                 Inventory.reserve(item)
             on reserve failure:
                 release reserved items desc "rollback"
-                error "inventory error" to exit
+                error "inventory error" >>> exit
         charge payment desc "call PSP"
         on charge failure:
             release inventory desc "compensate"
-            error "payment failed" to exit
-        order.status = Paid to done
+            error "payment failed" >>> exit
+        order.status = Paid >>> done
 ```
 
 ### 5.6 ui（视图）
@@ -561,7 +561,7 @@ func LoadDashboard:
             loadUsers desc "获取用户数据"
             loadOrders desc "获取订单数据"
             loadMetrics desc "获取统计指标"
-        combine results to done
+        combine results >>> done
 ```
 
 - `parasteps` 后可跟一个可选的字符串标签（如 `"同时请求多个数据源"`），用于说明并行块的意图
@@ -571,14 +571,14 @@ func LoadDashboard:
 
 #### error 终止
 
-`error` 终止当前路径，配合 `to exit` 表示到达预定义终点（流程失败退出）。
+`error` 终止当前路径，配合 `>>> exit` 表示到达预定义终点（流程失败退出）。
 
 ```mimispec
 if stock.available < item.qty:
-    error "库存不足" to exit
+    error "库存不足" >>> exit
 ```
 
-`to exit` 是预定义终点，表示"这道流程做不下去了，直接退出"。
+`>>> exit` 是预定义终点，表示"这道流程做不下去了，直接退出"。
 
 #### on 补偿块
 
@@ -588,7 +588,7 @@ if stock.available < item.qty:
 charge payment
 on gateway error:
     log failure
-    error "支付失败" to exit
+    error "支付失败" >>> exit
 ```
 
 ```mimispec
@@ -906,7 +906,7 @@ func Pay(order, amount):
     steps:
         check funds
         ...
-        order.status = Paid to done
+        order.status = Paid >>> done
 ```
 
 `...` 可以出现在：
@@ -929,7 +929,7 @@ module UserDomain:
         requires: id > 0
         steps:
             query database
-            return user to done
+            return user >>> done
 ```
 
 `@import` 表示"引用某个在别处定义的文件"。即使被引用的文件不存在于当前目录，该文件仍然是**合法但不可链接**的（parseable but not linkable）。
@@ -976,7 +976,7 @@ module Shop:
 func ValidateEmail(email):
     requires: email != ""
     steps:
-        check format to done
+        check format >>> done
 ```
 
 ```mimispec
@@ -987,7 +987,7 @@ module UserDomain:
     func Register(email):
         steps:
             ValidateEmail(email)
-            persist user to done
+            persist user >>> done
 ```
 
 跨文件引用保持**扁平命名空间**：被引入的标识符在当前文件中直接可见。若出现命名冲突，工具层应提示歧义，用户可通过限定路径（如 `ModuleName.ident`）解决。
@@ -1135,7 +1135,7 @@ module Shop:
         steps:
             check balance desc "检查余额"
             charge payment desc "调用支付网关"
-            order.status = Paid to done
+            order.status = Paid >>> done
 
     func Refund(order):
         desc "处理退款流程"
@@ -1143,7 +1143,7 @@ module Shop:
         steps:
             validate conditions
             restore inventory
-            initiate refund to done
+            initiate refund >>> done
 ```
 
 ### 阶段 3 —— 完整模块
@@ -1160,12 +1160,12 @@ module OrderDomain:
     rule "退款必须在有效期内"
 
     flow OrderLifecycle:
-        New to Pending: desc "客户提交"
+        New >>> Pending: desc "客户提交"
         Pending:
-            to Paid: desc "支付成功"
-            to Cancelled: desc "客户取消"
-        Paid to Shipped: desc "已发货"
-        Shipped to Delivered: desc "已送达"
+            >>> Paid: desc "支付成功"
+            >>> Cancelled: desc "客户取消"
+        Paid >>> Shipped: desc "已发货"
+        Shipped >>> Delivered: desc "已送达"
 
     func ProcessOrder(order):
         desc "处理订单"
@@ -1178,15 +1178,15 @@ module OrderDomain:
             charge payment
             on failure:
                 refund
-                error "payment failed" to exit
-            order.status = Paid to done
+                error "payment failed" >>> exit
+            order.status = Paid >>> done
 
     func CancelOrder(order):
         desc "取消订单"
         requires: order.status in [New, Pending]
         steps:
             restore inventory
-            order.status = Cancelled to done
+            order.status = Cancelled >>> done
 
     ui OrderPanel binds order:
         stack "订单面板":
@@ -1213,8 +1213,8 @@ module OrderDomain:
             charge payment
             on failure:
                 refund
-                error "payment failed" to exit
-            order.status = Paid to done
+                error "payment failed" >>> exit
+            order.status = Paid >>> done
 
 module PaymentDomain:
     func Pay(order, amount):
@@ -1223,7 +1223,7 @@ module PaymentDomain:
         steps:
             verify funds
             process transaction
-            order.status = Paid to done
+            order.status = Paid >>> done
 
 module ShippingDomain:
     func Ship(order):
@@ -1231,7 +1231,7 @@ module ShippingDomain:
         steps:
             allocate warehouse
             dispatch courier
-            order.status = Shipped to done
+            order.status = Shipped >>> done
 ```
 
 ### 阶段 5 —— 跨文件引用
@@ -1260,8 +1260,8 @@ module Shop:
             charge payment
             on failure:
                 refund
-                error "payment failed" to exit
-            order.status = Paid to done
+                error "payment failed" >>> exit
+            order.status = Paid >>> done
 ```
 
 **关键洞察**：阶段 1 到阶段 5 的 `.mms` 文件，每一阶段都是合法的。解析器不因"不完整"而拒绝，只因"语法错误"而拒绝。`@import` 使得碎片可以跨文件聚合，而解析器本身不强制链接，保持了"合法但不可链接"的渐进式特性。
