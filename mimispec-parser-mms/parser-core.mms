@@ -29,7 +29,7 @@ module ParserCore:
             check dollar suffix
             check questionquestion suffix
             check question suffix
-            return none if absent
+            return none absent
 
     func FuzzyIdent():
         desc "消费标识符或关键字加 commitment"
@@ -48,8 +48,8 @@ module ParserCore:
         desc "收集连续 rule 定义到 pending 列表"
         steps:
             scan ahead counting newlines
-            break if 3 or more blank lines separate
-            break if next token is not rule keyword
+            break "if" 3 or more blank lines separate
+            break "if" next token is not rule keyword
             parse rule def and push to pending stack
 
     func AttachRulesToFragment(fragment):

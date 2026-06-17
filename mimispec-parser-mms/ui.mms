@@ -12,7 +12,7 @@ module UIParser:
         steps:
             expect kw_ui keyword
             parse fuzzy ident as view name
-            check kw_binds and parse model name
+            check binds keyword and parse model name
             expect colon
             parse indented ui root node
 
@@ -44,10 +44,10 @@ module UIParser:
         desc "解析叶子节点 内容加可选注解"
         steps:
             parse fuzzy string as content
-            parse optional description annotation
+            parse optional "desc" annotation
             parse optional requires guard
             parse optional with capabilities
-            parse optional via binding
+            parse optional binding
 
     func ParseOnBinding():
         desc "解析事件绑定 事件名和动作"

@@ -18,7 +18,7 @@ module ExprParser:
         desc "Pratt 主循环 按优先级消费二元运算符"
         steps:
             parse primary expression
-            loop check next token for binary op type
+            loop check next token "for" binary op type
             compare operator precedence with minPrec
             consume operator and parse right operand
             build binary expression tree node
@@ -43,7 +43,7 @@ module ExprParser:
             dot parses field access
             lparen parses function call with args
             lbracket parses subscript with indices
-            repeat chain for nested postfix
+            repeat chain "for" nested postfix
 
     rule "operator precedence from 1 low to 10 high"
 
@@ -60,6 +60,6 @@ module ExprParser:
         desc "解析 math 块内单条语句"
         steps:
             parse expression
-            when assign token detected split target and value expr
+            "if" assign token detected split target and value expr
             otherwise treat as pure expression
             return math statement struct

@@ -32,7 +32,7 @@ module FragmentDispatch:
             parse fuzzy ident as name
             expect colon
             parse indented block
-            first description becomes module description
+            first "desc" becomes module description
             math blocks stored as module invariants
             rule defs collected as pending
             other items parsed via parse_fragment
@@ -49,7 +49,7 @@ module FragmentDispatch:
             expect colon
             handle ellipsis placeholder
             parse indented body
-            first description becomes function description
+            first "desc" becomes function description
             kw_requires parses pre condition
             kw_ensures parses post condition
             kw_math parses math block
@@ -65,7 +65,7 @@ module FragmentDispatch:
             detect inline enum via pipe presence
             detect block enum via indent plus bare identifiers
             otherwise parse record block with fields
-            description stored as type description
+            "desc" stored as type description
             mathematical invariants stored as type constraints
 
     func ParseFlowDef():
@@ -79,4 +79,4 @@ module FragmentDispatch:
             each state name becomes an entry
             inline arrow used when single transition exists
             block arms used when multiple transitions exist
-            each arm carries optional requires and description
+            each arm carries optional requires and "desc"

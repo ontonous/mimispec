@@ -13,13 +13,13 @@ module StepParser:
         desc "步骤分发器 按 peek kind 路由"
         steps:
             match peek kind
-            kw_if runs parse if step
-            kw_for runs parse singular
-            kw_while runs parse while step
+            kw_if runs parse "if" step
+            kw_for runs parse "for" step
+            kw_while runs parse "while" step
             kw_parasteps runs parse parasteps step
             kw_error runs parse error step
             kw_ellipsis runs parse placeholder
-            kw_desc runs parse description step
+            kw_desc runs parse "desc" step
             default runs parse action or assign
 
     func ParseIfStep():
@@ -29,13 +29,13 @@ module StepParser:
             parse condition
             expect colon
             parse indented then branch
-            check kw_else and parse else branch
+            check "for" kw_else and parse else branch
 
     func ParseForStep():
-        desc "解析 singular 循环"
+        desc "解析 for 循环"
         steps:
             expect kw_for keyword
-            parse fuzzy ident as variable
+            parse fuzzy ident as loop variable
             expect kw_in keyword
             parse atom sequence as iterable
             expect colon
@@ -46,7 +46,7 @@ module StepParser:
         steps:
             expect kw_while keyword
             parse condition
-            parse optional description
+            parse optional "desc"
             expect colon
             parse indented loop body
 
@@ -63,18 +63,18 @@ module StepParser:
         steps:
             expect kw_error keyword
             parse fuzzy string as message
-            parse optional arrow target via triple greater
+            parse optional arrow target via ">>>"
 
     func ParseActionStep():
         desc "解析动作步骤或赋值步骤 含自然语言标签"
         steps:
             parse atom sequence until line end
-            scan atom list assignment token
-            when assign present split target and value
-            parse optional description annotation
+            scan atom list "for" assignment token
+            "if" assign present split target and value
+            parse optional "desc" annotation
             parse optional arrow transition
-            parse optional compensation blocks
-            note keywords and arrow interfere with steps
+            parse optional "on" compensation blocks
+            caution keywords and arrow interfere with steps
 
     func ParseOnBlock():
         desc "解析 on 补偿和错误处理块"
