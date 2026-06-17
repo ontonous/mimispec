@@ -1,7 +1,7 @@
 use crate::ast::*;
 use crate::error::ParseError;
-use crate::parser::Parser;
 use crate::lexer::TokenKind;
+use crate::parser::Parser;
 
 impl Parser {
     pub(super) fn parse_module(&mut self) -> Result<Module, ParseError> {
@@ -21,7 +21,7 @@ impl Parser {
         loop {
             self.skip_newlines();
             if self.check(&TokenKind::Dedent) || self.is_at_end() {
-                rules.extend(pending_item_rules.drain(..));
+                rules.append(&mut pending_item_rules);
                 break;
             }
 
@@ -30,10 +30,10 @@ impl Parser {
                 for e in rule_errors {
                     self.emit_error(e);
                 }
-                let collected = std::mem::take(&mut self.pending_rules);
+                let mut collected = std::mem::take(&mut self.pending_rules);
                 let newline_count = self.skip_newlines_and_count();
                 if newline_count >= 3 {
-                    rules.extend(collected);
+                    rules.append(&mut collected);
                 } else {
                     pending_item_rules = collected;
                     break;
@@ -41,13 +41,13 @@ impl Parser {
             }
 
             if self.check(&TokenKind::Dedent) || self.is_at_end() {
-                rules.extend(pending_item_rules.drain(..));
+                rules.append(&mut pending_item_rules);
                 break;
             }
 
             if self.check(&TokenKind::Desc) {
                 let d = self.parse_desc_entity()?;
-                rules.extend(pending_item_rules.drain(..));
+                rules.append(&mut pending_item_rules);
                 if desc.is_none() {
                     desc = Some(d);
                 } else {
@@ -57,7 +57,7 @@ impl Parser {
                     });
                 }
             } else if self.check(&TokenKind::Math) {
-                rules.extend(pending_item_rules.drain(..));
+                rules.append(&mut pending_item_rules);
                 math = Some(self.parse_math_block()?);
             } else {
                 match self.parse_fragment() {
