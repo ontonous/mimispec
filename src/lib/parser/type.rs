@@ -34,6 +34,29 @@ impl Parser {
             });
         }
 
+        // Multi-line enum (方案A): check if indented block contains enum variants
+        self.skip_newlines();
+        if self.check(&TokenKind::Indent) {
+            let save = self.pos;
+            self.advance(); // consume Indent for scanning
+            let is_block_enum = self.peek_block_is_enum();
+            self.pos = save; // restore back to Indent
+
+            if is_block_enum {
+                self.advance(); // consume Indent
+                let variants = self.parse_block_enum_variants()?;
+                return Ok(TypeDef {
+                    name,
+                    desc: None,
+                    rules: Vec::new(),
+                    math: None,
+                    body: TypeBody::Enum { variants },
+                    keyword_commitment,
+                });
+            }
+            // Fall through to record parsing, but keep Indent unconsumed
+        }
+
         self.skip_newlines();
         self.expect(TokenKind::Indent, "indented block")?;
 
@@ -120,6 +143,74 @@ impl Parser {
         variants.push(self.fuzzy_ident()?);
         while self.matches(&TokenKind::Pipe) {
             variants.push(self.fuzzy_ident()?);
+        }
+        Ok(variants)
+    }
+
+    /// Pre-scan the indented block (past Indent) to determine if it's a multi-line enum
+    /// or a record. Returns true if the block content looks like enum variants.
+    fn peek_block_is_enum(&mut self) -> bool {
+        let mut scan = self.pos;
+        // Skip newlines
+        while let Some(TokenKind::Newline) = self.tokens.get(scan).map(|t| &t.kind) {
+            scan += 1;
+        }
+
+        match self.tokens.get(scan).map(|t| &t.kind) {
+            // Leading `|` on a line → enum block
+            Some(TokenKind::Pipe) => true,
+            // desc / rule / math / ... → record block
+            Some(TokenKind::Desc)
+            | Some(TokenKind::Rule)
+            | Some(TokenKind::Math)
+            | Some(TokenKind::Ellipsis) => false,
+            // Identifier or keyword variant name → check what follows
+            Some(_kind) => {
+                scan += 1;
+                // Skip commitment
+                while let Some(tok) = self.tokens.get(scan) {
+                    match &tok.kind {
+                        TokenKind::Question
+                        | TokenKind::QuestionQuestion
+                        | TokenKind::Dollar
+                        | TokenKind::DollarDollar => {
+                            scan += 1;
+                        }
+                        _ => break,
+                    }
+                }
+                // After the ident + commitment: `:` means record field
+                match self.tokens.get(scan).map(|t| &t.kind) {
+                    Some(TokenKind::Colon) => false,
+                    // bare identifier or `|` continuation → enum variant
+                    _ => true,
+                }
+            }
+            _ => false,
+        }
+    }
+
+    /// Parse variants inside a multi-line enum block.
+    /// Each line may start with optional `|`, and inline `A | B` per line is allowed.
+    fn parse_block_enum_variants(&mut self) -> Result<Vec<Ident>, ParseError> {
+        let mut variants = Vec::new();
+        loop {
+            self.skip_newlines();
+            if self.check(&TokenKind::Dedent) || self.is_at_end() {
+                break;
+            }
+            // Optional leading `|`
+            if self.check(&TokenKind::Pipe) {
+                self.advance();
+            }
+            variants.push(self.fuzzy_ident()?);
+            // Allow inline `|` on the same line for compactness
+            while self.matches(&TokenKind::Pipe) {
+                variants.push(self.fuzzy_ident()?);
+            }
+        }
+        if self.check(&TokenKind::Dedent) {
+            self.advance();
         }
         Ok(variants)
     }

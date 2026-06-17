@@ -21,7 +21,6 @@ pub enum TokenKind {
     Else,
     For,
     While,
-    To,
     Desc,
     On,
     With,
@@ -71,6 +70,7 @@ pub enum TokenKind {
     BitNot, // `~`
     Shl,    // `<<`
     Shr,    // `>>`
+    Arrow,  // `>>>` transition operator (v0.4+)
 
     // Fuzzy
     Question,
@@ -114,7 +114,6 @@ impl TokenKind {
             TokenKind::Else => Some("else"),
             TokenKind::For => Some("for"),
             TokenKind::While => Some("while"),
-            TokenKind::To => Some("to"),
             TokenKind::Desc => Some("desc"),
             TokenKind::On => Some("on"),
             TokenKind::With => Some("with"),
@@ -154,7 +153,7 @@ impl std::fmt::Display for TokenKind {
             TokenKind::Else => "else".into(),
             TokenKind::For => "for".into(),
             TokenKind::While => "while".into(),
-            TokenKind::To => "to".into(),
+            TokenKind::Arrow => ">>>".into(),
             TokenKind::Desc => "desc".into(),
             TokenKind::On => "on".into(),
             TokenKind::With => "with".into(),
@@ -489,7 +488,12 @@ impl<'a> Lexer<'a> {
                     Ok(Token::new(TokenKind::Ge, line, col))
                 } else if self.peek() == Some('>') {
                     self.bump();
-                    Ok(Token::new(TokenKind::Shr, line, col))
+                    if self.peek() == Some('>') {
+                        self.bump();
+                        Ok(Token::new(TokenKind::Arrow, line, col))
+                    } else {
+                        Ok(Token::new(TokenKind::Shr, line, col))
+                    }
                 } else {
                     Ok(Token::new(TokenKind::Gt, line, col))
                 }
@@ -752,7 +756,6 @@ impl<'a> Lexer<'a> {
             "else" => TokenKind::Else,
             "for" => TokenKind::For,
             "while" => TokenKind::While,
-            "to" => TokenKind::To,
             "desc" => TokenKind::Desc,
             "on" => TokenKind::On,
             "with" => TokenKind::With,

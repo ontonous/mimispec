@@ -33,8 +33,8 @@ impl Parser {
 
     fn parse_flow_entry(&mut self) -> Result<FlowEntry, ParseError> {
         let state = self.fuzzy_ident()?;
-        if self.check(&TokenKind::To) {
-            let to_keyword_commitment = self.expect_kw(TokenKind::To, "`to`")?;
+        if self.check(&TokenKind::Arrow) {
+            let to_keyword_commitment = self.expect_kw(TokenKind::Arrow, "`>>>`")?;
             let arm = self.parse_flow_arm_after_to_with_commitment(to_keyword_commitment)?;
             Ok(FlowEntry {
                 state,
@@ -53,7 +53,7 @@ impl Parser {
     }
 
     fn parse_flow_arm_in_block(&mut self) -> Result<FlowArm, ParseError> {
-        let to_keyword_commitment = self.expect_kw(TokenKind::To, "`to`")?;
+        let to_keyword_commitment = self.expect_kw(TokenKind::Arrow, "`>>>`")?;
         self.parse_flow_arm_after_to_with_commitment(to_keyword_commitment)
     }
 

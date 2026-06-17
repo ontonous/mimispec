@@ -178,15 +178,29 @@ impl Renderer {
 
         match &typedef.body {
             TypeBody::Enum { variants } => {
-                for (i, v) in variants.iter().enumerate() {
-                    if i > 0 {
-                        self.push(" | ");
-                    } else {
-                        self.push(" ");
+                if variants.len() > 4 {
+                    // Multi-line enum (方案A): one variant per line with leading `|`
+                    self.newline();
+                    self.indent += 1;
+                    for v in variants {
+                        self.write_indent();
+                        self.push("| ");
+                        self.push(&render_ident(v));
+                        self.newline();
                     }
-                    self.push(&render_ident(v));
+                    self.indent -= 1;
+                } else {
+                    // Inline enum: A | B | C
+                    for (i, v) in variants.iter().enumerate() {
+                        if i > 0 {
+                            self.push(" | ");
+                        } else {
+                            self.push(" ");
+                        }
+                        self.push(&render_ident(v));
+                    }
+                    self.newline();
                 }
-                self.newline();
             }
             TypeBody::Record { fields } => {
                 if fields.is_empty()
@@ -262,7 +276,7 @@ impl Renderer {
         self.push(&render_ident(&entry.state));
         if entry.arms.len() == 1 && entry.arms[0].rules.is_empty() {
             let arm = &entry.arms[0];
-            self.push(" to ");
+            self.push(" >>> ");
             self.push(&render_ident(&arm.to));
             self.push(&commitment_suffix(arm.to_keyword_commitment));
             self.push(":");
@@ -291,7 +305,7 @@ impl Renderer {
             self.render_rule(rule);
         }
         self.write_indent();
-        self.push("to");
+        self.push(">>>");
         self.push(&commitment_suffix(arm.to_keyword_commitment));
         self.push(" ");
         self.push(&render_ident(&arm.to));
@@ -433,7 +447,7 @@ impl Renderer {
             self.push(&render_desc_inline(desc));
         }
         if let Some(to) = &step.to {
-            self.push(" to ");
+            self.push(" >>> ");
             self.push(&render_ident(&to.target));
         }
         self.newline();
@@ -452,7 +466,7 @@ impl Renderer {
             self.push(&render_desc_inline(desc));
         }
         if let Some(to) = &step.to {
-            self.push(" to ");
+            self.push(" >>> ");
             self.push(&render_ident(&to.target));
         }
         self.newline();
@@ -528,7 +542,7 @@ impl Renderer {
         self.push(" ");
         self.push(&render_fstring(&step.message));
         if let Some(to) = &step.to {
-            self.push(" to ");
+            self.push(" >>> ");
             self.push(&render_ident(&to.target));
         }
         self.newline();

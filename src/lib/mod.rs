@@ -132,8 +132,8 @@ module TaskManager:
 module App:
     ui Detail:
         stack:
-            "返回" desc "按钮" on tap: to TaskPanel
-            "保存" desc "按钮" on "提交": Save(state), to HomeScreen
+            "返回" desc "按钮" on tap: >>> TaskPanel
+            "保存" desc "按钮" on "提交": Save(state), >>> HomeScreen
             "搜索" desc "按钮" on tap: state.query = inputValue
             "执行" desc "按钮" on tap: "执行搜索并刷新列表"
 "#;
@@ -219,7 +219,7 @@ module App:
                 loadUsers desc "GET /users"
                 loadOrders desc "GET /orders"
                 loadMetrics desc "GET /metrics"
-            combine results to done
+            combine results >>> done
 "#;
         let result = parse(src);
         assert!(result.errors.is_empty(), "{:?}", result.errors);
@@ -395,7 +395,7 @@ func Pay(order, amount):
     steps:
         check funds
         ...
-        order.status = Paid to done
+        order.status = Paid >>> done
 "#;
         let result = parse(src);
         assert!(result.errors.is_empty(), "{:?}", result.errors);
@@ -476,7 +476,7 @@ func Pay(order, amount):
 func Pay(order):
     requires: ...
     steps:
-        charge payment to done
+        charge payment >>> done
 "#;
         let result = parse(src);
         assert!(result.errors.is_empty(), "{:?}", result.errors);
@@ -569,7 +569,7 @@ module UserDomain:
         requires: id > 0
         steps:
             query database
-            return user to done
+            return user >>> done
 "#;
         let result = parse(src);
         assert!(result.errors.is_empty(), "{:?}", result.errors);
@@ -639,7 +639,7 @@ type Order: A | B | C
 func Good(): ...
 
 flow Lifecycle:
-    Idle to Active: desc "启动"
+    Idle >>> Active: desc "启动"
 "#;
         let result = parse(src);
         assert!(
@@ -1399,7 +1399,7 @@ mod render_tests {
         steps:
             check balance
             charge payment
-            order.status = Paid to done
+            order.status = Paid >>> done
 "#;
         let result = parse(src);
         assert!(result.errors.is_empty(), "{:?}", result.errors);
@@ -1518,15 +1518,15 @@ ui View: ...
     #[test]
     fn render_flow_compact_arm() {
         let src = r#"flow Lifecycle:
-    New to Active: desc "启动"
+    New >>> Active: desc "启动"
     Active:
-        to Done: desc "完成"
+        >>> Done: desc "完成"
 "#;
         let result = parse(src);
         assert!(result.errors.is_empty(), "{:?}", result.errors);
         let rendered = render_file(&result.file);
         assert!(
-            rendered.contains("New to Active: desc \"启动\""),
+            rendered.contains("New >>> Active: desc \"启动\""),
             "rendered:\n{}",
             rendered
         );
@@ -1762,7 +1762,7 @@ mod stress_tests {
         let mut src = String::from("module Stress:\n");
         for i in 0..items {
             src.push_str(&format!(
-                "    func Func{}(x, y):\n        requires: x > 0 and y > 0\n        steps:\n            compute sum\n            return sum to done\n",
+                "    func Func{}(x, y):\n        requires: x > 0 and y > 0\n        steps:\n            compute sum\n            return sum >>> done\n",
                 i
             ));
         }

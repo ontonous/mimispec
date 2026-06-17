@@ -201,7 +201,7 @@ impl Parser {
     }
 
     fn parse_action(&mut self) -> Result<Action, ParseError> {
-        if self.check(&TokenKind::To) {
+        if self.check(&TokenKind::Arrow) {
             self.advance();
             let target = self.fuzzy_ident()?;
             return Ok(Action::Navigate { target });

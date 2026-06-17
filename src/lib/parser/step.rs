@@ -114,7 +114,7 @@ impl Parser {
     fn parse_error_step(&mut self) -> Result<Step, ParseError> {
         let keyword_commitment = self.expect_kw(TokenKind::Error, "`error`")?;
         let message = self.fuzzy_string()?;
-        let to = if self.matches(&TokenKind::To) {
+        let to = if self.matches(&TokenKind::Arrow) {
             Some(ToTarget {
                 target: self.fuzzy_ident()?,
             })
@@ -133,7 +133,7 @@ impl Parser {
     fn parse_action_step(&mut self) -> Result<Step, ParseError> {
         let atoms = self.parse_atoms_until(&[
             TokenKind::Desc,
-            TokenKind::To,
+            TokenKind::Arrow,
             TokenKind::On,
             TokenKind::Newline,
             TokenKind::Dedent,
@@ -170,7 +170,7 @@ impl Parser {
                 None
             };
 
-            let to = if self.matches(&TokenKind::To) {
+        let to = if self.matches(&TokenKind::Arrow) {
                 Some(ToTarget {
                     target: self.fuzzy_ident()?,
                 })
@@ -209,7 +209,7 @@ impl Parser {
             None
         };
 
-        let to = if self.matches(&TokenKind::To) {
+        let to = if self.matches(&TokenKind::Arrow) {
             Some(ToTarget {
                 target: self.fuzzy_ident()?,
             })
