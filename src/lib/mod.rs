@@ -4,6 +4,7 @@ pub mod latex;
 pub mod lexer;
 pub mod parser;
 pub mod render;
+mod render_util;
 
 use error::ParseResult;
 use lexer::Lexer;
@@ -902,7 +903,10 @@ module App:
         // 非法字符应被快速报告，而不是进入无限循环或 panic。
         let src = "func Compute(x):\n    steps:\n        result = ~x\n";
         let result = parse(src);
-        assert!(!result.errors.is_empty(), "expected errors for invalid token");
+        assert!(
+            !result.errors.is_empty(),
+            "expected errors for invalid token"
+        );
     }
 
     #[test]
@@ -1181,8 +1185,16 @@ module MeowCafe:
             drink.status = Served
 "#;
         let result = parse(src);
-        assert!(result.errors.is_empty(), "parse errors: {:?}", result.errors);
-        assert_eq!(result.file.fragments.len(), 2, "expected 2 fragments: Steps(Desc) + Module");
+        assert!(
+            result.errors.is_empty(),
+            "parse errors: {:?}",
+            result.errors
+        );
+        assert_eq!(
+            result.file.fragments.len(),
+            2,
+            "expected 2 fragments: Steps(Desc) + Module"
+        );
         assert!(matches!(&result.file.fragments[0], Fragment::Steps { .. }));
 
         let Fragment::Module { module } = &result.file.fragments[1] else {
@@ -1213,7 +1225,11 @@ module MeowCafe:
             "module 级 rule 组应全部进入 module.rules"
         );
 
-        assert_eq!(module.items.len(), 3, "module 应有 3 个 item：type enum、type record、func Brew");
+        assert_eq!(
+            module.items.len(),
+            3,
+            "module 应有 3 个 item：type enum、type record、func Brew"
+        );
 
         let Fragment::Func { func } = &module.items[2] else {
             panic!("expected func Brew at index 2")
@@ -1389,7 +1405,12 @@ mod render_tests {
         assert!(result.errors.is_empty(), "{:?}", result.errors);
         let rendered = render_file(&result.file);
         let reparsed = parse(&rendered);
-        assert!(reparsed.errors.is_empty(), "rendered source failed to parse: {:?}\nrendered:\n{}", reparsed.errors, rendered);
+        assert!(
+            reparsed.errors.is_empty(),
+            "rendered source failed to parse: {:?}\nrendered:\n{}",
+            reparsed.errors,
+            rendered
+        );
     }
 
     #[test]
@@ -1403,7 +1424,11 @@ mod render_tests {
         let result = parse(src);
         assert!(result.errors.is_empty(), "{:?}", result.errors);
         let rendered = render_file(&result.file);
-        assert!(rendered.contains("(x - y) / 4"), "rendered should preserve parentheses:\n{}", rendered);
+        assert!(
+            rendered.contains("(x - y) / 4"),
+            "rendered should preserve parentheses:\n{}",
+            rendered
+        );
         let reparsed = parse(&rendered);
         assert!(reparsed.errors.is_empty(), "{:?}", reparsed.errors);
     }
@@ -1417,7 +1442,11 @@ mod render_tests {
         let result = parse(src);
         assert!(result.errors.is_empty(), "{:?}", result.errors);
         let rendered = render_file(&result.file);
-        assert!(rendered.contains("x[i, j]"), "rendered should contain multi-subscript:\n{}", rendered);
+        assert!(
+            rendered.contains("x[i, j]"),
+            "rendered should contain multi-subscript:\n{}",
+            rendered
+        );
         let reparsed = parse(&rendered);
         assert!(reparsed.errors.is_empty(), "{:?}", reparsed.errors);
     }
@@ -1447,7 +1476,11 @@ mod render_tests {
         let result = parse(src);
         assert!(result.errors.is_empty(), "{:?}", result.errors);
         let rendered = render_file(&result.file);
-        assert!(rendered.contains("module$ Shop:"), "rendered should preserve lock suffixes:\n{}", rendered);
+        assert!(
+            rendered.contains("module$ Shop:"),
+            "rendered should preserve lock suffixes:\n{}",
+            rendered
+        );
         let reparsed = parse(&rendered);
         assert!(reparsed.errors.is_empty(), "{:?}", reparsed.errors);
     }
@@ -1462,9 +1495,21 @@ ui View: ...
         let result = parse(src);
         assert!(result.errors.is_empty(), "{:?}", result.errors);
         let rendered = render_file(&result.file);
-        assert!(rendered.contains("type Order: ..."), "rendered:\n{}", rendered);
-        assert!(rendered.contains("flow Lifecycle: ..."), "rendered:\n{}", rendered);
-        assert!(rendered.contains("func Pay(order): ..."), "rendered:\n{}", rendered);
+        assert!(
+            rendered.contains("type Order: ..."),
+            "rendered:\n{}",
+            rendered
+        );
+        assert!(
+            rendered.contains("flow Lifecycle: ..."),
+            "rendered:\n{}",
+            rendered
+        );
+        assert!(
+            rendered.contains("func Pay(order): ..."),
+            "rendered:\n{}",
+            rendered
+        );
         assert!(rendered.contains("ui View: ..."), "rendered:\n{}", rendered);
         let reparsed = parse(&rendered);
         assert!(reparsed.errors.is_empty(), "{:?}", reparsed.errors);
@@ -1480,7 +1525,11 @@ ui View: ...
         let result = parse(src);
         assert!(result.errors.is_empty(), "{:?}", result.errors);
         let rendered = render_file(&result.file);
-        assert!(rendered.contains("New to Active: desc \"启动\""), "rendered:\n{}", rendered);
+        assert!(
+            rendered.contains("New to Active: desc \"启动\""),
+            "rendered:\n{}",
+            rendered
+        );
         let reparsed = parse(&rendered);
         assert!(reparsed.errors.is_empty(), "{:?}", reparsed.errors);
     }
@@ -1528,6 +1577,216 @@ steps:
 ...
 "#;
         let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let rendered = render_file(&result.file);
+        let reparsed = parse(&rendered);
+        assert!(reparsed.errors.is_empty(), "{:?}", reparsed.errors);
+    }
+}
+
+#[cfg(test)]
+mod edge_case_tests {
+    use super::*;
+    use crate::ast::*;
+    use crate::error::ParseError;
+    use crate::render::render_file;
+
+    #[test]
+    fn parse_empty_input() {
+        let result = parse("");
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        assert!(result.file.imports.is_empty());
+        assert!(result.file.rules.is_empty());
+        assert!(result.file.fragments.is_empty());
+    }
+
+    #[test]
+    fn parse_only_comments_and_blank_lines() {
+        let src = "\n// just a comment\n\n   \n// another\n";
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        assert!(result.file.fragments.is_empty());
+    }
+
+    #[test]
+    fn parse_string_escape_roundtrip() {
+        let src = r#"desc "line1\nline2\ttab\"quote""#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let rendered = render_file(&result.file);
+        let reparsed = parse(&rendered);
+        assert!(
+            reparsed.errors.is_empty(),
+            "rendered failed: {:?}\n{}",
+            reparsed.errors,
+            rendered
+        );
+        let Fragment::Steps { steps, .. } = &reparsed.file.fragments[0] else {
+            panic!("expected steps")
+        };
+        let Step::Desc { content } = &steps[0] else {
+            panic!("expected desc")
+        };
+        assert_eq!(content.content.value, "line1\nline2\ttab\"quote");
+    }
+
+    #[test]
+    fn parse_string_with_backslash() {
+        let src = r#"desc "path\\to\\file""#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let rendered = render_file(&result.file);
+        assert!(
+            rendered.contains("\\\\"),
+            "backslash must be escaped in output: {}",
+            rendered
+        );
+    }
+
+    #[test]
+    fn parse_deeply_nested_modules() {
+        let src = r#"module A:
+    module B:
+        module C:
+            func Deep():
+                steps:
+                    done
+"#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let Fragment::Module { module: a } = &result.file.fragments[0] else {
+            panic!("expected module")
+        };
+        let Fragment::Module { module: b } = &a.items[0] else {
+            panic!("expected nested module")
+        };
+        let Fragment::Module { module: c } = &b.items[0] else {
+            panic!("expected nested module")
+        };
+        assert_eq!(c.name.name, "C".to_string());
+        let Fragment::Func { func } = &c.items[0] else {
+            panic!("expected func")
+        };
+        assert_eq!(func.name.name, "Deep".to_string());
+    }
+
+    #[test]
+    fn assignment_error_reports_position() {
+        let src = r#"func F():
+    steps:
+        a.b = = 1
+"#;
+        let result = parse(src);
+        assert!(!result.errors.is_empty(), "expected errors");
+        assert!(
+            result.errors.iter().any(|e| matches!(e, ParseError::UnexpectedToken { expected, .. } if expected.contains("single assignment"))),
+            "expected single assignment error, got {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn parse_math_right_associative_power() {
+        let src = r#"func F():
+    math:
+        a = 2 ** 3 ** 2
+"#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let rendered = render_file(&result.file);
+        let reparsed = parse(&rendered);
+        assert!(reparsed.errors.is_empty(), "{:?}", reparsed.errors);
+    }
+
+    #[test]
+    fn render_preserves_string_commitment() {
+        let src = r#"desc "hello"$"#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let rendered = render_file(&result.file);
+        assert!(rendered.contains("\"hello\"$"), "rendered: {}", rendered);
+    }
+
+    #[test]
+    fn parse_func_with_param_type_hints() {
+        let src = r#"func Compute(x: Number, y: List[Number]): ..."#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let Fragment::Func { func } = &result.file.fragments[0] else {
+            panic!("expected func")
+        };
+        assert_eq!(func.params.len(), 2);
+        assert!(!func.params[0].type_hint.is_empty());
+        assert!(!func.params[1].type_hint.is_empty());
+    }
+
+    #[test]
+    fn parse_ui_leaf_with_requires_and_with() {
+        let src = r#"module App:
+    ui View:
+        stack:
+            "item" desc "a leaf" requires state.active with AdminCap on tap: Select()
+"#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+    }
+
+    #[test]
+    fn parse_error_recovery_keeps_subsequent_fragments() {
+        let src = r#"type A: ...
+func Broken(:
+flow Good: ...
+"#;
+        let result = parse(src);
+        assert!(!result.errors.is_empty(), "expected errors");
+        assert!(result
+            .file
+            .fragments
+            .iter()
+            .any(|f| matches!(f, Fragment::TypeDef { typedef } if typedef.name.name == "A")));
+        assert!(result
+            .file
+            .fragments
+            .iter()
+            .any(|f| matches!(f, Fragment::Flow { flow } if flow.name.name == "Good")));
+    }
+}
+
+#[cfg(test)]
+mod stress_tests {
+    use super::*;
+    use crate::ast::Fragment;
+    use crate::render::render_file;
+
+    fn build_large_module(items: usize) -> String {
+        let mut src = String::from("module Stress:\n");
+        for i in 0..items {
+            src.push_str(&format!(
+                "    func Func{}(x, y):\n        requires: x > 0 and y > 0\n        steps:\n            compute sum\n            return sum to done\n",
+                i
+            ));
+        }
+        src
+    }
+
+    #[test]
+    #[ignore = "stress test: run with cargo test --release -- --ignored"]
+    fn stress_parse_large_file() {
+        let src = build_large_module(1000);
+        let result = parse(&src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        assert_eq!(result.file.fragments.len(), 1);
+        let Fragment::Module { module } = &result.file.fragments[0] else {
+            panic!("expected module")
+        };
+        assert_eq!(module.items.len(), 1000);
+    }
+
+    #[test]
+    #[ignore = "stress test: run with cargo test --release -- --ignored"]
+    fn stress_render_and_reparse_large_file() {
+        let src = build_large_module(500);
+        let result = parse(&src);
         assert!(result.errors.is_empty(), "{:?}", result.errors);
         let rendered = render_file(&result.file);
         let reparsed = parse(&rendered);

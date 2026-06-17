@@ -1,7 +1,7 @@
 use crate::ast::*;
 use crate::error::ParseError;
-use crate::parser::Parser;
 use crate::lexer::TokenKind;
+use crate::parser::Parser;
 
 impl Parser {
     pub(super) fn parse_func(&mut self) -> Result<FuncDef, ParseError> {

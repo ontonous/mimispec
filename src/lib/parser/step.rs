@@ -1,7 +1,7 @@
 use crate::ast::*;
 use crate::error::ParseError;
-use crate::parser::Parser;
 use crate::lexer::TokenKind;
+use crate::parser::Parser;
 
 impl Parser {
     pub(super) fn parse_step(&mut self) -> Result<Step, ParseError> {
@@ -146,6 +146,10 @@ impl Parser {
         {
             let lhs = &atoms[..eq_idx];
             let rhs = &atoms[eq_idx + 1..];
+            let (err_line, err_col) = match self.peek() {
+                Some(t) => (t.line, t.col),
+                None => (0, 0),
+            };
             if rhs
                 .iter()
                 .any(|a| matches!(a, Atom::Symbol { value } if value == "="))
@@ -153,12 +157,12 @@ impl Parser {
                 return Err(ParseError::UnexpectedToken {
                     found: "=".into(),
                     expected: "single assignment per step".into(),
-                    line: 0,
-                    col: 0,
+                    line: err_line,
+                    col: err_col,
                 });
             }
-            let target = Self::parse_target_from_atoms(lhs)?;
-            let value = Self::parse_simple_value_from_atoms(rhs)?;
+            let target = Self::parse_target_from_atoms(lhs, err_line, err_col)?;
+            let value = Self::parse_simple_value_from_atoms(rhs, err_line, err_col)?;
 
             let desc = if self.matches(&TokenKind::Desc) {
                 Some(self.parse_desc_after_keyword()?)

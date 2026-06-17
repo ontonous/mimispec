@@ -64,7 +64,9 @@ fn parse_one(
     let source = if path == &PathBuf::from("-") {
         use std::io::Read;
         let mut input = String::new();
-        std::io::stdin().read_to_string(&mut input).unwrap_or_default();
+        std::io::stdin()
+            .read_to_string(&mut input)
+            .unwrap_or_default();
         input
     } else {
         match fs::read_to_string(path) {
@@ -190,8 +192,13 @@ fn main() {
     }
 
     if args.json {
-        let output = JsonOutput { results: json_results };
-        println!("{}", serde_json::to_string_pretty(&output).unwrap_or_default());
+        let output = JsonOutput {
+            results: json_results,
+        };
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&output).unwrap_or_default()
+        );
     }
 
     if any_failure {

@@ -63,10 +63,7 @@ impl Parser {
         let mut imports = Vec::new();
         while self.check(&TokenKind::Import) {
             self.advance();
-            match self.expect(
-                TokenKind::String(String::new()),
-                "string literal (import path)",
-            ) {
+            match self.expect_string() {
                 Ok(tok) => {
                     let path = match &tok.kind {
                         TokenKind::String(s) => s.clone(),
@@ -178,13 +175,9 @@ impl Parser {
         }
     }
 
-    pub(super) fn expect(
-        &mut self,
-        kind: TokenKind,
-        what: &str,
-    ) -> Result<&Token, ParseError> {
+    pub(super) fn expect(&mut self, kind: TokenKind, what: &str) -> Result<&Token, ParseError> {
         if let Some(tok) = self.peek() {
-            if std::mem::discriminant(&tok.kind) == std::mem::discriminant(&kind) {
+            if tok.kind.same_kind(&kind) {
                 return Ok(self.advance());
             }
         }
@@ -258,7 +251,25 @@ impl Parser {
         what: &str,
     ) -> Result<Commitment, ParseError> {
         self.expect(kind, what)?;
-        Ok(self.commitment()?)
+        self.commitment()
+    }
+
+    pub(super) fn expect_string(&mut self) -> Result<&Token, ParseError> {
+        if let Some(tok) = self.peek() {
+            if matches!(tok.kind, TokenKind::String(_)) {
+                return Ok(self.advance());
+            }
+        }
+        let (found, line, col) = match self.peek() {
+            Some(t) => (t.kind.to_string(), t.line, t.col),
+            None => ("EOF".into(), 0, 0),
+        };
+        Err(ParseError::UnexpectedToken {
+            found,
+            expected: "string literal".into(),
+            line,
+            col,
+        })
     }
 
     pub(super) fn fuzzy_ident(&mut self) -> Result<Ident, ParseError> {
@@ -282,7 +293,7 @@ impl Parser {
     }
 
     pub(super) fn fuzzy_string(&mut self) -> Result<FString, ParseError> {
-        let tok = self.expect(TokenKind::String(String::new()), "string literal")?;
+        let tok = self.expect_string()?;
         let value = match &tok.kind {
             TokenKind::String(s) => s.clone(),
             _ => unreachable!(),
@@ -516,10 +527,7 @@ impl Parser {
         Self::attach_rules_to_fragment_from(rules, fragment);
     }
 
-    pub(super) fn attach_rules_to_fragment_from(
-        rules: Vec<RuleDef>,
-        fragment: &mut Fragment,
-    ) {
+    pub(super) fn attach_rules_to_fragment_from(rules: Vec<RuleDef>, fragment: &mut Fragment) {
         if rules.is_empty() {
             return;
         }
@@ -554,52 +562,42 @@ impl Parser {
         let mut depth_paren = 0usize;
         let mut depth_bracket = 0usize;
         let mut depth_angle = 0usize;
-        loop {
-            if let Some(tok) = self.peek() {
-                if depth_paren == 0 && depth_bracket == 0 && depth_angle == 0 {
-                    if stop
-                        .iter()
-                        .any(|k| std::mem::discriminant(k) == std::mem::discriminant(&tok.kind))
-                    {
-                        break;
-                    }
-                    if matches!(
-                        tok.kind,
-                        TokenKind::Newline | TokenKind::Dedent | TokenKind::Eof
-                    ) {
-                        break;
-                    }
-                    if matches!(tok.kind, TokenKind::LBracket) {
-                        atoms.push(self.parse_atom_list_literal()?);
-                        continue;
-                    }
+        while let Some(tok) = self.peek() {
+            if depth_paren == 0 && depth_bracket == 0 && depth_angle == 0 {
+                if stop
+                    .iter()
+                    .any(|k| std::mem::discriminant(k) == std::mem::discriminant(&tok.kind))
+                {
+                    break;
                 }
-                match &tok.kind {
-                    TokenKind::LParen => depth_paren += 1,
-                    TokenKind::RParen => {
-                        if depth_paren > 0 {
-                            depth_paren -= 1;
-                        }
-                    }
-                    TokenKind::LBracket => depth_bracket += 1,
-                    TokenKind::RBracket => {
-                        if depth_bracket > 0 {
-                            depth_bracket -= 1;
-                        }
-                    }
-                    TokenKind::Lt => depth_angle += 1,
-                    TokenKind::Gt => {
-                        if depth_angle > 0 {
-                            depth_angle -= 1;
-                        }
-                    }
-                    _ => {}
+                if matches!(
+                    tok.kind,
+                    TokenKind::Newline | TokenKind::Dedent | TokenKind::Eof
+                ) {
+                    break;
                 }
-                let atom = self.atom_from_token()?;
-                atoms.push(atom);
-            } else {
-                break;
+                if matches!(tok.kind, TokenKind::LBracket) {
+                    atoms.push(self.parse_atom_list_literal()?);
+                    continue;
+                }
             }
+            match &tok.kind {
+                TokenKind::LParen => depth_paren += 1,
+                TokenKind::RParen => {
+                    depth_paren = depth_paren.saturating_sub(1);
+                }
+                TokenKind::LBracket => depth_bracket += 1,
+                TokenKind::RBracket => {
+                    depth_bracket = depth_bracket.saturating_sub(1);
+                }
+                TokenKind::Lt => depth_angle += 1,
+                TokenKind::Gt => {
+                    depth_angle = depth_angle.saturating_sub(1);
+                }
+                _ => {}
+            }
+            let atom = self.atom_from_token()?;
+            atoms.push(atom);
         }
         Ok(atoms)
     }
@@ -690,13 +688,17 @@ impl Parser {
 
     // ── assignment helpers ──────────────────────────────────────────────────
 
-    pub(super) fn parse_target_from_atoms(atoms: &[Atom]) -> Result<Expr, ParseError> {
+    pub(super) fn parse_target_from_atoms(
+        atoms: &[Atom],
+        line: usize,
+        col: usize,
+    ) -> Result<Expr, ParseError> {
         if atoms.is_empty() {
             return Err(ParseError::UnexpectedToken {
                 found: "empty".into(),
                 expected: "assignment target".into(),
-                line: 0,
-                col: 0,
+                line,
+                col,
             });
         }
         let mut iter = atoms.iter();
@@ -705,8 +707,8 @@ impl Parser {
             return Err(ParseError::UnexpectedToken {
                 found: "non-identifier target".into(),
                 expected: "identifier".into(),
-                line: 0,
-                col: 0,
+                line,
+                col,
             });
         };
         let mut expr = Expr::Ident {
@@ -717,32 +719,32 @@ impl Parser {
                 return Err(ParseError::UnexpectedToken {
                     found: "unexpected token in assignment target".into(),
                     expected: "`.`".into(),
-                    line: 0,
-                    col: 0,
+                    line,
+                    col,
                 });
             };
             if dot != "." {
                 return Err(ParseError::UnexpectedToken {
                     found: dot.clone(),
                     expected: "`.`".into(),
-                    line: 0,
-                    col: 0,
+                    line,
+                    col,
                 });
             }
             let Some(next) = iter.next() else {
                 return Err(ParseError::UnexpectedToken {
                     found: "EOF".into(),
                     expected: "field name".into(),
-                    line: 0,
-                    col: 0,
+                    line,
+                    col,
                 });
             };
             let Atom::Ident { value: field } = next else {
                 return Err(ParseError::UnexpectedToken {
                     found: "non-identifier".into(),
                     expected: "field name".into(),
-                    line: 0,
-                    col: 0,
+                    line,
+                    col,
                 });
             };
             expr = Expr::Index {
@@ -755,21 +757,23 @@ impl Parser {
 
     pub(super) fn parse_simple_value_from_atoms(
         atoms: &[Atom],
+        line: usize,
+        col: usize,
     ) -> Result<SimpleValue, ParseError> {
         if atoms.is_empty() {
             return Err(ParseError::UnexpectedToken {
                 found: "empty".into(),
                 expected: "simple value".into(),
-                line: 0,
-                col: 0,
+                line,
+                col,
             });
         }
         if atoms.len() > 1 {
             return Err(ParseError::UnexpectedToken {
                 found: "compound expression".into(),
                 expected: "simple value (identifier, literal, or list literal)".into(),
-                line: 0,
-                col: 0,
+                line,
+                col,
             });
         }
         match &atoms[0] {
@@ -798,8 +802,8 @@ impl Parser {
             Atom::Symbol { value } => Err(ParseError::UnexpectedToken {
                 found: value.clone(),
                 expected: "simple value".into(),
-                line: 0,
-                col: 0,
+                line,
+                col,
             }),
         }
     }

@@ -7,6 +7,7 @@
 //! - 基于 AST 的代码生成后回写
 
 use crate::ast::*;
+use crate::render_util::{expr_prec, paren_if};
 
 /// 渲染入口：将整棵 AST 输出为 MMS 源码字符串。
 pub fn render_file(file: &File) -> String {
@@ -92,10 +93,8 @@ impl Renderer {
         self.write_indent();
         self.push("rule");
         self.push(&commitment_suffix(rule.keyword_commitment));
-        self.push(" \"");
-        self.push(&rule.desc.content.value);
-        self.push("\"");
-        self.push(&commitment_suffix(rule.desc.content.commitment));
+        self.push(" ");
+        self.push(&render_fstring(&rule.desc.content));
         self.newline();
     }
 
@@ -378,10 +377,8 @@ impl Renderer {
         self.write_indent();
         self.push("desc");
         self.push(&commitment_suffix(desc.need_commitment));
-        self.push(" \"");
-        self.push(&desc.content.value);
-        self.push("\"");
-        self.push(&commitment_suffix(desc.content.commitment));
+        self.push(" ");
+        self.push(&render_fstring(&desc.content));
         self.newline();
     }
 
@@ -516,10 +513,8 @@ impl Renderer {
         self.push("parasteps");
         self.push(&commitment_suffix(step.keyword_commitment));
         if let Some(desc) = &step.description {
-            self.push(" \"");
-            self.push(&desc.value);
-            self.push("\"");
-            self.push(&commitment_suffix(desc.commitment));
+            self.push(" ");
+            self.push(&render_fstring(desc));
         }
         self.push(":");
         self.newline();
@@ -530,10 +525,8 @@ impl Renderer {
         self.write_indent();
         self.push("error");
         self.push(&commitment_suffix(step.keyword_commitment));
-        self.push(" \"");
-        self.push(&step.message.value);
-        self.push("\"");
-        self.push(&commitment_suffix(step.message.commitment));
+        self.push(" ");
+        self.push(&render_fstring(&step.message));
         if let Some(to) = &step.to {
             self.push(" to ");
             self.push(&render_ident(&to.target));
@@ -596,10 +589,8 @@ impl Renderer {
         self.push(keyword);
         self.push(&commitment_suffix(stack.keyword_commitment));
         if let Some(desc) = &stack.description {
-            self.push(" \"");
-            self.push(&desc.value);
-            self.push("\"");
-            self.push(&commitment_suffix(desc.commitment));
+            self.push(" ");
+            self.push(&render_fstring(desc));
         }
         self.push(":");
         self.newline();
@@ -612,10 +603,7 @@ impl Renderer {
 
     fn render_ui_leaf(&mut self, leaf: &UiLeaf) {
         self.write_indent();
-        self.push("\"");
-        self.push(&leaf.content.value);
-        self.push("\"");
-        self.push(&commitment_suffix(leaf.content.commitment));
+        self.push(&render_fstring(&leaf.content));
         if let Some(desc) = &leaf.desc {
             self.push(" ");
             self.push(&render_desc_inline(desc));
@@ -641,10 +629,8 @@ impl Renderer {
         self.write_indent();
         self.push("error");
         self.push(&commitment_suffix(error.keyword_commitment));
-        self.push(" \"");
-        self.push(&error.message.value);
-        self.push("\"");
-        self.push(&commitment_suffix(error.message.commitment));
+        self.push(" ");
+        self.push(&render_fstring(&error.message));
         if let Some(desc) = &error.desc {
             self.push(" ");
             self.push(&render_desc_inline(desc));
@@ -689,7 +675,9 @@ fn render_action(action: &Action) -> String {
     match action {
         Action::Call { expr } => render_expr(expr),
         Action::Navigate { target } => format!("to {}", render_ident(target)),
-        Action::Assign { target, value } => format!("{} = {}", render_expr(target), render_expr(value)),
+        Action::Assign { target, value } => {
+            format!("{} = {}", render_expr(target), render_expr(value))
+        }
         Action::Natural { text } => render_fstring(text),
     }
 }
@@ -815,7 +803,16 @@ fn render_ident(ident: &Ident) -> String {
 
 fn render_fstring(s: &FString) -> String {
     let mut out = String::from("\"");
-    out.push_str(&s.value);
+    for c in s.value.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            '\r' => out.push_str("\\r"),
+            c => out.push(c),
+        }
+    }
     out.push('"');
     out.push_str(&commitment_suffix(s.commitment));
     out
@@ -830,46 +827,11 @@ fn render_desc_inline(desc: &Desc) -> String {
 }
 
 fn commitment_suffix(c: Commitment) -> String {
-    match c {
-        Commitment::None => String::new(),
-        Commitment::Question => "?".into(),
-        Commitment::QuestionQuestion => "??".into(),
-        Commitment::Locked => "$".into(),
-        Commitment::StrongLocked => "$$".into(),
-        Commitment::LockedQuestion => "$?".into(),
-        Commitment::StrongLockedQuestion => "$$?".into(),
-        Commitment::LockedQuestionQuestion => "$??".into(),
-        Commitment::StrongLockedQuestionQuestion => "$$??".into(),
-    }
-}
-
-fn expr_prec(expr: &Expr) -> u8 {
-    match expr {
-        Expr::Or { .. } => 1,
-        Expr::And { .. } => 2,
-        Expr::In { .. } | Expr::Compare { .. } => 3,
-        Expr::BitOr { .. } => 4,
-        Expr::BitXor { .. } => 5,
-        Expr::BitAnd { .. } => 6,
-        Expr::Shl { .. } | Expr::Shr { .. } => 7,
-        Expr::Add { .. } | Expr::Sub { .. } => 8,
-        Expr::Mul { .. } | Expr::Div { .. } | Expr::MatMul { .. } => 9,
-        Expr::Pow { .. } => 10,
-        Expr::Not { .. } | Expr::Neg { .. } | Expr::BitNot { .. } => 11,
-        _ => 12,
-    }
+    c.to_string()
 }
 
 fn render_expr(expr: &Expr) -> String {
     render_expr_prec(expr, 0)
-}
-
-fn paren_if(needed: bool, s: String) -> String {
-    if needed {
-        format!("({})", s)
-    } else {
-        s
-    }
 }
 
 fn render_expr_prec(expr: &Expr, parent_prec: u8) -> String {
@@ -880,11 +842,7 @@ fn render_expr_prec(expr: &Expr, parent_prec: u8) -> String {
         Expr::Number { value } => value.clone(),
         Expr::Bool { value, .. } => value.to_string(),
         Expr::List { items } => {
-            let inner = items
-                .iter()
-                .map(render_expr)
-                .collect::<Vec<_>>()
-                .join(", ");
+            let inner = items.iter().map(render_expr).collect::<Vec<_>>().join(", ");
             format!("[{}]", inner)
         }
         Expr::Placeholder { .. } => "...".into(),

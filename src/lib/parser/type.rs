@@ -1,7 +1,7 @@
 use crate::ast::*;
 use crate::error::ParseError;
-use crate::parser::Parser;
 use crate::lexer::TokenKind;
+use crate::parser::Parser;
 
 impl Parser {
     pub(super) fn parse_type_def(&mut self) -> Result<TypeDef, ParseError> {
@@ -105,9 +105,7 @@ impl Parser {
                 TokenKind::Pipe if depth == 0 => found_pipe = true,
                 TokenKind::LParen | TokenKind::LBracket | TokenKind::Lt => depth += 1,
                 TokenKind::RParen | TokenKind::RBracket | TokenKind::Gt => {
-                    if depth > 0 {
-                        depth -= 1;
-                    }
+                    depth = depth.saturating_sub(1);
                 }
                 _ => {}
             }

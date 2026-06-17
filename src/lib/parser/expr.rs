@@ -1,7 +1,7 @@
 use crate::ast::*;
 use crate::error::ParseError;
-use crate::parser::{BinOp, Parser};
 use crate::lexer::TokenKind;
+use crate::parser::{BinOp, Parser};
 
 impl Parser {
     pub(super) fn parse_condition(&mut self) -> Result<Condition, ParseError> {
@@ -286,7 +286,10 @@ impl Parser {
         let stmt = if self.check(&TokenKind::Assign) {
             self.advance();
             let value = self.parse_expr(0)?;
-            MathStatement::Define { target: expr, value }
+            MathStatement::Define {
+                target: expr,
+                value,
+            }
         } else {
             MathStatement::Expr { expr }
         };

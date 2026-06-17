@@ -1,9 +1,10 @@
 use serde::{Deserialize, Serialize};
 
 /// 意图后缀：附加在关键字、标识符或字符串上，表示作者对该节点的锁定与不确定程度。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum Commitment {
     #[serde(rename = "none")]
+    #[default]
     None,
     #[serde(rename = "?")]
     Question,
@@ -65,9 +66,20 @@ impl Commitment {
     }
 }
 
-impl Default for Commitment {
-    fn default() -> Self {
-        Commitment::None
+impl std::fmt::Display for Commitment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Commitment::None => "",
+            Commitment::Question => "?",
+            Commitment::QuestionQuestion => "??",
+            Commitment::Locked => "$",
+            Commitment::StrongLocked => "$$",
+            Commitment::LockedQuestion => "$?",
+            Commitment::StrongLockedQuestion => "$$?",
+            Commitment::LockedQuestionQuestion => "$??",
+            Commitment::StrongLockedQuestionQuestion => "$$??",
+        };
+        write!(f, "{}", s)
     }
 }
 
@@ -101,19 +113,33 @@ pub struct File {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind")]
 pub enum Fragment {
-    Module { module: Module },
-    TypeDef { typedef: TypeDef },
-    Flow { flow: FlowDef },
-    Func { func: FuncDef },
-    Ui { ui: UiDef },
+    Module {
+        module: Module,
+    },
+    TypeDef {
+        typedef: TypeDef,
+    },
+    Flow {
+        flow: FlowDef,
+    },
+    Func {
+        func: FuncDef,
+    },
+    Ui {
+        ui: UiDef,
+    },
     Steps {
         // v0.3 新增：独立 steps 块
         #[serde(default)]
         keyword_commitment: Commitment,
         steps: Vec<Step>,
     },
-    Expr { expr: Expr },     // v0.3 新增：裸表达式
-    UiNode { node: UiNode }, // v0.3 新增：裸 UI 节点
+    Expr {
+        expr: Expr,
+    }, // v0.3 新增：裸表达式
+    UiNode {
+        node: UiNode,
+    }, // v0.3 新增：裸 UI 节点
     Placeholder {
         // v0.3 新增：... 占位符
         #[serde(default)]

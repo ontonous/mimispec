@@ -9,6 +9,7 @@
 //! - 对 `x[i, j]` 等下标表达式渲染为 `x_{i,j}`，对 `a / b` 渲染为 `\frac{a}{b}`。
 
 use crate::ast::*;
+use crate::render_util::{expr_prec, paren_if};
 
 /// 渲染单个表达式为 LaTeX。
 pub fn render_expr(expr: &Expr) -> String {
@@ -73,11 +74,7 @@ fn render_expr_prec(expr: &Expr, parent_prec: u8) -> String {
         Expr::Number { value } => value.clone(),
         Expr::Bool { value, .. } => value.to_string(),
         Expr::List { items } => {
-            let inner = items
-                .iter()
-                .map(render_expr)
-                .collect::<Vec<_>>()
-                .join(", ");
+            let inner = items.iter().map(render_expr).collect::<Vec<_>>().join(", ");
             format!("\\left[{}\\right]", inner)
         }
         Expr::Placeholder { .. } => "\\ldots".into(),
@@ -195,31 +192,6 @@ fn render_expr_prec(expr: &Expr, parent_prec: u8) -> String {
         }
     };
     paren_if(my_prec < parent_prec, s)
-}
-
-fn expr_prec(expr: &Expr) -> u8 {
-    match expr {
-        Expr::Or { .. } => 1,
-        Expr::And { .. } => 2,
-        Expr::In { .. } | Expr::Compare { .. } => 3,
-        Expr::BitOr { .. } => 4,
-        Expr::BitXor { .. } => 5,
-        Expr::BitAnd { .. } => 6,
-        Expr::Shl { .. } | Expr::Shr { .. } => 7,
-        Expr::Add { .. } | Expr::Sub { .. } => 8,
-        Expr::Mul { .. } | Expr::Div { .. } | Expr::MatMul { .. } => 9,
-        Expr::Pow { .. } => 10,
-        Expr::Not { .. } | Expr::Neg { .. } | Expr::BitNot { .. } => 11,
-        _ => 12,
-    }
-}
-
-fn paren_if(needed: bool, s: String) -> String {
-    if needed {
-        format!("({})", s)
-    } else {
-        s
-    }
 }
 
 fn render_ident(ident: &Ident) -> String {

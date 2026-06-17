@@ -46,7 +46,7 @@ pub enum TokenKind {
     // Punctuation / operators
     Colon,
     Comma,
-    Pipe,     // `|` used as enum separator and bitwise OR in math
+    Pipe, // `|` used as enum separator and bitwise OR in math
     LParen,
     RParen,
     LBracket,
@@ -61,16 +61,16 @@ pub enum TokenKind {
     Ge,
 
     // Math / arithmetic / bitwise operators
-    Plus,        // `+`
-    Minus,       // `-`
-    Star,        // `*`
-    Slash,       // `/`
-    Power,       // `**`
-    BitAnd,      // `&`
-    BitXor,      // `^`
-    BitNot,      // `~`
-    Shl,         // `<<`
-    Shr,         // `>>`
+    Plus,   // `+`
+    Minus,  // `-`
+    Star,   // `*`
+    Slash,  // `/`
+    Power,  // `**`
+    BitAnd, // `&`
+    BitXor, // `^`
+    BitNot, // `~`
+    Shl,    // `<<`
+    Shr,    // `>>`
 
     // Fuzzy
     Question,
@@ -88,6 +88,11 @@ pub enum TokenKind {
 }
 
 impl TokenKind {
+    /// 判断两个 token 是否属于同一类别（忽略 String/Ident/Number 内携带的具体值）。
+    pub fn same_kind(&self, other: &TokenKind) -> bool {
+        std::mem::discriminant(self) == std::mem::discriminant(other)
+    }
+
     /// 若该 token 是关键字，返回其关键字文本（不含 `?`/`??` 后缀）。
     pub fn as_keyword_str(&self) -> Option<&'static str> {
         match self {
@@ -306,7 +311,7 @@ impl<'a> Lexer<'a> {
                         continue;
                     }
                     _ => {
-                        if spaces % 4 != 0 {
+                        if !spaces.is_multiple_of(4) {
                             return Err(ParseError::IndentError {
                                 line: start_line,
                                 message: format!(
@@ -679,7 +684,7 @@ impl<'a> Lexer<'a> {
             }
         }
         // 支持小数：123.45
-        if self.peek() == Some('.') && self.peek_second().map_or(false, |c| c.is_ascii_digit()) {
+        if self.peek() == Some('.') && self.peek_second().is_some_and(|c| c.is_ascii_digit()) {
             value.push('.');
             self.bump();
             while let Some(c) = self.peek() {
@@ -698,7 +703,8 @@ impl<'a> Lexer<'a> {
             let valid_exp = chars.len() >= 2
                 && (chars[1].is_ascii_digit() || matches!(chars[1], '+' | '-'))
                 && (chars[1].is_ascii_digit()
-                    || (matches!(chars[1], '+' | '-') && chars.get(2).map_or(false, |c| c.is_ascii_digit())));
+                    || (matches!(chars[1], '+' | '-')
+                        && chars.get(2).is_some_and(|c| c.is_ascii_digit())));
             if valid_exp {
                 value.push(self.bump().unwrap()); // e/E
                 if matches!(self.peek(), Some('+') | Some('-')) {
