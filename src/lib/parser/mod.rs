@@ -185,12 +185,7 @@ impl Parser {
             Some(t) => (t.kind.to_string(), t.line, t.col),
             None => ("EOF".into(), 0, 0),
         };
-        Err(ParseError::UnexpectedToken {
-            found,
-            expected: what.into(),
-            line,
-            col,
-        })
+        Err(ParseError::unexpected_token(found, what.into(), line, col))
     }
 
     // ── commitment / identifiers ─────────────────────────────────────────────
@@ -219,12 +214,12 @@ impl Parser {
         if self.matches(&TokenKind::QuestionQuestion) {
             if self.check(&TokenKind::Dollar) || self.check(&TokenKind::DollarDollar) {
                 let t = self.peek().unwrap();
-                return Err(ParseError::UnexpectedToken {
-                    found: t.kind.to_string(),
-                    expected: "锁后缀必须在不确定后缀之前（`?$` / `?$$` 等顺序非法）".into(),
-                    line: t.line,
-                    col: t.col,
-                });
+                return Err(ParseError::unexpected_token(
+                    t.kind.to_string(),
+                    "锁后缀必须在不确定后缀之前（`?$` / `?$$` 等顺序非法）".into(),
+                    t.line,
+                    t.col,
+                ));
             }
             return Ok(Commitment::QuestionQuestion);
         }
@@ -232,12 +227,12 @@ impl Parser {
         if self.matches(&TokenKind::Question) {
             if self.check(&TokenKind::Dollar) || self.check(&TokenKind::DollarDollar) {
                 let t = self.peek().unwrap();
-                return Err(ParseError::UnexpectedToken {
-                    found: t.kind.to_string(),
-                    expected: "锁后缀必须在不确定后缀之前（`?$` / `?$$` 等顺序非法）".into(),
-                    line: t.line,
-                    col: t.col,
-                });
+                return Err(ParseError::unexpected_token(
+                    t.kind.to_string(),
+                    "锁后缀必须在不确定后缀之前（`?$` / `?$$` 等顺序非法）".into(),
+                    t.line,
+                    t.col,
+                ));
             }
             return Ok(Commitment::Question);
         }
@@ -264,16 +259,15 @@ impl Parser {
             Some(t) => (t.kind.to_string(), t.line, t.col),
             None => ("EOF".into(), 0, 0),
         };
-        Err(ParseError::UnexpectedToken {
-            found,
-            expected: "string literal".into(),
-            line,
-            col,
-        })
+        Err(ParseError::unexpected_token(found, "string literal".into(), line, col))
     }
 
     pub(super) fn fuzzy_ident(&mut self) -> Result<Ident, ParseError> {
-        let tok = self.peek().ok_or(ParseError::UnexpectedEof)?.clone();
+        let tok_opt = self.peek().cloned();
+        let tok = tok_opt.ok_or_else(|| {
+            let (l, c) = self.current_pos();
+            ParseError::unexpected_eof(l, c)
+        })?;
         let name = if let Some(kw) = tok.kind.as_keyword_str() {
             self.advance();
             kw.to_string()
@@ -281,15 +275,23 @@ impl Parser {
             self.advance();
             s.clone()
         } else {
-            return Err(ParseError::UnexpectedToken {
-                found: tok.kind.to_string(),
-                expected: "identifier".into(),
-                line: tok.line,
-                col: tok.col,
-            });
+            return Err(ParseError::unexpected_token(
+                tok.kind.to_string(),
+                "identifier".into(),
+                tok.line,
+                tok.col,
+            ));
         };
         let commitment = self.commitment()?;
         Ok(Ident { name, commitment })
+    }
+
+    /// Return the (line, col) of the current token, or (0, 0) at EOF.
+    pub(super) fn current_pos(&self) -> (usize, usize) {
+        match self.peek() {
+            Some(t) => (t.line, t.col),
+            None => (0, 0),
+        }
     }
 
     pub(super) fn fuzzy_string(&mut self) -> Result<FString, ParseError> {
@@ -659,12 +661,12 @@ impl Parser {
             TokenKind::Ge => Ok(Atom::Symbol { value: ">=".into() }),
             TokenKind::Question => Ok(Atom::Symbol { value: "?".into() }),
             TokenKind::QuestionQuestion => Ok(Atom::Symbol { value: "??".into() }),
-            _ => Err(ParseError::UnexpectedToken {
-                found: tok.kind.to_string(),
-                expected: "atom".into(),
-                line: tok.line,
-                col: tok.col,
-            }),
+            _ => Err(ParseError::unexpected_token(
+                tok.kind.to_string(),
+                "atom".into(),
+                tok.line,
+                tok.col,
+            )),
         }
     }
 
@@ -694,58 +696,58 @@ impl Parser {
         col: usize,
     ) -> Result<Expr, ParseError> {
         if atoms.is_empty() {
-            return Err(ParseError::UnexpectedToken {
-                found: "empty".into(),
-                expected: "assignment target".into(),
+            return Err(ParseError::unexpected_token(
+                "empty".into(),
+                "assignment target".into(),
                 line,
                 col,
-            });
+            ));
         }
         let mut iter = atoms.iter();
         let first = iter.next().unwrap();
         let Atom::Ident { value: first_ident } = first else {
-            return Err(ParseError::UnexpectedToken {
-                found: "non-identifier target".into(),
-                expected: "identifier".into(),
+            return Err(ParseError::unexpected_token(
+                "non-identifier target".into(),
+                "identifier".into(),
                 line,
                 col,
-            });
+            ));
         };
         let mut expr = Expr::Ident {
             value: first_ident.clone(),
         };
         while let Some(atom) = iter.next() {
             let Atom::Symbol { value: dot } = atom else {
-                return Err(ParseError::UnexpectedToken {
-                    found: "unexpected token in assignment target".into(),
-                    expected: "`.`".into(),
+                return Err(ParseError::unexpected_token(
+                    "unexpected token in assignment target".into(),
+                    "`.`".into(),
                     line,
                     col,
-                });
+                ));
             };
             if dot != "." {
-                return Err(ParseError::UnexpectedToken {
-                    found: dot.clone(),
-                    expected: "`.`".into(),
+                return Err(ParseError::unexpected_token(
+                    dot.clone(),
+                    "`.`".into(),
                     line,
                     col,
-                });
+                ));
             }
             let Some(next) = iter.next() else {
-                return Err(ParseError::UnexpectedToken {
-                    found: "EOF".into(),
-                    expected: "field name".into(),
+                return Err(ParseError::unexpected_token(
+                    "EOF".into(),
+                    "field name".into(),
                     line,
                     col,
-                });
+                ));
             };
             let Atom::Ident { value: field } = next else {
-                return Err(ParseError::UnexpectedToken {
-                    found: "non-identifier".into(),
-                    expected: "field name".into(),
+                return Err(ParseError::unexpected_token(
+                    "non-identifier".into(),
+                    "field name".into(),
                     line,
                     col,
-                });
+                ));
             };
             expr = Expr::Index {
                 object: Box::new(expr),
@@ -761,20 +763,20 @@ impl Parser {
         col: usize,
     ) -> Result<SimpleValue, ParseError> {
         if atoms.is_empty() {
-            return Err(ParseError::UnexpectedToken {
-                found: "empty".into(),
-                expected: "simple value".into(),
+            return Err(ParseError::unexpected_token(
+                "empty".into(),
+                "simple value".into(),
                 line,
                 col,
-            });
+            ));
         }
         if atoms.len() > 1 {
-            return Err(ParseError::UnexpectedToken {
-                found: "compound expression".into(),
-                expected: "simple value (identifier, literal, or list literal)".into(),
+            return Err(ParseError::unexpected_token(
+                "compound expression".into(),
+                "simple value (identifier, literal, or list literal)".into(),
                 line,
                 col,
-            });
+            ));
         }
         match &atoms[0] {
             Atom::Ident { value: ident } => {
@@ -799,12 +801,12 @@ impl Parser {
             Atom::List { items } => Ok(SimpleValue::List {
                 items: items.clone(),
             }),
-            Atom::Symbol { value } => Err(ParseError::UnexpectedToken {
-                found: value.clone(),
-                expected: "simple value".into(),
+            Atom::Symbol { value } => Err(ParseError::unexpected_token(
+                value.clone(),
+                "simple value".into(),
                 line,
                 col,
-            }),
+            )),
         }
     }
 }

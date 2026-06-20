@@ -1,6 +1,63 @@
-use thiserror::Error;
-
 use crate::ast::File;
+
+/// Structured error code for categorizing and deduplicating parse errors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ErrorCode {
+    // ── Lexer ──────────────────────────────────────────────────────────────
+    /// Unexpected character (illegal token).
+    E0001,
+    /// Unexpected end of file.
+    E0002,
+    /// Indentation error (not a multiple of 4, or bad dedent).
+    E0003,
+    /// Invalid escape sequence in string literal.
+    E0004,
+    /// Unterminated string literal.
+    E0005,
+    // ── Parser: structure ──────────────────────────────────────────────────
+    /// Token does not match what was expected (generic parser-level).
+    E0010,
+    /// Identifier is not defined (with optional suggestion).
+    E0011,
+    /// Binary operator not supported for the given operand types.
+    E0012,
+    /// Expression form is not supported in this context.
+    E0013,
+    /// Value is not callable (not a function).
+    E0014,
+    /// Subscript index is out of bounds.
+    E0015,
+    /// Operand types do not match for the operator.
+    E0016,
+    /// Expected an indented block after `:`.
+    E0017,
+    /// Expected a function body (`steps:` or `...`).
+    E0018,
+    /// Internal / unrecoverable parser state.
+    E0701,
+}
+
+impl std::fmt::Display for ErrorCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ErrorCode::E0001 => write!(f, "E0001"),
+            ErrorCode::E0002 => write!(f, "E0002"),
+            ErrorCode::E0003 => write!(f, "E0003"),
+            ErrorCode::E0004 => write!(f, "E0004"),
+            ErrorCode::E0005 => write!(f, "E0005"),
+            ErrorCode::E0010 => write!(f, "E0010"),
+            ErrorCode::E0011 => write!(f, "E0011"),
+            ErrorCode::E0012 => write!(f, "E0012"),
+            ErrorCode::E0013 => write!(f, "E0013"),
+            ErrorCode::E0014 => write!(f, "E0014"),
+            ErrorCode::E0015 => write!(f, "E0015"),
+            ErrorCode::E0016 => write!(f, "E0016"),
+            ErrorCode::E0017 => write!(f, "E0017"),
+            ErrorCode::E0018 => write!(f, "E0018"),
+            ErrorCode::E0701 => write!(f, "E0701"),
+        }
+    }
+}
 
 /// 解析结果：即使出错也返回尽可能完整的 AST + 所有错误
 #[derive(Debug, Clone, PartialEq)]
@@ -9,47 +66,190 @@ pub struct ParseResult {
     pub errors: Vec<ParseError>,
 }
 
-#[derive(Error, Debug, Clone, PartialEq)]
-pub enum ParseError {
-    #[error("unexpected end of file")]
-    UnexpectedEof,
-    #[error("unexpected token {found:?} at line {line}, col {col}; expected {expected}")]
-    UnexpectedToken {
-        found: String,
-        expected: String,
-        line: usize,
-        col: usize,
-    },
-    #[error("indentation error at line {line}: {message}")]
-    IndentError { line: usize, message: String },
-    #[error("invalid escape at line {line}, col {col}: {message}")]
-    InvalidEscape {
-        line: usize,
-        col: usize,
-        message: String,
-    },
-    #[error("unterminated string at line {line}, col {col}")]
-    UnterminatedString { line: usize, col: usize },
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParseError {
+    pub code: ErrorCode,
+    pub line: usize,
+    pub col: usize,
+    pub message: String,
+    /// Optional hint for how to fix the error.
+    pub help: Option<String>,
+    /// Optional suggested replacement (e.g. "did you mean 'FOO'?").
+    pub suggestion: Option<String>,
 }
 
 impl ParseError {
-    pub fn line(&self) -> usize {
-        match self {
-            ParseError::UnexpectedEof => 0,
-            ParseError::UnexpectedToken { line, .. } => *line,
-            ParseError::IndentError { line, .. } => *line,
-            ParseError::InvalidEscape { line, .. } => *line,
-            ParseError::UnterminatedString { line, .. } => *line,
+    pub fn unexpected_token(found: String, expected: String, line: usize, col: usize) -> Self {
+        Self {
+            code: ErrorCode::E0010,
+            line,
+            col,
+            message: format!("unexpected token {found:?} at line {line}, col {col}; expected {expected}"),
+            help: None,
+            suggestion: None,
         }
     }
 
-    pub fn col(&self) -> usize {
-        match self {
-            ParseError::UnexpectedEof => 0,
-            ParseError::UnexpectedToken { col, .. } => *col,
-            ParseError::IndentError { .. } => 0,
-            ParseError::InvalidEscape { col, .. } => *col,
-            ParseError::UnterminatedString { col, .. } => *col,
+    pub fn unexpected_eof(line: usize, col: usize) -> Self {
+        Self {
+            code: ErrorCode::E0002,
+            line,
+            col,
+            message: "unexpected end of file".into(),
+            help: None,
+            suggestion: None,
+        }
+    }
+
+    pub fn indent_error(line: usize, message: String) -> Self {
+        Self {
+            code: ErrorCode::E0003,
+            line,
+            col: 0,
+            message: format!("indentation error at line {line}: {message}"),
+            help: Some("indentation must be a multiple of 4 spaces".into()),
+            suggestion: None,
+        }
+    }
+
+    pub fn invalid_escape(line: usize, col: usize, message: String) -> Self {
+        Self {
+            code: ErrorCode::E0004,
+            line,
+            col,
+            message: format!("invalid escape at line {line}, col {col}: {message}"),
+            help: Some("valid escapes are: \\n, \\t, \\r, \\\\, \\\"".into()),
+            suggestion: None,
+        }
+    }
+
+    pub fn unterminated_string(line: usize, col: usize) -> Self {
+        Self {
+            code: ErrorCode::E0005,
+            line,
+            col,
+            message: format!("unterminated string at line {line}, col {col}"),
+            help: Some("string literals must be closed with a matching double-quote".into()),
+            suggestion: None,
+        }
+    }
+
+    pub fn undefined_variable(name: String, line: usize, col: usize, suggestion: Option<String>) -> Self {
+        let msg = if let Some(ref s) = suggestion {
+            format!("undefined variable '{name}' — did you mean '{s}'?")
+        } else {
+            format!("undefined variable '{name}'")
+        };
+        Self {
+            code: ErrorCode::E0011,
+            line,
+            col,
+            message: msg,
+            help: Some("check the variable name for typos".into()),
+            suggestion,
+        }
+    }
+
+    pub fn unsupported_bin_op(op: &str, left: &str, right: &str, line: usize, col: usize) -> Self {
+        Self {
+            code: ErrorCode::E0012,
+            line,
+            col,
+            message: format!("cannot apply '{op}' to {left} and {right}"),
+            help: None,
+            suggestion: None,
+        }
+    }
+
+    pub fn unsupported_expr(desc: &str, line: usize, col: usize) -> Self {
+        Self {
+            code: ErrorCode::E0013,
+            line,
+            col,
+            message: format!("unsupported expression: {desc}"),
+            help: None,
+            suggestion: None,
+        }
+    }
+
+    pub fn not_callable(value_desc: &str, line: usize, col: usize) -> Self {
+        Self {
+            code: ErrorCode::E0014,
+            line,
+            col,
+            message: format!("cannot call {value_desc}: value is not callable"),
+            help: None,
+            suggestion: None,
+        }
+    }
+
+    pub fn index_out_of_bounds(index: usize, len: usize, line: usize, col: usize) -> Self {
+        Self {
+            code: ErrorCode::E0015,
+            line,
+            col,
+            message: format!("index out of bounds: index {index} is not valid for list of length {len}"),
+            help: None,
+            suggestion: None,
+        }
+    }
+
+    pub fn type_mismatch(expected: &str, got: &str, line: usize, col: usize) -> Self {
+        Self {
+            code: ErrorCode::E0016,
+            line,
+            col,
+            message: format!("type mismatch: expected {expected}, got {got}"),
+            help: None,
+            suggestion: None,
+        }
+    }
+
+    pub fn missing_indented_block(line: usize, col: usize) -> Self {
+        Self {
+            code: ErrorCode::E0017,
+            line,
+            col,
+            message: "expected an indented block after ':'".into(),
+            help: Some("indent the body by 4 spaces relative to the header".into()),
+            suggestion: None,
+        }
+    }
+
+    pub fn missing_func_body(line: usize, col: usize) -> Self {
+        Self {
+            code: ErrorCode::E0018,
+            line,
+            col,
+            message: "expected function body: 'steps:' or '...'".into(),
+            help: Some("add a 'steps:' block or write '...' as a placeholder".into()),
+            suggestion: None,
+        }
+    }
+
+    pub fn internal(msg: String, line: usize, col: usize) -> Self {
+        Self {
+            code: ErrorCode::E0701,
+            line,
+            col,
+            message: format!("internal error: {msg}"),
+            help: Some("this is a bug — please report it".into()),
+            suggestion: None,
         }
     }
 }
+
+impl std::fmt::Display for ParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "error[{}] at line {}, col {}: {}", self.code, self.line, self.col, self.message)?;
+        if let Some(ref help) = self.help {
+            write!(f, "\n  help: {help}")?;
+        }
+        if let Some(ref suggestion) = self.suggestion {
+            write!(f, "\n  suggestion: {suggestion}")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for ParseError {}

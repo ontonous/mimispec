@@ -311,13 +311,10 @@ impl<'a> Lexer<'a> {
                     }
                     _ => {
                         if !spaces.is_multiple_of(4) {
-                            return Err(ParseError::IndentError {
-                                line: start_line,
-                                message: format!(
-                                    "indentation must be a multiple of 4 spaces, found {}",
-                                    spaces
-                                ),
-                            });
+                            return Err(ParseError::indent_error(
+                                start_line,
+                                format!("indentation must be a multiple of 4 spaces, found {}", spaces),
+                            ));
                         }
                         let current = *self.indent_stack.last().unwrap_or(&0);
                         if spaces > current {
@@ -461,12 +458,12 @@ impl<'a> Lexer<'a> {
                     self.bump();
                     Ok(Token::new(TokenKind::NotEq, line, col))
                 } else {
-                    Err(ParseError::UnexpectedToken {
-                        found: "!".into(),
-                        expected: "`!=`".into(),
-                        line,
-                        col,
-                    })
+                    Err(ParseError::unexpected_token(
+                    "!".into(),
+                    "`!=`".into(),
+                    line,
+                    col,
+                ))
                 }
             }
             Some('<') => {
@@ -506,12 +503,12 @@ impl<'a> Lexer<'a> {
                         self.bump();
                         Ok(Token::new(TokenKind::Ellipsis, line, col))
                     } else {
-                        Err(ParseError::UnexpectedToken {
-                            found: "..".into(),
-                            expected: "`...`".into(),
+                        Err(ParseError::unexpected_token(
+                            "..".into(),
+                            "`...`".into(),
                             line,
                             col,
-                        })
+                        ))
                     }
                 } else {
                     Ok(Token::new(TokenKind::Dot, line, col))
@@ -549,12 +546,12 @@ impl<'a> Lexer<'a> {
                     Ok(Token::new(TokenKind::Dollar, line, col))
                 }
             }
-            Some(c) => Err(ParseError::UnexpectedToken {
-                found: c.to_string(),
-                expected: "valid token".into(),
+            Some(c) => Err(ParseError::unexpected_token(
+                c.to_string(),
+                "valid token".into(),
                 line,
                 col,
-            }),
+            )),
         }
     }
 
@@ -596,10 +593,10 @@ impl<'a> Lexer<'a> {
     fn emit_dedents(&mut self, target: usize) -> Result<Token, ParseError> {
         let current = *self.indent_stack.last().unwrap_or(&0);
         if target > current {
-            return Err(ParseError::IndentError {
-                line: self.line,
-                message: format!("dedent to {} exceeds current indent {}", target, current),
-            });
+            return Err(ParseError::indent_error(
+                self.line,
+                format!("dedent to {} exceeds current indent {}", target, current),
+            ));
         }
         // emit DEDENT for each popped level, then a Newline, then continue
         let line = self.line;
@@ -639,16 +636,15 @@ impl<'a> Lexer<'a> {
         loop {
             match self.peek() {
                 None => {
-                    return Err(ParseError::UnterminatedString { line, col });
+                    return Err(ParseError::unterminated_string(line, col));
                 }
                 Some('"') => {
                     self.bump();
                     break;
                 }
                 Some('\n') => {
-                    // 字符串不允许隐式跨行；未闭合的引号应立即报错，
-                    // 避免吞掉后续大量代码并在远离真实错误的位置报 unexpected token。
-                    return Err(ParseError::UnterminatedString { line, col });
+                    // 字符串不允许隐式跨行；未闭合的引号应立即报错
+                    return Err(ParseError::unterminated_string(line, col));
                 }
                 Some('\\') => {
                     self.bump();
@@ -659,13 +655,13 @@ impl<'a> Lexer<'a> {
                         Some('\\') => value.push('\\'),
                         Some('"') => value.push('"'),
                         Some(c) => {
-                            return Err(ParseError::InvalidEscape {
-                                line: self.line,
-                                col: self.col,
-                                message: format!("\\{}", c),
-                            })
+                            return Err(ParseError::invalid_escape(
+                            self.line,
+                            self.col,
+                            format!("\\{}", c),
+                        ))
                         }
-                        None => return Err(ParseError::UnterminatedString { line, col }),
+                        None => return Err(ParseError::unterminated_string(line, col)),
                     }
                 }
                 Some(c) => {

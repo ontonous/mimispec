@@ -154,12 +154,12 @@ impl Parser {
                 .iter()
                 .any(|a| matches!(a, Atom::Symbol { value } if value == "="))
             {
-                return Err(ParseError::UnexpectedToken {
-                    found: "=".into(),
-                    expected: "single assignment per step".into(),
-                    line: err_line,
-                    col: err_col,
-                });
+                return Err(ParseError::unexpected_token(
+                    "=".into(),
+                    "single assignment per step".into(),
+                    err_line,
+                    err_col,
+                ));
             }
             let target = Self::parse_target_from_atoms(lhs, err_line, err_col)?;
             let value = Self::parse_simple_value_from_atoms(rhs, err_line, err_col)?;

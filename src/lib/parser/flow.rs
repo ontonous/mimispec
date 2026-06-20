@@ -81,12 +81,12 @@ impl Parser {
                     Some(t) => (t.kind.to_string(), t.line, t.col),
                     None => ("EOF".into(), 0, 0),
                 };
-                return Err(ParseError::UnexpectedToken {
+                return Err(ParseError::unexpected_token(
                     found,
-                    expected: "`requires` or `desc`".into(),
+                    "`requires` or `desc`".into(),
                     line,
                     col,
-                });
+                ));
             }
         }
         Ok(FlowArm {

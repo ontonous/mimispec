@@ -49,12 +49,12 @@ impl Parser {
                     Some(t) => (t.kind.to_string(), t.line, t.col),
                     None => ("EOF".into(), 0, 0),
                 };
-                Err(ParseError::UnexpectedToken {
+                Err(ParseError::unexpected_token(
                     found,
-                    expected: "`stack` or `parallel`".into(),
+                    "`stack` or `parallel`".into(),
                     line,
                     col,
-                })
+                ))
             }
         }?;
         if self.check(&TokenKind::Dedent) {
@@ -75,12 +75,12 @@ impl Parser {
                     Some(t) => (t.kind.to_string(), t.line, t.col),
                     None => ("EOF".into(), 0, 0),
                 };
-                Err(ParseError::UnexpectedToken {
+                Err(ParseError::unexpected_token(
                     found,
-                    expected: "`stack`, `parallel`, `error` or string literal".into(),
+                    "`stack`, `parallel`, `error` or string literal".into(),
                     line,
                     col,
-                })
+                ))
             }
         }
     }

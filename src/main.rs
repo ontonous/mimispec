@@ -1,4 +1,5 @@
 use clap::Parser;
+use mimispec::format::format_diagnostic;
 use mimispec::latex::render_file_latex;
 use mimispec::parse;
 use serde::Serialize;
@@ -31,9 +32,14 @@ struct Args {
 
 #[derive(Serialize)]
 struct JsonError {
+    code: String,
     line: usize,
     col: usize,
     message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    help: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    suggestion: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -83,9 +89,12 @@ fn parse_one(
                     render: None,
                     latex: None,
                     errors: vec![JsonError {
+                        code: "E0000".into(),
                         line: 0,
                         col: 0,
                         message,
+                        help: None,
+                        suggestion: None,
                     }],
                 };
                 return (false, 1, json_result);
@@ -117,9 +126,12 @@ fn parse_one(
         .errors
         .iter()
         .map(|err| JsonError {
-            line: err.line(),
-            col: err.col(),
-            message: err.to_string(),
+            code: err.code.to_string(),
+            line: err.line,
+            col: err.col,
+            message: err.message.clone(),
+            help: err.help.clone(),
+            suggestion: err.suggestion.clone(),
         })
         .collect();
 
@@ -167,7 +179,7 @@ fn parse_one(
                 result.errors.len()
             );
             for err in &result.errors {
-                eprintln!("  - {:?}", err);
+                eprintln!("{}", format_diagnostic(err, &source));
             }
         }
         (success, result.errors.len(), json_result)

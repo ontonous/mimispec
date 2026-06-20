@@ -211,12 +211,12 @@ impl Parser {
                     Some(t) => (t.kind.to_string(), t.line, t.col),
                     None => ("EOF".into(), 0, 0),
                 };
-                Err(ParseError::UnexpectedToken {
+                Err(ParseError::unexpected_token(
                     found,
-                    expected: "expression".into(),
+                    "expression".into(),
                     line,
                     col,
-                })
+                ))
             }
         }
     }
@@ -298,12 +298,12 @@ impl Parser {
                 Some(t) => (t.kind.to_string(), t.line, t.col),
                 None => ("EOF".into(), 0, 0),
             };
-            return Err(ParseError::UnexpectedToken {
+            return Err(ParseError::unexpected_token(
                 found,
-                expected: "end of math statement".into(),
+                "end of math statement".into(),
                 line,
                 col,
-            });
+            ));
         }
         Ok(stmt)
     }

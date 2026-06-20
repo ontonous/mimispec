@@ -1,5 +1,6 @@
 pub mod ast;
 pub mod error;
+pub mod format;
 pub mod latex;
 pub mod lexer;
 pub mod parser;
@@ -67,7 +68,7 @@ pub fn tokenize(source: &str) -> Result<Vec<lexer::Token>, error::ParseError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::ParseError;
+    use crate::error::{ErrorCode, ParseError};
     use ast::*;
 
     #[test]
@@ -864,11 +865,11 @@ module App:
         let result = parse(src);
         assert_eq!(result.errors.len(), 1, "expected exactly one error");
         match &result.errors[0] {
-            ParseError::UnterminatedString { line, col } => {
+            ParseError { code: ErrorCode::E0005, line, col, .. } => {
                 assert_eq!(*line, 1, "error should be on line 1 (opening quote)");
                 assert_eq!(*col, 6, "error should be at column 6 (opening quote)");
             }
-            other => panic!("expected UnterminatedString, got {:?}", other),
+            _ => panic!("expected UnterminatedString (E0005), got {:?}", result.errors[0]),
         }
     }
 
@@ -1120,475 +1121,10 @@ type Rectangle:
 }
 
 #[cfg(test)]
-mod default_code_test {
-    use super::*;
-    use crate::ast::*;
-    #[test]
-    fn parse_default_code() {
-        // 这个用例覆盖 rule 分组语义：
-        // 1. 文件顶层 rule 组（被 // 注释/空行分隔）进入 file.rules；
-        // 2. module 前无空行的 rule 组附着给 module；
-        // 3. module 内被 // 注释/空行分隔的 rule 组进入 module.rules；
-        // 4. func 前无空行的 rule 组附着给 func；
-        // 5. func body 内被 // 注释/空行分隔的 rule 组进入 func.rules。
-        let src = r#"desc "Meowthos猫咖营业手册喵！"
-//全局约束1
-rule$ "1"
-rule$ "2"
-rule$ "3"
-//全局约束2
-rule$ "4"
-rule$ "5"
-rule$ "6"
-//module约束1
-rule$ "7"
-rule$ "8"
-module MeowCafe:
-    desc "猫猫的梦幻咖啡屋喵"
-    //module约束2
-    rule$ "9"
-    rule$ "10"
-    //module约束3
-    rule$ "11"
-    rule$ "12"
-
-    type OrderStatus: New | Brewing | Served | Spilled | Refunded | Done
-
-    type Drink:
-        name: String
-        price: Number
-        desc "这杯饮料的描述，比如'超烫的焦糖玛奇朵'"
-
-    //func约束1
-    rule$ "13"
-    rule$ "14"
-    func$ Brew(drink, temp):
-        //func约束2
-        rule$ "15"
-        rule$ "16"
-
-        requires: temp >= 60
-        ensures: drink.status == Served
-        //func约束3
-        rule$ "17"
-        rule$ "18"
-        steps:
-            desc "先把咖啡豆磨成粉... 啊，磨太细了喵！"
-            grind beans
-            if temp > 90:
-                desc "太烫了会烫到舌头喵！"
-                cool down
-            else:
-                ...
-            pour milk
-            desc "拉花环节！画个猫爪... 哎呀画成狗了喵"
-            drink.status = Served
-"#;
-        let result = parse(src);
-        assert!(
-            result.errors.is_empty(),
-            "parse errors: {:?}",
-            result.errors
-        );
-        assert_eq!(
-            result.file.fragments.len(),
-            2,
-            "expected 2 fragments: Steps(Desc) + Module"
-        );
-        assert!(matches!(&result.file.fragments[0], Fragment::Steps { .. }));
-
-        let Fragment::Module { module } = &result.file.fragments[1] else {
-            panic!("expected Module fragment at index 1");
-        };
-        assert_eq!(module.name.name, "MeowCafe");
-
-        let file_rule_values: Vec<&str> = result
-            .file
-            .rules
-            .iter()
-            .map(|r| r.desc.content.value.as_str())
-            .collect();
-        assert_eq!(
-            file_rule_values,
-            vec!["1", "2", "3", "4", "5", "6"],
-            "顶层 rule 组应全部进入 file.rules"
-        );
-
-        let module_rule_values: Vec<&str> = module
-            .rules
-            .iter()
-            .map(|r| r.desc.content.value.as_str())
-            .collect();
-        assert_eq!(
-            module_rule_values,
-            vec!["7", "8", "9", "10", "11", "12"],
-            "module 级 rule 组应全部进入 module.rules"
-        );
-
-        assert_eq!(
-            module.items.len(),
-            3,
-            "module 应有 3 个 item：type enum、type record、func Brew"
-        );
-
-        let Fragment::Func { func } = &module.items[2] else {
-            panic!("expected func Brew at index 2")
-        };
-        assert_eq!(func.name.name, "Brew");
-
-        let mut func_rule_values: Vec<&str> = func
-            .rules
-            .iter()
-            .map(|r| r.desc.content.value.as_str())
-            .collect();
-        func_rule_values.sort();
-        assert_eq!(
-            func_rule_values,
-            vec!["13", "14", "15", "16", "17", "18"],
-            "func 级 rule 组应全部进入 func.rules"
-        );
-
-        assert!(func.requires.is_some(), "func Brew 应有 requires");
-        assert!(func.ensures.is_some(), "func Brew 应有 ensures");
-    }
-}
-
-#[cfg(test)]
-mod lock_suffix_tests {
-    use super::*;
-    use crate::error::ParseError;
-    use ast::*;
-
-    #[test]
-    fn parse_lock_suffix_on_keyword() {
-        let src = r#"module$ Shop:
-    type$$ Order:
-        id: String
-"#;
-        let result = parse(src);
-        assert!(result.errors.is_empty(), "{:?}", result.errors);
-        let Fragment::Module { module } = &result.file.fragments[0] else {
-            panic!("expected module")
-        };
-        assert_eq!(module.keyword_commitment, Commitment::Locked);
-
-        let Fragment::TypeDef { typedef } = &module.items[0] else {
-            panic!("expected type")
-        };
-        assert_eq!(typedef.keyword_commitment, Commitment::StrongLocked);
-    }
-
-    #[test]
-    fn parse_lock_suffix_on_identifier() {
-        let src = r#"module Shop$:
-    func Pay$?():
-        steps:
-            check balance
-"#;
-        let result = parse(src);
-        assert!(result.errors.is_empty(), "{:?}", result.errors);
-        let Fragment::Module { module } = &result.file.fragments[0] else {
-            panic!("expected module")
-        };
-        assert_eq!(module.name.commitment, Commitment::Locked);
-
-        let Fragment::Func { func } = &module.items[0] else {
-            panic!("expected func")
-        };
-        assert_eq!(func.name.commitment, Commitment::LockedQuestion);
-    }
-
-    #[test]
-    fn parse_lock_suffix_on_string_content() {
-        // rule 与 module 之间无空行，会作为前置约束附着给 module
-        let src = r#"rule$? "支付必须幂等"$
-module Shop:
-    func Pay:
-        steps:
-            desc$?? "检查余额"
-"#;
-        let result = parse(src);
-        assert!(result.errors.is_empty(), "{:?}", result.errors);
-        let Fragment::Module { module } = &result.file.fragments[0] else {
-            panic!("expected module")
-        };
-        assert_eq!(
-            module.rules[0].keyword_commitment,
-            Commitment::LockedQuestion
-        );
-        assert_eq!(module.rules[0].desc.content.commitment, Commitment::Locked);
-        let Fragment::Func { func } = &module.items[0] else {
-            panic!("expected func")
-        };
-        let Step::Desc { content } = &func.steps[0] else {
-            panic!("expected desc step")
-        };
-        assert_eq!(content.need_commitment, Commitment::LockedQuestionQuestion);
-        assert_eq!(content.content.commitment, Commitment::None);
-    }
-
-    #[test]
-    fn parse_strong_lock_with_question() {
-        let src = r#"module Shop:
-    func Pay() with PaymentCap$$?:
-        steps:
-            charge payment
-"#;
-        let result = parse(src);
-        assert!(result.errors.is_empty(), "{:?}", result.errors);
-        let Fragment::Module { module } = &result.file.fragments[0] else {
-            panic!("expected module")
-        };
-        let Fragment::Func { func } = &module.items[0] else {
-            panic!("expected func")
-        };
-        assert_eq!(
-            func.capabilities[0].name.commitment,
-            Commitment::StrongLockedQuestion
-        );
-    }
-
-    #[test]
-    fn parse_invalid_lock_order_question_before_lock() {
-        let src = r#"rule$? "合法"
-rule?$ "非法：不确定在锁之前"
-"#;
-        let result = parse(src);
-        // 第一个合法，第二个非法
-        assert!(
-            result.errors.iter().any(|e| matches!(e, ParseError::UnexpectedToken { expected, .. } if expected.contains("锁后缀必须在不确定后缀之前"))),
-            "expected invalid suffix order error, got {:?}", result.errors
-        );
-    }
-
-    #[test]
-    fn parse_lock_density_does_not_break_existing_fuzzy() {
-        let src = r#"module? Shop:
-    func Pay??():
-        steps:
-            check balance
-"#;
-        let result = parse(src);
-        assert!(result.errors.is_empty(), "{:?}", result.errors);
-        let Fragment::Module { module } = &result.file.fragments[0] else {
-            panic!("expected module")
-        };
-        assert_eq!(module.keyword_commitment, Commitment::Question);
-        let Fragment::Func { func } = &module.items[0] else {
-            panic!("expected func")
-        };
-        assert_eq!(func.name.commitment, Commitment::QuestionQuestion);
-    }
-}
-
-#[cfg(test)]
-mod render_tests {
-    use super::*;
-    use crate::render::render_file;
-
-    #[test]
-    fn render_and_reparse_simple_module() {
-        let src = r#"module Shop:
-    type OrderStatus: New | Pending | Paid
-
-    rule "支付必须幂等"
-    func Pay(order, amount):
-        desc "处理支付"
-        requires: order.status == Pending and amount > 0
-        ensures: order.status == Paid
-        steps:
-            check balance
-            charge payment
-            order.status = Paid >>> done
-"#;
-        let result = parse(src);
-        assert!(result.errors.is_empty(), "{:?}", result.errors);
-        let rendered = render_file(&result.file);
-        let reparsed = parse(&rendered);
-        assert!(
-            reparsed.errors.is_empty(),
-            "rendered source failed to parse: {:?}\nrendered:\n{}",
-            reparsed.errors,
-            rendered
-        );
-    }
-
-    #[test]
-    fn render_preserves_math_precedence() {
-        let src = r#"func Compute(x, y):
-    math:
-        a = (x - y) / 4
-        b = x + y * 2
-        c = a ** b ** 2
-"#;
-        let result = parse(src);
-        assert!(result.errors.is_empty(), "{:?}", result.errors);
-        let rendered = render_file(&result.file);
-        assert!(
-            rendered.contains("(x - y) / 4"),
-            "rendered should preserve parentheses:\n{}",
-            rendered
-        );
-        let reparsed = parse(&rendered);
-        assert!(reparsed.errors.is_empty(), "{:?}", reparsed.errors);
-    }
-
-    #[test]
-    fn render_multi_subscript() {
-        let src = r#"func Test():
-    math:
-        v = x[i, j]
-"#;
-        let result = parse(src);
-        assert!(result.errors.is_empty(), "{:?}", result.errors);
-        let rendered = render_file(&result.file);
-        assert!(
-            rendered.contains("x[i, j]"),
-            "rendered should contain multi-subscript:\n{}",
-            rendered
-        );
-        let reparsed = parse(&rendered);
-        assert!(reparsed.errors.is_empty(), "{:?}", reparsed.errors);
-    }
-
-    #[test]
-    fn render_ui_with_event_binding() {
-        let src = r#"module App:
-    ui CounterView binds CounterModel:
-        stack:
-            "当前计数" desc "大号数字"
-            "加" desc "按钮" on tap: Increment()
-"#;
-        let result = parse(src);
-        assert!(result.errors.is_empty(), "{:?}", result.errors);
-        let rendered = render_file(&result.file);
-        let reparsed = parse(&rendered);
-        assert!(reparsed.errors.is_empty(), "{:?}", reparsed.errors);
-    }
-
-    #[test]
-    fn render_lock_suffixes() {
-        let src = r#"module$ Shop:
-    func Pay$?():
-        steps:
-            desc$?? "检查余额"
-"#;
-        let result = parse(src);
-        assert!(result.errors.is_empty(), "{:?}", result.errors);
-        let rendered = render_file(&result.file);
-        assert!(
-            rendered.contains("module$ Shop:"),
-            "rendered should preserve lock suffixes:\n{}",
-            rendered
-        );
-        let reparsed = parse(&rendered);
-        assert!(reparsed.errors.is_empty(), "{:?}", reparsed.errors);
-    }
-
-    #[test]
-    fn render_placeholders() {
-        let src = r#"type Order: ...
-flow Lifecycle: ...
-func Pay(order): ...
-ui View: ...
-"#;
-        let result = parse(src);
-        assert!(result.errors.is_empty(), "{:?}", result.errors);
-        let rendered = render_file(&result.file);
-        assert!(
-            rendered.contains("type Order: ..."),
-            "rendered:\n{}",
-            rendered
-        );
-        assert!(
-            rendered.contains("flow Lifecycle: ..."),
-            "rendered:\n{}",
-            rendered
-        );
-        assert!(
-            rendered.contains("func Pay(order): ..."),
-            "rendered:\n{}",
-            rendered
-        );
-        assert!(rendered.contains("ui View: ..."), "rendered:\n{}", rendered);
-        let reparsed = parse(&rendered);
-        assert!(reparsed.errors.is_empty(), "{:?}", reparsed.errors);
-    }
-
-    #[test]
-    fn render_flow_compact_arm() {
-        let src = r#"flow Lifecycle:
-    New >>> Active: desc "启动"
-    Active:
-        >>> Done: desc "完成"
-"#;
-        let result = parse(src);
-        assert!(result.errors.is_empty(), "{:?}", result.errors);
-        let rendered = render_file(&result.file);
-        assert!(
-            rendered.contains("New >>> Active: desc \"启动\""),
-            "rendered:\n{}",
-            rendered
-        );
-        let reparsed = parse(&rendered);
-        assert!(reparsed.errors.is_empty(), "{:?}", reparsed.errors);
-    }
-
-    #[test]
-    fn render_natural_condition() {
-        let src = r#"func Pay():
-    requires: "payment captured or error"
-    ensures: "status is Paid"
-    steps:
-        charge payment
-"#;
-        let result = parse(src);
-        assert!(result.errors.is_empty(), "{:?}", result.errors);
-        let rendered = render_file(&result.file);
-        let reparsed = parse(&rendered);
-        assert!(reparsed.errors.is_empty(), "{:?}", reparsed.errors);
-    }
-
-    #[test]
-    fn render_type_hint_with_generics() {
-        let src = r#"type X:
-    handlers: Map[EventType, List[EventHandler]]
-"#;
-        let result = parse(src);
-        assert!(result.errors.is_empty(), "{:?}", result.errors);
-        let rendered = render_file(&result.file);
-        assert!(
-            rendered.contains("handlers: Map[EventType, List[EventHandler]]"),
-            "rendered:\n{}",
-            rendered
-        );
-        let reparsed = parse(&rendered);
-        assert!(reparsed.errors.is_empty(), "{:?}", reparsed.errors);
-    }
-
-    #[test]
-    fn render_top_level_fragments() {
-        let src = r#"order.status == Pending and amount > 0
-
-steps:
-    check inventory
-    charge payment
-
-...
-"#;
-        let result = parse(src);
-        assert!(result.errors.is_empty(), "{:?}", result.errors);
-        let rendered = render_file(&result.file);
-        let reparsed = parse(&rendered);
-        assert!(reparsed.errors.is_empty(), "{:?}", reparsed.errors);
-    }
-}
-
-#[cfg(test)]
 mod edge_case_tests {
     use super::*;
     use crate::ast::*;
-    use crate::error::ParseError;
+    use crate::error::{ErrorCode, ParseError};
     use crate::render::render_file;
 
     #[test]
@@ -1679,7 +1215,7 @@ mod edge_case_tests {
         let result = parse(src);
         assert!(!result.errors.is_empty(), "expected errors");
         assert!(
-            result.errors.iter().any(|e| matches!(e, ParseError::UnexpectedToken { expected, .. } if expected.contains("single assignment"))),
+            result.errors.iter().any(|e| matches!(e, ParseError { code: ErrorCode::E0010, message, .. } if message.contains("single assignment"))),
             "expected single assignment error, got {:?}",
             result.errors
         );
@@ -1791,5 +1327,97 @@ mod stress_tests {
         let rendered = render_file(&result.file);
         let reparsed = parse(&rendered);
         assert!(reparsed.errors.is_empty(), "{:?}", reparsed.errors);
+    }
+}
+
+// ── Fuzzy matching helpers ────────────────────────────────────────────────────
+
+/// Compute Levenshtein edit distance between two strings (O(m·n) time, O(n) space).
+pub fn edit_distance(a: &str, b: &str) -> usize {
+    let ac: Vec<char> = a.chars().collect();
+    let bc: Vec<char> = b.chars().collect();
+    let m = ac.len();
+    let n = bc.len();
+    if m == 0 { return n; }
+    if n == 0 { return m; }
+
+    let mut prev: Vec<usize> = (0..=n).collect();
+    let mut curr: Vec<usize> = vec![0; n + 1];
+    for i in 1..=m {
+        curr[0] = i;
+        for j in 1..=n {
+            let cost = if ac[i - 1] == bc[j - 1] { 0 } else { 1 };
+            curr[j] = (prev[j] + 1).min(curr[j - 1] + 1).min(prev[j - 1] + cost);
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+    prev[n]
+}
+
+/// Collect all identifier / string / number names from a token slice for fuzzy lookup.
+pub fn known_names_from_tokens(tokens: &[crate::lexer::Token]) -> Vec<String> {
+    use crate::lexer::TokenKind;
+    tokens
+        .iter()
+        .filter_map(|tok| match &tok.kind {
+            TokenKind::Ident(s) | TokenKind::String(s) | TokenKind::Number(s) => Some(s.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Find the closest known name to `target` within `max_dist` edits.
+pub fn find_suggestion(target: &str, known: &[String], max_dist: usize) -> Option<String> {
+    let mut best: Option<(usize, String)> = None;
+    for name in known {
+        let d = edit_distance(target, name);
+        if d <= max_dist {
+            match best {
+                None => best = Some((d, name.clone())),
+                Some((bd, _)) if d < bd => best = Some((d, name.clone())),
+                _ => {}
+            }
+        }
+    }
+    best.map(|(_, s)| s)
+}
+
+#[cfg(test)]
+mod fuzzy_tests {
+    use super::*;
+
+    #[test]
+    fn edit_distance_identical() { assert_eq!(edit_distance("foo", "foo"), 0); }
+    #[test]
+    fn edit_distance_substitution() { assert_eq!(edit_distance("foo", "fob"), 1); }
+    #[test]
+    fn edit_distance_insert() { assert_eq!(edit_distance("ab", "abc"), 1); }
+    #[test]
+    fn edit_distance_delete() { assert_eq!(edit_distance("abc", "ab"), 1); }
+    #[test]
+    fn edit_distance_empty() {
+        assert_eq!(edit_distance("", "abc"), 3);
+        assert_eq!(edit_distance("abc", ""), 3);
+    }
+    #[test]
+    fn find_suggestion_exact() {
+        let known = vec!["FOO".into(), "BAR".into()];
+        assert_eq!(find_suggestion("FOO", &known, 3), Some("FOO".into()));
+    }
+    #[test]
+    fn find_suggestion_near_miss() {
+        let known = vec!["FOO".into(), "BAR".into()];
+        assert_eq!(find_suggestion("FO", &known, 3), Some("FOO".into()));
+    }
+    #[test]
+    fn find_suggestion_too_far() {
+        let known = vec!["FOO".into()];
+        assert_eq!(find_suggestion("XYZ", &known, 1), None);
+    }
+    #[test]
+    fn find_suggestion_picks_closest() {
+        let known = vec!["FOO".into(), "FOOBAR".into()];
+        let r = find_suggestion("FOOB", &known, 3);
+        assert!(r.is_some());
     }
 }

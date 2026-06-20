@@ -95,12 +95,12 @@ impl Parser {
                         Some(t) => (t.kind.to_string(), t.line, t.col),
                         None => ("EOF".into(), 0, 0),
                     };
-                    return Err(ParseError::UnexpectedToken {
+                    return Err(ParseError::unexpected_token(
                         found,
-                        expected: "newline after requires condition".into(),
+                        "newline after requires condition".into(),
                         line,
                         col,
-                    });
+                    ));
                 }
             } else if self.check(&TokenKind::Ensures) {
                 ensures_keyword_commitment = self.expect_kw(TokenKind::Ensures, "`ensures`")?;
@@ -111,12 +111,12 @@ impl Parser {
                         Some(t) => (t.kind.to_string(), t.line, t.col),
                         None => ("EOF".into(), 0, 0),
                     };
-                    return Err(ParseError::UnexpectedToken {
+                    return Err(ParseError::unexpected_token(
                         found,
-                        expected: "newline after ensures condition".into(),
+                        "newline after ensures condition".into(),
                         line,
                         col,
-                    });
+                    ));
                 }
             } else if self.check(&TokenKind::Math) {
                 let keyword_commitment = self.expect_kw(TokenKind::Math, "`math`")?;
