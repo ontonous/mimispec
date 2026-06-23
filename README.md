@@ -183,16 +183,12 @@ Apache 2.0 © 2026 ontonous
 
 ## VS Code 扩展
 
-项目包含完整的 VS Code 扩展，提供语法高亮和实时诊断：
+项目包含完整的 VS Code 扩展，提供 `.mms` 语法高亮和 CLI 驱动的实时诊断：
 
 ```bash
 cd editors/vscode
 npm install
 npm run compile
-```
-
-安装 `.vsix`：
-```bash
 code --install-extension editors/vscode/mimispec-vscode-*.vsix
 ```
 
