@@ -11,7 +11,32 @@ use error::ParseResult;
 use lexer::Lexer;
 use parser::Parser;
 
-/// 解析 MimiSpec 源字符串，返回 AST 和错误列表（编辑器场景：尽可能解析）。
+/// Parse a MimiSpec source string into an AST, recovering as many fragments as possible.
+///
+/// This is the main entry point for parsing `.mms` files. Unlike a traditional parser
+/// that fails on the first error, this parser employs multi-level error recovery to
+/// extract as much structure as possible from the input even when it contains errors.
+///
+/// The returned [`ParseResult`] contains both the partially-parsed AST (`File`) and
+/// any errors encountered. Callers should always check `result.errors.is_empty()`
+/// before relying on the AST being complete.
+///
+/// # Errors
+///
+/// - Lexer errors (e.g. unterminated strings, invalid escapes) are returned directly
+///   without producing tokens, resulting in an empty AST.
+/// - Parser errors are accumulated in `result.errors`. Each error includes the error
+///   code, source location, message, and optional fix suggestions.
+///
+/// # Example
+///
+/// ```rust
+/// use mimispec::parse;
+///
+/// let result = parse("type Status: Active | Inactive");
+/// assert!(result.errors.is_empty());
+/// assert_eq!(result.file.fragments.len(), 1);
+/// ```
 pub fn parse(source: &str) -> ParseResult {
     match Lexer::new(source).tokenize() {
         Ok(tokens) => Parser::new(tokens).parse_file(),
@@ -26,7 +51,19 @@ pub fn parse(source: &str) -> ParseResult {
     }
 }
 
-/// 解析单个 Fragment（用于 IDE 片段验证）。
+/// Parse a single MimiSpec fragment in isolation (useful for IDE snippet validation).
+///
+/// Unlike [`parse()`], this function expects only one Fragment (e.g. a single `type`,
+/// `func`, or expression). It returns a [`ParseResult`] with at most one fragment.
+///
+/// # Example
+///
+/// ```rust
+/// use mimispec::parse_fragment;
+///
+/// let result = parse_fragment("func Hello: ...");
+/// assert!(result.errors.is_empty());
+/// ```
 pub fn parse_fragment(source: &str) -> ParseResult {
     match Lexer::new(source).tokenize() {
         Ok(tokens) => {
@@ -60,7 +97,15 @@ pub fn parse_fragment(source: &str) -> ParseResult {
     }
 }
 
-/// 词法分析。
+/// Tokenize a MimiSpec source string into a sequence of tokens.
+///
+/// This is a lower-level API that exposes the lexer output directly. Most users
+/// should use [`parse()`] instead, which combines tokenization and parsing.
+///
+/// # Errors
+///
+/// Returns `Err` if the source contains lexically invalid input (e.g. unterminated
+/// strings, invalid escape sequences, or indentation errors).
 pub fn tokenize(source: &str) -> Result<Vec<lexer::Token>, error::ParseError> {
     Lexer::new(source).tokenize()
 }
@@ -1306,7 +1351,6 @@ mod stress_tests {
     }
 
     #[test]
-    #[ignore = "stress test: run with cargo test --release -- --ignored"]
     fn stress_parse_large_file() {
         let src = build_large_module(1000);
         let result = parse(&src);
@@ -1319,7 +1363,6 @@ mod stress_tests {
     }
 
     #[test]
-    #[ignore = "stress test: run with cargo test --release -- --ignored"]
     fn stress_render_and_reparse_large_file() {
         let src = build_large_module(500);
         let result = parse(&src);
@@ -1332,7 +1375,18 @@ mod stress_tests {
 
 // ── Fuzzy matching helpers ────────────────────────────────────────────────────
 
-/// Compute Levenshtein edit distance between two strings (O(m·n) time, O(n) space).
+/// Compute the Levenshtein edit distance between two strings.
+///
+/// Uses O(m·n) time and O(n) space (optimized with a single-row DP array).
+///
+/// # Example
+///
+/// ```rust
+/// use mimispec::edit_distance;
+///
+/// assert_eq!(edit_distance("kitten", "sitting"), 3);
+/// assert_eq!(edit_distance("foo", "foo"), 0);
+/// ```
 pub fn edit_distance(a: &str, b: &str) -> usize {
     let ac: Vec<char> = a.chars().collect();
     let bc: Vec<char> = b.chars().collect();
@@ -1354,7 +1408,11 @@ pub fn edit_distance(a: &str, b: &str) -> usize {
     prev[n]
 }
 
-/// Collect all identifier / string / number names from a token slice for fuzzy lookup.
+/// Collect all identifier, string, and number names from a token slice for fuzzy lookup.
+///
+/// This is used internally by the error reporting system to suggest corrections
+/// for undefined variables. It extracts all `Ident`, `String`, and `Number` token
+/// values into a flat list.
 pub fn known_names_from_tokens(tokens: &[crate::lexer::Token]) -> Vec<String> {
     use crate::lexer::TokenKind;
     tokens
@@ -1366,7 +1424,20 @@ pub fn known_names_from_tokens(tokens: &[crate::lexer::Token]) -> Vec<String> {
         .collect()
 }
 
-/// Find the closest known name to `target` within `max_dist` edits.
+/// Find the closest known name to `target` within a maximum edit distance.
+///
+/// Uses Levenshtein distance to find the best match. Returns `None` if no name
+/// is within `max_dist` edits.
+///
+/// # Example
+///
+/// ```rust
+/// use mimispec::find_suggestion;
+///
+/// let known = vec!["PAYMENT".into(), "REFUND".into()];
+/// assert_eq!(find_suggestion("PAYMEN", &known, 2), Some("PAYMENT".into()));
+/// assert_eq!(find_suggestion("FOO", &known, 1), None);
+/// ```
 pub fn find_suggestion(target: &str, known: &[String], max_dist: usize) -> Option<String> {
     let mut best: Option<(usize, String)> = None;
     for name in known {

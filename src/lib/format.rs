@@ -1,14 +1,18 @@
-//! Diagnostic formatting: source-context error display with span underlines.
+//! Structured diagnostic formatting for CLI output.
 //!
-//! Provides `format_diagnostic()` which renders a [`crate::error::ParseError`]
+//! Provides [`format_diagnostic()`] which renders a [`crate::error::ParseError`]
 //! together with the relevant source line and a caret underline pointing at
 //! the error location.
 
 use crate::error::ParseError;
 
-/// Render a single diagnostic for CLI output (non-JSON path).
+/// Format a parse error with source-context display for CLI output.
 ///
-/// Format:
+/// Renders the error with the relevant source line and a caret underline
+/// pointing at the error location.
+///
+/// # Format
+///
 /// ```text
 /// error[E0010] at line 3, col 12: unexpected token 'foo'; expected 'bar'
 ///   help: did you mean 'baz'?

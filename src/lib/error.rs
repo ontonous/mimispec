@@ -59,13 +59,27 @@ impl std::fmt::Display for ErrorCode {
     }
 }
 
-/// 解析结果：即使出错也返回尽可能完整的 AST + 所有错误
+/// The result of parsing a MimiSpec source string.
+///
+/// Contains both the partially-parsed [`File`] AST and any errors encountered.
+/// The AST is always as complete as possible — errors indicate specific locations
+/// where parsing failed, but the parser continues recovering after each error.
+///
+/// [`File`]: crate::ast::File
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParseResult {
     pub file: File,
     pub errors: Vec<ParseError>,
 }
 
+/// A single parse error with structured diagnostic information.
+///
+/// Each error includes:
+/// - A unique [`ErrorCode`] for categorization
+/// - Source location (1-indexed line and column)
+/// - A human-readable message
+/// - Optional `help` text with guidance on fixing the error
+/// - Optional `suggestion` (e.g. "did you mean 'FOO'?")
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParseError {
     pub code: ErrorCode,
@@ -79,6 +93,14 @@ pub struct ParseError {
 }
 
 impl ParseError {
+    /// Creates an error for an unexpected token.
+    ///
+    /// # Arguments
+    ///
+    /// * `found` — The actual token found (as a display string).
+    /// * `expected` — A description of what was expected.
+    /// * `line` — 1-indexed source line.
+    /// * `col` — 1-indexed source column.
     pub fn unexpected_token(found: String, expected: String, line: usize, col: usize) -> Self {
         Self {
             code: ErrorCode::E0010,
@@ -90,6 +112,7 @@ impl ParseError {
         }
     }
 
+    /// Creates an error for an unexpected end of file.
     pub fn unexpected_eof(line: usize, col: usize) -> Self {
         Self {
             code: ErrorCode::E0002,
@@ -101,6 +124,7 @@ impl ParseError {
         }
     }
 
+    /// Creates an indentation error (not a multiple of 4 spaces, or bad dedent).
     pub fn indent_error(line: usize, col: usize, message: String) -> Self {
         Self {
             code: ErrorCode::E0003,
@@ -112,6 +136,7 @@ impl ParseError {
         }
     }
 
+    /// Creates an error for an invalid escape sequence in a string literal.
     pub fn invalid_escape(line: usize, col: usize, message: String) -> Self {
         Self {
             code: ErrorCode::E0004,
@@ -123,6 +148,7 @@ impl ParseError {
         }
     }
 
+    /// Creates an error for an unterminated string literal.
     pub fn unterminated_string(line: usize, col: usize) -> Self {
         Self {
             code: ErrorCode::E0005,
@@ -134,6 +160,7 @@ impl ParseError {
         }
     }
 
+    /// Creates an error for an undefined variable, with an optional "did you mean" suggestion.
     pub fn undefined_variable(name: String, line: usize, col: usize, suggestion: Option<String>) -> Self {
         let msg = if let Some(ref s) = suggestion {
             format!("undefined variable '{name}' — did you mean '{s}'?")
@@ -150,6 +177,7 @@ impl ParseError {
         }
     }
 
+    /// Creates an error for an unsupported binary operator application.
     pub fn unsupported_bin_op(op: &str, left: &str, right: &str, line: usize, col: usize) -> Self {
         Self {
             code: ErrorCode::E0012,
@@ -161,6 +189,7 @@ impl ParseError {
         }
     }
 
+    /// Creates an error for an expression form that is not supported in the current context.
     pub fn unsupported_expr(desc: &str, line: usize, col: usize) -> Self {
         Self {
             code: ErrorCode::E0013,
@@ -172,6 +201,7 @@ impl ParseError {
         }
     }
 
+    /// Creates an error for attempting to call a non-callable value.
     pub fn not_callable(value_desc: &str, line: usize, col: usize) -> Self {
         Self {
             code: ErrorCode::E0014,
@@ -183,6 +213,7 @@ impl ParseError {
         }
     }
 
+    /// Creates an error for a subscript index that is out of bounds.
     pub fn index_out_of_bounds(index: usize, len: usize, line: usize, col: usize) -> Self {
         Self {
             code: ErrorCode::E0015,
@@ -194,6 +225,7 @@ impl ParseError {
         }
     }
 
+    /// Creates an error for a type mismatch between expected and actual operand types.
     pub fn type_mismatch(expected: &str, got: &str, line: usize, col: usize) -> Self {
         Self {
             code: ErrorCode::E0016,
@@ -205,6 +237,7 @@ impl ParseError {
         }
     }
 
+    /// Creates an error for a missing indented block after `:`.
     pub fn missing_indented_block(line: usize, col: usize) -> Self {
         Self {
             code: ErrorCode::E0017,
@@ -216,6 +249,7 @@ impl ParseError {
         }
     }
 
+    /// Creates an error for a function definition missing its body (`steps:` or `...`).
     pub fn missing_func_body(line: usize, col: usize) -> Self {
         Self {
             code: ErrorCode::E0018,
@@ -227,6 +261,9 @@ impl ParseError {
         }
     }
 
+    /// Creates an error for an internal / unrecoverable parser state.
+    ///
+    /// These indicate a bug in the parser itself and should be reported.
     pub fn internal(msg: String, line: usize, col: usize) -> Self {
         Self {
             code: ErrorCode::E0701,

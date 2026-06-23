@@ -1,7 +1,7 @@
-//! 渲染器共享工具
+//! Shared utilities for the `render` and `latex` modules.
 //!
-//! `render` 与 `latex` 模块都需要表达式优先级和括号处理逻辑，
-//! 集中在此处避免重复。
+//! Both modules need expression precedence and parenthesization logic.
+//! Centralizing them here avoids duplication.
 
 use crate::ast::Expr;
 

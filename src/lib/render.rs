@@ -1,15 +1,23 @@
-//! AST → MimiSpec 源码渲染器
-//!
-//! 将解析得到的 AST 重新输出为格式合法的 `.mms` 文本。
-//! 主要用于：
-//! - CLI 的 `--render` 选项查看规范化后的源码
-//! - IDE 格式化（pretty-print）
-//! - 基于 AST 的代码生成后回写
-
 use crate::ast::*;
 use crate::render_util::{expr_prec, paren_if};
 
-/// 渲染入口：将整棵 AST 输出为 MMS 源码字符串。
+/// Render the AST back into valid MimiSpec source code.
+///
+/// This performs a pretty-print of the AST, producing normalized `.mms` output.
+/// Useful for:
+/// - Formatting/pretty-printing existing `.mms` files
+/// - Round-trip validation (parse → render → re-parse should yield the same AST)
+/// - Code generation backends
+///
+/// # Example
+///
+/// ```rust
+/// use mimispec::{parse, render::render_file};
+///
+/// let result = parse("type Status: Active | Inactive");
+/// let output = render_file(&result.file);
+/// assert!(output.starts_with("type Status:"));
+/// ```
 pub fn render_file(file: &File) -> String {
     let mut renderer = Renderer::new();
     renderer.render_file(file);

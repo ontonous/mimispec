@@ -1,22 +1,33 @@
-//! 轻量 LaTeX 渲染器
+//! Lightweight LaTeX renderer for MimiSpec math expressions.
 //!
-//! 将 MimiSpec 的 `Expr` / `MathBlock` 转换为 LaTeX 数学字符串，
-//! 供前端通过 MathJax / KaTeX 等库进行图形化渲染。
+//! Converts `Expr` and `MathBlock` AST nodes into LaTeX math strings suitable
+//! for rendering with MathJax, KaTeX, or similar libraries.
 //!
-//! 设计原则：
-//! - 只生成纯 LaTeX 源码，不引入外部渲染依赖。
-//! - 保留运算符优先级与必要括号。
-//! - 对 `x[i, j]` 等下标表达式渲染为 `x_{i,j}`，对 `a / b` 渲染为 `\frac{a}{b}`。
+//! Design principles:
+//! - Pure LaTeX output — no external rendering dependencies.
+//! - Preserves operator precedence with parentheses.
+//! - Subscripts render as `x_{i,j}`, division as `\frac{a}{b}`.
 
 use crate::ast::*;
 use crate::render_util::{expr_prec, paren_if};
 
-/// 渲染单个表达式为 LaTeX。
+/// Render a single expression as a LaTeX math string.
+///
+/// # Example
+///
+/// ```rust
+/// use mimispec::parse;
+/// use mimispec::latex::render_expr;
+///
+/// let result = parse("a / b");
+/// // result.file.fragments[0] is Fragment::Expr { expr }
+/// // render_expr(&expr) == "\\frac{a}{b}"
+/// ```
 pub fn render_expr(expr: &Expr) -> String {
     render_expr_prec(expr, 0)
 }
 
-/// 渲染 math 块内的一条语句。
+/// Render a single math statement (define or expression) as LaTeX.
 pub fn render_math_statement(stmt: &MathStatement) -> String {
     match stmt {
         MathStatement::Define { target, value } => {
@@ -26,7 +37,7 @@ pub fn render_math_statement(stmt: &MathStatement) -> String {
     }
 }
 
-/// 渲染整个 math 块为多行 LaTeX（语句间用 `\\` 分隔）。
+/// Render an entire math block as multi-line LaTeX (statements separated by `\\`).
 pub fn render_math_block(math: &MathBlock) -> String {
     math.statements
         .iter()
@@ -35,7 +46,11 @@ pub fn render_math_block(math: &MathBlock) -> String {
         .join(" \\\\\n")
 }
 
-/// 渲染文件中所有 math 块为轻量 LaTeX 字符串。
+/// Collect and render all math blocks across an entire file's fragments as LaTeX.
+///
+/// Recursively traverses `Module` fragments to find all nested `math:` blocks.
+/// Each math block's statements are joined with `\\`, and blocks are separated
+/// by `\\` as well.
 pub fn render_file_latex(file: &File) -> String {
     let mut blocks = Vec::new();
     collect_latex_fragments(&file.fragments, &mut blocks);
