@@ -688,7 +688,7 @@ fn render_action_expr(action: &ActionExpr) -> String {
 fn render_action(action: &Action) -> String {
     match action {
         Action::Call { expr } => render_expr(expr),
-        Action::Navigate { target } => format!("to {}", render_ident(target)),
+        Action::Navigate { target } => format!(">>> {}", render_ident(target)),
         Action::Assign { target, value } => {
             format!("{} = {}", render_expr(target), render_expr(value))
         }
