@@ -1,115 +1,130 @@
 // FILE: parser-core.mms
-// MimiSpec 解析器实现描述 — Parser 核心
+// MimiSpec 解析器参考实现 — Parser 核心
 
 @import "types.mms"
 
 module ParserCore:
 
-    desc "Parser 核心结构 token 导航 rule 管理和错误恢复"
+    desc "Parser 核心: token 导航 rule 管理 错误恢复 atom 解析"
+    desc "对应 src/lib/parser/mod.rs"
+
+    rule "空行大于等于 3 阻断 rule 附着链, rule 变为全局"
 
     func Peek():
-        desc "查看当前 token 但不消费"
+        desc "查看当前 token 不消费"
+
+    func PeekKind():
+        desc "查看当前 token 类型"
 
     func Advance():
-        desc "消费当前 token 并前进"
+        desc "消费当前 token 并前进, EOF 不自增"
+
+    func IsAtEnd():
+        desc "是否到达 token 流末尾"
 
     func Check(kind):
-        desc "检查当前 token 是否匹配给定类型"
+        desc "检查当前 token 是否匹配指定类型"
 
     func Matches(kind):
-        desc "若匹配则消费返回 true"
+        desc "若匹配则消费并返回 true"
 
     func Expect(kind, what):
-        desc "期望当前 token 指定类型否则报错"
+        desc "期望当前 token 为指定类型, 否则报错"
+
+    func ExpectKw(kind, what):
+        desc "匹配关键字后解析 commitment 后缀"
 
     func Commitment():
-        desc "解析意图后缀"
+        desc "解析 $ $$ ? ?? 后缀, 顺序先锁定后不确定"
         steps:
-            check dollardollar suffix
-            check dollar suffix
-            check questionquestion suffix
-            check question suffix
+            desc "check dollardollar then optional ?? or ?"
+            desc "check dollar then optional ?? or ?"
+            desc "check questionquestion, reject if dollar follows"
+            desc "check question, reject if dollar follows"
             return none absent
 
     func FuzzyIdent():
-        desc "消费标识符或关键字加 commitment"
+        desc "消费标识符或关键字并解析 commitment"
 
     func FuzzyString():
-        desc "消费字符串字面量加 commitment"
+        desc "消费字符串字面量并解析 commitment"
 
-    func ParseDescAfterKeyword():
-        desc "解析关键字后面的 desc 实体"
-        steps:
-            parse commitment suffix
-            parse fuzzy string content
-            return Desc struct
+    func ExpectString():
+        desc "期望下一个 token 是字符串字面量"
+
+    func CurrentPos():
+        desc "返回当前 token 的行列号"
+
+    func SkipNewlines():
+        desc "跳过连续换行 token"
+
+    func SkipNewlinesAndCount():
+        desc "跳过并计数连续换行 token"
+
+    func LineWillEnd():
+        desc "判断当前 token 是否为换行或反缩进或EOF"
 
     func ConsumePendingRules():
-        desc "收集连续 rule 定义到 pending 列表"
+        desc "扫描并消费连续 rule, 追加到 pending 列表"
         steps:
-            scan ahead counting newlines
-            break "if" 3 or more blank lines separate
-            break "if" next token is not rule keyword
-            parse rule def and push to pending stack
+            desc "look ahead counting newlines"
+            desc "skip 1-2 newlines and consume rule tokens"
+            desc "3 or more newlines break the chain"
+            desc "comment lines are transparent"
+
+    func TakePendingRules():
+        desc "取出并清空 pending 规则列表"
 
     func AttachRulesToFragment(fragment):
-        desc "将 pending rules 附着到最近 fragment"
+        desc "将 pending rules 附着到相邻 fragment"
         steps:
-            match fragment kind
-            module gets module rules
-            typedef gets typedef rules
-            flow gets flow rules
-            func gets func rules
+            desc "module -> module level rules"
+            desc "typedef -> typedef level rules"
+            desc "flow -> flow level rules"
+            desc "func -> func level rules"
+            desc "other fragment types discard rules"
+
+    func SynchronizePastImport():
+        desc "跳过错误 import 后的 token 直到合法起始点"
 
     func SynchronizeToFragmentStart():
-        desc "错误恢复 同步到下一个 fragment 开头"
-        steps:
-            advance over unexpected tokens
-            stop at any fragment start keyword
+        desc "跳过 token 直到遇到 fragment 起始关键字"
 
     func SynchronizePastNestedBlock():
-        desc "跳过嵌套块直到返回上层"
-        steps:
-            track indent depth
-            advance over indent inc depth
-            advance over dedent dec depth
-            return when depth reaches zero
+        desc "跳过嵌套块直到返回, 追踪 indent/dedent"
+
+    func SynchronizeToNextItemInBlock():
+        desc "跳过错 item 到同层下一个, 停在换行"
 
     func ParseBlock(parseItem):
-        desc "解析缩进块 含错误恢复"
+        desc "解析缩进块, 含逐 item 错误恢复"
         steps:
             skip newlines
-            expect indent token
-            loop skip newlines and parse item
-            break upon dedent or eof
-            emit error when parse failure occurs
-            synchronize and continue to next item
+            expect indent
+            desc "repeatedly parse items until dedent"
+            skip newlines
+            desc "break on dedent or eof"
+            desc "parse item with error recovery"
+            desc "synchronize to next item and continue"
             consume dedent
-            return items list
+            return items
 
     func ParseAtomsUntil(stop):
-        desc "解析原子序列直到遇到停止条件"
-        steps:
-            loop over tokens
-            cease upon stop tokens
-            break upon newline dedent eof
-            handle bracket list literals
-            track paren bracket angle depth
-            convert each token to atom
+        desc "解析原子序列直到停止, 追踪括号深度"
 
     func AtomFromToken():
-        desc "将单个 token 转换为 atom"
-        steps:
-            ellipsis becomes ident atom
-            keywords become ident atoms
-            ident string number become typed atoms
-            punctuation becomes symbol atoms
-            unknown tokens trigger error
+        desc "单个 token 转换为 Atom"
 
     func ParseAtomListLiteral():
         desc "解析方括号列表字面量"
         steps:
             expect lbracket
-            parse comma separated atom groups
+            desc "parse comma separated atom groups"
             expect rbracket
-            return atom list
+            return Atom list
+
+    func ParseTargetFromAtoms(atoms):
+        desc "atom 序列转换为赋值目标表达式"
+
+    func ParseSimpleValueFromAtoms(atoms):
+        desc "单个 atom 转换为赋值右侧简单值"

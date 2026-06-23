@@ -1,92 +1,110 @@
 // FILE: lexer.mms
-// MimiSpec 解析器实现描述 — 词法分析器
+// MimiSpec 解析器参考实现 — 词法分析器
 
 @import "types.mms"
 
 module LexerImpl:
 
-    desc "Lexer 将源字符串转换为 Token 流"
-    rule "缩进必须是 4 的倍数"
+    desc "Lexer 将源字符串转换为 Token 流, 对应 src/lib/lexer.rs"
+    rule "缩进必须是 4 的整数倍"
+    rule "字符串不允许隐式跨行"
 
     type LexerState:
-        chars: string
+        text: string
         line: usize
         col: usize
         pending: Token
-        indentstack: usize
-        atlinestart: bool
-        sawblankline: bool
+        indent_stack: usize
+        at_line_start: bool
+        saw_blank_line: bool
 
     func Tokenize(input):
         desc "消费所有 token 直到 EOF"
         steps:
-            call nexttoken repeatedly
-            accumulate each token into result list
-            break when eof received
+            call next_token repeatedly
+            accumulate token list
+            stop at eof
             return result list
 
     func NextToken():
-        desc "获取下一个 token 按字符分发"
+        desc "获取下一个 token, 按字符分发"
         steps:
-            check pending token queue
+            check pending queue
             handle layout at line start
             skip inline whitespace
-            dispatch by next character
-            handle punctuation like colon comma pipe
-            handle operators like plus minus star
-            handle special tokens like dollar question
+            dispatch by character
 
     func HandleLineStart():
-        desc "处理行首缩进空行和注释"
+        desc "行首处理: 缩进 indent/dedent, 空行, 注释"
         steps:
             count leading spaces
-            advance past empty lines
-            skip comment lines
-            validate spaces as multiple of 4
-            compare with indent stack
-            emit indent dedent or newline
+            return eof if source exhausted
+            desc "skip blank lines: sets saw_blank_line flag"
+            desc "skip comment lines"
+            desc "validate spaces as multiple of 4"
+            desc "compare indent stack to decide emit action"
+            desc "deeper -> emit newline plus indent token"
+            desc "shallower -> emit dedents plus newline"
+            desc "same depth -> emit newline"
+            clear saw_blank_line after flush
 
-    func IdentOrKeyword(line, col):
+    func DispatchByChar():
+        desc "按首字符分发到子解析器"
+        steps:
+            desc "newline -> newline token"
+            desc "slash slash -> skip comment and recurse"
+            desc "double quote -> parse string token"
+            desc "digit -> parse number token"
+            desc "ident start -> parse ident or keyword"
+            desc "colon comma pipe -> emit punctuation"
+            desc "ampersand caret tilde -> emit bit op"
+            desc "plus minus -> emit arithmetic op"
+            desc "star -> star or power star-star"
+            desc "slash lparen rparen -> emit symbol"
+            desc "lbracket rbracket -> emit bracket"
+            desc "equals -> assign or eqeq"
+            desc "bang -> must be bang-equals else error"
+            desc "less -> lt le or shl"
+            desc "greater -> gt ge shr or arrow"
+            desc "dot -> dot or ellipsis else error"
+            desc "at-sign -> check at-import or emit at"
+            desc "question -> question or questionquestion"
+            desc "dollar -> dollar or dollardollar"
+            desc "other -> unexpected token error"
+
+    func IdentOrKeyword():
         desc "识别标识符或关键字"
         steps:
             consume alphanumeric and underscore chars
-            match against keyword lookup table
-            return keyword token or ident token
+            match against keyword table
+            return keyword token or Ident token
 
-    func StringToken(line, col):
-        desc "解析双引号字符串"
+    func StringToken():
+        desc "解析双引号字符串字面量"
         steps:
             consume opening quote
-            loop until closing quote
-            handle escape sequences
-            reject if newline before close
-            return string token
+            desc "loop until closing quote"
+            desc "backslash -> parse escape sequence"
+            desc "newline -> unterminated string error"
+            desc "any char -> append to value"
+            return String token
 
-    func NumberToken(line, col):
-        desc "解析数字字面量"
+    func NumberToken():
+        desc "解析数字: 整数 小数 科学计数法"
         steps:
             consume digits
-            detect decimal point and trailing digits
-            detect scientific notation e or E
-            return number token
+            desc "detect decimal point plus digits"
+            desc "detect e/E plus optional sign plus digits"
+            return Number token
 
-    func RecognizeMultiCharGreater():
-        desc "识别大于号运算符系列"
-        steps:
-            single greater is gt
-            greater equal is ge
-            double greater is shr
-            triple greater is arrow
+    func CountLeadingSpaces():
+        desc "计算行首空格数, tab 计为 4"
 
-    func RecognizeMultiCharOther():
-        desc "识别各类多字符运算符"
-        steps:
-            star star is power
-            equal equal is eqeq
-            bang equal is noteq
-            less equal is le
-            double less is shl
-            triple dot is ellipsis
-            at import is import keyword
-            double question is questionquestion
-            double dollar is dollardollar
+    func EmitDedents(target):
+        desc "弹出缩进栈并发射 DEDENT 直到目标深度"
+
+    func FlushEof():
+        desc "文件末尾弹出所有缩进并发射 EOF"
+
+    func SkipComment():
+        desc "跳过双斜杠注释到行尾"

@@ -1,82 +1,103 @@
 // FILE: fragment.mms
-// MimiSpec 解析器实现描述 — Fragment 顶层分发
+// MimiSpec 解析器参考实现 — Fragment 顶层分发
 
 @import "types.mms"
-@import "type.mms"
-@import "func.mms"
 @import "parser-core.mms"
 
 module FragmentDispatch:
 
-    desc "顶层 fragment 分发 按 token 选择子解析器"
+    desc "顶层 fragment 分发, 按首 token 路由到子解析器"
+    desc "对应 src/lib/parser/fragment.rs"
+
     rule "任何语法子树都是合法的顶层 Fragment"
 
     func ParseFragment():
-        desc "主分发器 按 peek kind 路由"
+        desc "按 peek kind 路由到子解析器"
         steps:
-            match peek kind
-            kw_module runs parse module
-            kw_type runs parse typedef
-            kw_flow runs parse flowdef
-            kw_func runs parse funcdef
-            kw_ui runs parse uidef
-            kw_steps runs parse steps fragment
-            kw_stack or kw_parallel or string runs parse ui node
-            kw_ellipsis returns placeholder
-            kw_if kw_for kw_while kw_parasteps wraps step into fragment
+            desc "kw_module -> parse module"
+            desc "kw_type -> parse type def"
+            desc "kw_flow -> parse flow def"
+            desc "kw_func -> parse func def"
+            desc "kw_ui -> parse ui def"
+            desc "kw_steps -> parse steps fragment block"
+            desc "kw_stack kw_parallel or string -> parse ui node"
+            desc "kw_ellipsis -> return placeholder fragment"
+            desc "control flow keywords -> wrap single step"
+            desc "other -> try expr, fallback to action step"
+
+    func ParseStepsFragment():
+        desc "解析独立 steps 块作为顶层 Fragment"
+        steps:
+            expect kw_steps plus commitment
+            expect colon
+            parse indented block of steps
+            return steps fragment
+
+    func ParseDescEntity():
+        desc "解析 desc 关键字后的描述实体"
+        steps:
+            expect kw_desc
+            parse commitment
+            parse fuzzy string
+            return Desc
+
+    func StepKeywordCommitment(step):
+        desc "从步骤中提取关键字 commitment 用于顶层包装"
 
     func ParseModule():
-        desc "解析 module 声明 含 items"
+        desc "解析 module 声明, 可嵌套, 含 items 列表"
         steps:
-            expect kw_module keyword
+            expect kw_module plus commitment
             parse fuzzy ident as name
-            expect colon
-            parse indented block
-            first "desc" becomes module description
-            math blocks stored as module invariants
-            rule defs collected as pending
-            other items parsed via parse_fragment
-
-    func ParseFunc():
-        desc "解析 func 定义 含参数能力契约和步骤"
-        steps:
-            expect kw_func keyword
-            parse fuzzy ident as name
-            expect lparen
-            parse comma separated params
-            expect rparen
-            parse optional with capabilities
             expect colon
             handle ellipsis placeholder
-            parse indented body
-            first "desc" becomes function description
-            kw_requires parses pre condition
-            kw_ensures parses post condition
-            kw_math parses math block
-            kw_steps parses step list
+            expect indent
+            desc "first desc becomes module description"
+            desc "rule attaches as pending to next entity"
+            desc "math becomes module math block"
+            desc "other items -> inner fragment recursively"
+            consume dedent
+            return module fragment
 
     func ParseTypeDef():
-        desc "解析 type 定义 枚举或记录"
+        desc "解析 type: 枚举 inline/block 或 record"
         steps:
-            expect kw_type keyword
+            expect kw_type plus commitment
             parse fuzzy ident as name
             expect colon
             handle ellipsis placeholder
-            detect inline enum via pipe presence
-            detect block enum via indent plus bare identifiers
-            otherwise parse record block with fields
-            "desc" stored as type description
-            mathematical invariants stored as type constraints
+            desc "detect inline enum by pipe on same line"
+            desc "detect block enum by indent plus bare idents"
+            desc "otherwise parse record block with fields"
+            return typedef fragment
+
+    func ParseFunc():
+        desc "解析 func: 参数能力契约步骤"
+        steps:
+            expect kw_func plus commitment
+            parse fuzzy ident as name
+            desc "parse optional parenthesized param list"
+            desc "parse optional with capability list"
+            expect colon
+            handle ellipsis placeholder
+            expect indent
+            desc "first desc -> func description"
+            desc "later desc -> Desc step"
+            desc "requires -> precondition, ensures -> postcondition"
+            desc "math -> math block"
+            desc "steps -> step block"
+            desc "any step -> inline in steps block"
+            return func fragment
 
     func ParseFlowDef():
         desc "解析 flow 状态机"
         steps:
-            expect kw_flow keyword
+            expect kw_flow plus commitment
             parse fuzzy ident as name
             expect colon
             handle ellipsis placeholder
-            parse indented block of entries
-            each state name becomes an entry
-            inline arrow used when single transition exists
-            block arms used when multiple transitions exist
-            each arm carries optional requires and "desc"
+            expect indent
+            desc "each entry: state name plus arms"
+            desc "single arm -> inline arrow form"
+            desc "multiple arms -> indented arm block"
+            return flow fragment
