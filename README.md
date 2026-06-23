@@ -1,11 +1,13 @@
 # MimiSpec
 
-> **高信息密度的意图描述语言** —— 从碎片到完整的渐进式规范。
+> **高信息密度的意图描述语言** — 从碎片到完整的渐进式规范。
+> **A high-density intent description language** — from fragments to full specifications.
 
-MimiSpec（`.mms`）是一门意图描述语言，专为**人-AI 协作设计**。它把"不确定 → 部分结构化 → 完整锁定"的渐进式工作流嵌入语法本身，让每一阶段的碎片都成为合法的可解析文件。
+MimiSpec 是一门意图描述语言，专为**人-AI 协作设计**，将"不确定 → 部分结构化 → 完整锁定"的渐进式工作流嵌入语法本身。
+MimiSpec is an **intent description language for human-AI collaboration**, embedding a progressive workflow — from uncertainty to structured to fully locked — directly into the syntax.
 
 ```
-// 阶段 1：纯意图，完全委托 AI
+// 阶段 1 / Phase 1: 纯意图，完全委托 AI / Raw intent, fully delegated to AI
 module?? Shop:
     type?? Order:
         desc?? "订单数据，包含买家、商品、金额和状态"
@@ -14,7 +16,7 @@ module?? Shop:
             desc?? "检查余额"
             desc?? "扣款"
 
-// 阶段 5：完整锁定架构
+// 阶段 5 / Phase 5: 完整锁定架构 / Fully locked architecture
 module$ Shop:
     type$ OrderStatus: New | Pending | Paid | Shipped | Cancelled
     rule$ "支付必须幂等"
@@ -27,27 +29,28 @@ module$ Shop:
             order.status$ = Paid >>> done
 ```
 
-从阶段 1 到阶段 5，每一阶段都**语法合法、可被解析器接受**。
+每个阶段都是**语法合法的 `.mms` 文件**。
+Every phase is a **syntactically valid `.mms` file**.
 
 ---
 
-## 核心特性
+## 核心特性 / Core Features
 
-- **Fragment 架构** —— `module`、`type`、`flow`、`func`、`ui`、`steps`、表达式、UI 节点……任何语法子树都是合法的顶层 Fragment
-- **渐进式精确** —— `desc`（自然语言占位）→ `requires/ensures` → `math:` 块，逐步精确化
-- **内置锁定系统** —— `$`/`$$` 标记已确认设计，`?`/`??` 标记不确定性，AI 协作不越界
-- **约束链** —— `rule` 前置附着机制，从文件级到函数级精确表达约束层级
-- **结构化数学** —— `math:` 块支持张量运算、位运算、微积分，替代自然语言描述
-- **状态机** —— `flow` 定义，`>>>` 转移操作符，`requires` 守卫条件
-- **UI 视图** —— `stack`/`parallel` 布局，`on` 事件绑定，Saga 补偿
-- **错误恢复** —— 多级同步策略，从不因局部错误丢失整体 AST
-- **纯 Rust** —— 零依赖外部运行时，CLI 单二进制发布
+- **Fragment Architecture** — `module`, `type`, `flow`, `func`, `ui`, `steps`, expressions, UI nodes... any syntax subtree is a valid top-level Fragment
+- **Progressive Precision** — `desc` (natural language) → `requires`/`ensures` → `math:` blocks, step by step
+- **Built-in Commitment System** — `$`/`$$` marks confirmed designs, `?`/`??` marks uncertainty
+- **Constraint Chains** — `rule` front-attachment from file-level to function-level
+- **Structured Math** — `math:` blocks with tensor operations, linear algebra, calculus
+- **State Machine** — `flow` definitions with `>>>` transition operator and `requires` guards
+- **UI Views** — `stack`/`parallel` layouts, `on` event bindings, Saga compensation
+- **Error Recovery** — multi-level synchronization, never loses the AST from local errors
+- **Pure Rust** — zero runtime dependencies, single binary CLI
 
 ---
 
-## 快速开始
+## 快速开始 / Quick Start
 
-### 安装
+### 安装 / Install
 
 ```bash
 git clone https://github.com/ontonous/mimispec.git
@@ -55,29 +58,18 @@ cd mimispec
 cargo build --release
 ```
 
-### 命令行使用
+### 命令行使用 / CLI Usage
 
 ```bash
-# 解析文件并输出 AST
-mimispec path/to/file.mms --ast
-
-# 输出 JSON（IDE 集成用）
-mimispec path/to/file.mms --json
-
-# 渲染回源码（格式规范化）
-mimispec path/to/file.mms --render
-
-# 渲染数学块为 LaTeX
-mimispec path/to/file.mms --latex
-
-# 从标准输入读取
-echo "func Hello: steps:\n    say hi" | mimispec - --ast
-
-# 同时处理多个文件
-mimispec *.mms --json
+mimispec path/to/file.mms --ast           # 输出 AST / dump AST
+mimispec path/to/file.mms --json          # 输出 JSON / JSON output (for IDE)
+mimispec path/to/file.mms --render        # 渲染回源码 / render back to source
+mimispec path/to/file.mms --latex         # 渲染数学为 LaTeX / render math to LaTeX
+echo "func Hello: steps:\n    say hi" | mimispec - --ast  # 标准输入 / stdin
+mimispec *.mms --json                     # 多文件 / multiple files
 ```
 
-### 作为库使用
+### 作为库使用 / Library Usage
 
 ```toml
 [dependencies]
@@ -107,83 +99,79 @@ if result.errors.is_empty() {
 
 ---
 
-## 语法预览
+## 语法预览 / Syntax Preview
 
-| 结构 | 示例 |
+| 结构 / Structure | 示例 / Example |
 |------|------|
-| 枚举 | `type Status: New \| Pending \| Paid` |
-| 记录 | `type Order:\n    id: u64\n    status: Status` |
-| 函数 | `func Pay(order):\n    requires: order.status == Pending\n    steps:\n        charge payment >>> done` |
-| 状态机 | `flow Lifecycle:\n    New >>> Pending:\n    Pending >>> Paid:\n    Paid >>> Done:` |
-| 视图 | `ui Panel binds Model:\n    stack:\n        "标题" on tap: DoSomething()` |
-| 并行 | `parasteps "加载数据":\n    load users\n    load orders` |
-| 数学 | `math:\n    scores = Q @ K.T / sqrt(d_k)` |
+| Enum | `type Status: New \| Pending \| Paid` |
+| Record | `type Order:\n    id: u64\n    status: Status` |
+| Function | `func Pay(order):\n    requires: order.status == Pending\n    steps:\n        charge payment >>> done` |
+| State Machine | `flow Lifecycle:\n    New >>> Pending:\n    Pending >>> Paid:\n    Paid >>> Done:` |
+| UI View | `ui Panel binds Model:\n    stack:\n        "标题" on tap: DoSomething()` |
+| Parallel | `parasteps "加载数据":\n    load users\n    load orders` |
+| Math | `math:\n    scores = Q @ K.T / sqrt(d_k)` |
 
-完整语法见 [docs/specification.md](docs/specification.md)。
+详见完整语法规范 / Full syntax: [docs/specification.md](docs/specification.md)
 
 ---
 
-## 项目结构
+## 项目结构 / Project Structure
 
 ```
 mimispec/
 ├── src/
-│   ├── main.rs                  # CLI 入口
+│   ├── main.rs                  # CLI 入口 / CLI entry
 │   └── lib/
-│       ├── mod.rs               # 公共 API (parse, tokenize, ...)
-│       ├── ast.rs               # AST 类型定义
-│       ├── error.rs             # 结构化错误系统
-│       ├── lexer.rs             # 词法分析器 (indent/dedent)
+│       ├── mod.rs               # 公共 API / public API (parse, tokenize)
+│       ├── ast.rs               # AST 类型定义 / AST types
+│       ├── error.rs             # 错误系统 / error system
+│       ├── lexer.rs             # 词法分析器 / lexer (indent/dedent)
 │       ├── parser/
-│       │   ├── mod.rs           # 解析器核心 (token 导航、规则管理、错误恢复)
-│       │   ├── expr.rs          # Pratt 表达式解析器
-│       │   ├── fragment.rs      # Fragment 分发
-│       │   ├── func.rs          # FuncDef 解析
-│       │   ├── module.rs        # Module 解析
-│       │   ├── flow.rs          # FlowDef 解析
-│       │   ├── step.rs          # Step 解析 (if/for/while/action/assign/...)
-│       │   ├── type.rs          # TypeDef 解析 (enum/record)
-│       │   ├── ui.rs            # UiDef 解析
-│       │   └── rule.rs          # RuleDef 解析
-│       ├── render.rs            # AST → MimiSpec 渲染器
-│       ├── render_util.rs       # 表达式优先级工具
-│       ├── format.rs            # 诊断格式化
-│       └── latex.rs             # LaTeX 数学渲染器
+│       │   ├── mod.rs           # 解析器核心 / parser core
+│       │   ├── expr.rs          # Pratt 表达式解析器 / Pratt expression parser
+│       │   ├── fragment.rs      # Fragment 分发 / fragment dispatch
+│       │   ├── func.rs          # FuncDef 解析 / FuncDef parser
+│       │   ├── module.rs        # Module 解析 / Module parser
+│       │   ├── flow.rs          # FlowDef 解析 / FlowDef parser
+│       │   ├── step.rs          # Step 解析 / Step parser
+│       │   ├── type.rs          # TypeDef 解析 / TypeDef parser
+│       │   ├── ui.rs            # UiDef 解析 / UiDef parser
+│       │   └── rule.rs          # RuleDef 解析 / RuleDef parser
+│       ├── render.rs            # AST → 源码渲染 / AST → source renderer
+│       ├── render_util.rs       # 表达式优先级工具 / expression precedence
+│       ├── format.rs            # 诊断格式化 / diagnostic formatter
+│       └── latex.rs             # LaTeX 数学渲染 / LaTeX math renderer
 ├── docs/
-│   ├── specification.md         # 语法规范
-│   ├── advanced-usage.md        # 高级用法模式
-│   ├── version-management.md    # 版本管理与 CI/CD 规范
-│   └── stdlib-api.md            # Mimi 运行时标准库参考
-├── mimispec-parser-mms/         # 用 MimiSpec 写的解析器参考实现
-├── editors/vscode/              # VS Code 扩展（语法高亮 + 诊断）
+│   ├── specification.md         # 语法规范 / syntax specification
+│   ├── advanced-usage.md        # 高级用法 / advanced usage
+│   ├── version-management.md    # 版本管理 / version management
+│   └── stdlib-api.md            # 标准库参考 / stdlib API reference
+├── mimispec-parser-mms/         # MimiSpec 写的参考解析器 / reference parser in MimiSpec
+├── editors/vscode/              # VS Code 扩展 / VS Code extension
+├── editors/monaco/              # Monaco 参考集成 / Monaco reference integration
 ├── CHANGELOG.md
 ├── CONTRIBUTING.md
-└── AGENTS.md                    # AI 代理协作说明
+└── AGENTS.md                    # AI 代理协作指南 / AI agent guide
 ```
 
 ---
 
-## 文档
+## 文档 / Documentation
 
-| 文档 | 说明 |
+| 文档 / Doc | 说明 / Description |
 |------|------|
-| [语法规范](docs/specification.md) | 完整语言参考，含所有 Fragment 类型、关键字、后缀系统 |
-| [高级用法](docs/advanced-usage.md) | 模块化架构、契约设计、Saga、ML 模型规格、SLO 约束 |
-| [版本管理](docs/version-management.md) | SemVer 规则、分支模型、发布流程、CI/CD 配置 |
-| [标准库 API](docs/stdlib-api.md) | Mimi 运行时 16 模块 295 个函数/常量参考 |
-| [贡献指南](CONTRIBUTING.md) | 开发环境、代码规范、PR 流程 |
+| [语法规范](docs/specification.md) | 完整语言参考 / Complete language reference |
+| [高级用法](docs/advanced-usage.md) | 模块化、契约设计、Saga、ML 规格 / Modular design, contracts, Saga, ML specs |
+| [版本管理](docs/version-management.md) | SemVer、分支模型、CI/CD / Versioning, branching, CI/CD |
+| [标准库 API](docs/stdlib-api.md) | Mimi 运行时 16 模块参考 / Mimi runtime 16-module reference |
+| [贡献指南](CONTRIBUTING.md) | 开发环境与 PR 流程 / Dev environment & PR workflow |
 
 ---
 
-## 许可证
+## VS Code 扩展 / VS Code Extension
 
-Apache 2.0 © 2026 ontonous
-
----
-
-## VS Code 扩展
-
-项目包含完整的 VS Code 扩展，提供 `.mms` 语法高亮和 CLI 驱动的实时诊断：
+完整 VS Code 扩展，提供 `.mms` 语法高亮和 CLI 驱动的实时诊断：
+A complete VS Code extension with `.mms` syntax highlighting and CLI-driven diagnostics:
 
 ```bash
 cd editors/vscode
@@ -192,17 +180,22 @@ npm run compile
 code --install-extension editors/vscode/mimispec-vscode-*.vsix
 ```
 
-扩展会自动查找工作区根目录下的 `target/release/mimispec` 二进制。详见 [editors/vscode/](editors/vscode/)。
+详见 [editors/vscode/](editors/vscode/)。
 
 ---
 
-## 设计哲学
+## 设计哲学 / Design Philosophy
 
-> **From Scratch to Full** —— 碎片是起点，聚合是过程，完整是结果。
+> **From Scratch to Full** — 碎片是起点，聚合是过程，完整是结果。
+> Fragments are the starting point, aggregation is the process, completeness is the result.
 
-MimiSpec 不要求你一次性写出完整的规范。
+- 不确定时写 `desc "..."`，AI 负责填充细节 / Write `desc "..."` when uncertain, AI fills the details
+- 模糊时加 `?`，锁定后加 `$` / Add `?` for ambiguity, `$` when locked
+- 碎片阶段就是一个合法的 `.mms` 文件 / Every fragment is a valid `.mms` file
+- 解析器不因"不完整"而拒绝 / The parser never rejects for incompleteness
 
-- 不确定时写 `desc "..."`，AI 负责填充细节
-- 模糊时加 `?`，锁定后加 `$`
-- 碎片阶段就是一个合法的 `.mms` 文件
-- 解析器不因"不完整"而拒绝，只因"语法错误"而拒绝
+---
+
+## 许可证 / License
+
+Apache 2.0 © 2026 ontonous
