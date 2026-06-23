@@ -92,7 +92,7 @@ impl Renderer {
     fn render_rule(&mut self, rule: &RuleDef) {
         self.write_indent();
         self.push("rule");
-        self.push(&commitment_suffix(rule.keyword_commitment));
+        self.push(&rule.keyword_commitment.to_string());
         self.push(" ");
         self.push(&render_fstring(&rule.desc.content));
         self.newline();
@@ -112,7 +112,7 @@ impl Renderer {
             } => {
                 self.write_indent();
                 self.push("steps");
-                self.push(&commitment_suffix(*keyword_commitment));
+                self.push(&keyword_commitment.to_string());
                 self.push(":");
                 self.newline();
                 self.render_steps_block(steps);
@@ -129,7 +129,7 @@ impl Renderer {
             Fragment::Placeholder { keyword_commitment } => {
                 self.write_indent();
                 self.push("...");
-                self.push(&commitment_suffix(*keyword_commitment));
+                self.push(&keyword_commitment.to_string());
                 self.newline();
             }
         }
@@ -138,7 +138,7 @@ impl Renderer {
     fn render_module(&mut self, module: &Module) {
         self.write_indent();
         self.push("module");
-        self.push(&commitment_suffix(module.keyword_commitment));
+        self.push(&module.keyword_commitment.to_string());
         self.push(" ");
         self.push(&render_ident(&module.name));
         self.push(":");
@@ -171,7 +171,7 @@ impl Renderer {
     fn render_type_def(&mut self, typedef: &TypeDef) {
         self.write_indent();
         self.push("type");
-        self.push(&commitment_suffix(typedef.keyword_commitment));
+        self.push(&typedef.keyword_commitment.to_string());
         self.push(" ");
         self.push(&render_ident(&typedef.name));
         self.push(":");
@@ -248,7 +248,7 @@ impl Renderer {
     fn render_flow(&mut self, flow: &FlowDef) {
         self.write_indent();
         self.push("flow");
-        self.push(&commitment_suffix(flow.keyword_commitment));
+        self.push(&flow.keyword_commitment.to_string());
         self.push(" ");
         self.push(&render_ident(&flow.name));
         self.push(":");
@@ -278,7 +278,7 @@ impl Renderer {
             let arm = &entry.arms[0];
             self.push(" >>> ");
             self.push(&render_ident(&arm.to));
-            self.push(&commitment_suffix(arm.to_keyword_commitment));
+            self.push(&arm.to_keyword_commitment.to_string());
             self.push(":");
             if let Some(req) = &arm.requires {
                 self.push(" requires: ");
@@ -306,7 +306,7 @@ impl Renderer {
         }
         self.write_indent();
         self.push(">>>");
-        self.push(&commitment_suffix(arm.to_keyword_commitment));
+        self.push(&arm.to_keyword_commitment.to_string());
         self.push(" ");
         self.push(&render_ident(&arm.to));
         self.push(":");
@@ -324,7 +324,7 @@ impl Renderer {
     fn render_func(&mut self, func: &FuncDef) {
         self.write_indent();
         self.push("func");
-        self.push(&commitment_suffix(func.keyword_commitment));
+        self.push(&func.keyword_commitment.to_string());
         self.push(" ");
         self.push(&render_ident(&func.name));
         if !func.params.is_empty() {
@@ -360,7 +360,7 @@ impl Renderer {
         if let Some(req) = &func.requires {
             self.write_indent();
             self.push("requires");
-            self.push(&commitment_suffix(func.requires_keyword_commitment));
+            self.push(&func.requires_keyword_commitment.to_string());
             self.push(": ");
             self.push(&render_condition(req));
             self.newline();
@@ -368,7 +368,7 @@ impl Renderer {
         if let Some(ens) = &func.ensures {
             self.write_indent();
             self.push("ensures");
-            self.push(&commitment_suffix(func.ensures_keyword_commitment));
+            self.push(&func.ensures_keyword_commitment.to_string());
             self.push(": ");
             self.push(&render_condition(ens));
             self.newline();
@@ -379,7 +379,7 @@ impl Renderer {
         if !func.steps.is_empty() {
             self.write_indent();
             self.push("steps");
-            self.push(&commitment_suffix(func.steps_keyword_commitment));
+            self.push(&func.steps_keyword_commitment.to_string());
             self.push(":");
             self.newline();
             self.render_steps_block(&func.steps);
@@ -390,7 +390,7 @@ impl Renderer {
     fn render_desc(&mut self, desc: &Desc) {
         self.write_indent();
         self.push("desc");
-        self.push(&commitment_suffix(desc.need_commitment));
+        self.push(&desc.need_commitment.to_string());
         self.push(" ");
         self.push(&render_fstring(&desc.content));
         self.newline();
@@ -399,7 +399,7 @@ impl Renderer {
     fn render_math_block(&mut self, math: &MathBlock) {
         self.write_indent();
         self.push("math");
-        self.push(&commitment_suffix(math.keyword_commitment));
+        self.push(&math.keyword_commitment.to_string());
         self.push(":");
         self.newline();
         self.indent += 1;
@@ -478,7 +478,7 @@ impl Renderer {
     fn render_if_step(&mut self, step: &IfStep) {
         self.write_indent();
         self.push("if");
-        self.push(&commitment_suffix(step.if_keyword_commitment));
+        self.push(&step.if_keyword_commitment.to_string());
         self.push(" ");
         self.push(&render_condition(&step.cond));
         self.push(":");
@@ -487,7 +487,7 @@ impl Renderer {
         if let Some(else_branch) = &step.else_branch {
             self.write_indent();
             self.push("else");
-            self.push(&commitment_suffix(step.else_keyword_commitment));
+            self.push(&step.else_keyword_commitment.to_string());
             self.push(":");
             self.newline();
             self.render_steps_block(else_branch);
@@ -497,7 +497,7 @@ impl Renderer {
     fn render_for_step(&mut self, step: &ForStep) {
         self.write_indent();
         self.push("for");
-        self.push(&commitment_suffix(step.keyword_commitment));
+        self.push(&step.keyword_commitment.to_string());
         self.push(" ");
         self.push(&render_ident(&step.var));
         self.push(" in ");
@@ -510,7 +510,7 @@ impl Renderer {
     fn render_while_step(&mut self, step: &WhileStep) {
         self.write_indent();
         self.push("while");
-        self.push(&commitment_suffix(step.keyword_commitment));
+        self.push(&step.keyword_commitment.to_string());
         self.push(" ");
         self.push(&render_condition(&step.cond));
         if let Some(desc) = &step.desc {
@@ -525,7 +525,7 @@ impl Renderer {
     fn render_parasteps_step(&mut self, step: &ParastepsStep) {
         self.write_indent();
         self.push("parasteps");
-        self.push(&commitment_suffix(step.keyword_commitment));
+        self.push(&step.keyword_commitment.to_string());
         if let Some(desc) = &step.description {
             self.push(" ");
             self.push(&render_fstring(desc));
@@ -538,7 +538,7 @@ impl Renderer {
     fn render_error_step(&mut self, step: &ErrorStep) {
         self.write_indent();
         self.push("error");
-        self.push(&commitment_suffix(step.keyword_commitment));
+        self.push(&step.keyword_commitment.to_string());
         self.push(" ");
         self.push(&render_fstring(&step.message));
         if let Some(to) = &step.to {
@@ -551,7 +551,7 @@ impl Renderer {
     fn render_on_block(&mut self, on: &OnBlock) {
         self.write_indent();
         self.push("on");
-        self.push(&commitment_suffix(on.keyword_commitment));
+        self.push(&on.keyword_commitment.to_string());
         self.push(" ");
         self.push(&render_atoms(&on.condition));
         self.push(":");
@@ -562,7 +562,7 @@ impl Renderer {
     fn render_ui(&mut self, ui: &UiDef) {
         self.write_indent();
         self.push("ui");
-        self.push(&commitment_suffix(ui.keyword_commitment));
+        self.push(&ui.keyword_commitment.to_string());
         self.push(" ");
         self.push(&render_ident(&ui.name));
         if let Some(binds) = &ui.binds {
@@ -601,7 +601,7 @@ impl Renderer {
     fn render_stack_or_parallel(&mut self, keyword: &str, stack: &StackNode) {
         self.write_indent();
         self.push(keyword);
-        self.push(&commitment_suffix(stack.keyword_commitment));
+        self.push(&stack.keyword_commitment.to_string());
         if let Some(desc) = &stack.description {
             self.push(" ");
             self.push(&render_fstring(desc));
@@ -642,7 +642,7 @@ impl Renderer {
     fn render_ui_error(&mut self, error: &UiErrorNode) {
         self.write_indent();
         self.push("error");
-        self.push(&commitment_suffix(error.keyword_commitment));
+        self.push(&error.keyword_commitment.to_string());
         self.push(" ");
         self.push(&render_fstring(&error.message));
         if let Some(desc) = &error.desc {
@@ -715,7 +715,7 @@ fn render_capabilities(caps: &[Capability]) -> String {
     caps.iter()
         .map(|c| {
             let mut s = render_ident(&c.name);
-            s.push_str(&commitment_suffix(c.commitment));
+            s.push_str(&c.commitment.to_string());
             s
         })
         .collect::<Vec<_>>()
@@ -811,7 +811,7 @@ fn render_simple_value(value: &SimpleValue) -> String {
 
 fn render_ident(ident: &Ident) -> String {
     let mut s = ident.name.clone();
-    s.push_str(&commitment_suffix(ident.commitment));
+    s.push_str(&ident.commitment.to_string());
     s
 }
 
@@ -828,20 +828,16 @@ fn render_fstring(s: &FString) -> String {
         }
     }
     out.push('"');
-    out.push_str(&commitment_suffix(s.commitment));
+    out.push_str(&s.commitment.to_string());
     out
 }
 
 fn render_desc_inline(desc: &Desc) -> String {
     let mut out = String::from("desc");
-    out.push_str(&commitment_suffix(desc.need_commitment));
+    out.push_str(&desc.need_commitment.to_string());
     out.push(' ');
     out.push_str(&render_fstring(&desc.content));
     out
-}
-
-fn commitment_suffix(c: Commitment) -> String {
-    c.to_string()
 }
 
 fn render_expr(expr: &Expr) -> String {

@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 /// 意图后缀：附加在关键字、标识符或字符串上，表示作者对该节点的锁定与不确定程度。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum Commitment {
     #[serde(rename = "none")]
     #[default]
@@ -112,6 +113,7 @@ pub struct File {
 /// 顶层 Fragment（v0.3 新架构）。任何 Fragment 都可以作为合法顶层存在。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind")]
+#[non_exhaustive]
 pub enum Fragment {
     Module {
         module: Module,
@@ -179,6 +181,7 @@ pub struct TypeDef {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind")]
+#[non_exhaustive]
 pub enum TypeBody {
     Enum { variants: Vec<Ident> },
     Record { fields: Vec<Field> },
@@ -282,6 +285,7 @@ pub struct Capability {
 /// `requires` / `ensures` 条件：结构化表达式或自然语言字符串。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind")]
+#[non_exhaustive]
 pub enum Condition {
     Structured { expr: Expr },
     Natural { text: FString },
@@ -290,6 +294,7 @@ pub enum Condition {
 /// 简单表达式 AST（支持比较、逻辑连接）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind")]
+#[non_exhaustive]
 pub enum Expr {
     Ident {
         value: Ident,
@@ -414,6 +419,7 @@ pub struct MathBlock {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind")]
+#[non_exhaustive]
 pub enum MathStatement {
     /// 定义/赋值式：target = value
     Define { target: Expr, value: Expr },
@@ -422,6 +428,7 @@ pub enum MathStatement {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum CompareOp {
     Eq,
     Ne,
@@ -434,6 +441,7 @@ pub enum CompareOp {
 /// 步骤：动作、控制流、错误处理等。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind")]
+#[non_exhaustive]
 pub enum Step {
     Action { step: ActionStep },
     Assign { step: AssignStep },
@@ -475,6 +483,7 @@ pub struct AssignStep {
 /// 赋值右侧允许的简单值。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind")]
+#[non_exhaustive]
 pub enum SimpleValue {
     Ident {
         value: Ident,
@@ -568,6 +577,7 @@ pub struct Desc {
 /// 原始词法单元，用于保留 AI/人类书写的自由动作标签或类型提示。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind")]
+#[non_exhaustive]
 pub enum Atom {
     Ident { value: Ident },
     String { value: FString },
@@ -590,6 +600,7 @@ pub struct UiDef {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind")]
+#[non_exhaustive]
 pub enum UiNode {
     Stack { stack: StackNode },
     Parallel { parallel: StackNode },
@@ -636,6 +647,7 @@ pub struct OnBinding {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind")]
+#[non_exhaustive]
 pub enum EventName {
     Ident { value: Ident },
     Natural { text: FString },
@@ -648,6 +660,7 @@ pub struct ActionExpr {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind")]
+#[non_exhaustive]
 pub enum Action {
     Call { expr: Expr },
     Navigate { target: Ident },

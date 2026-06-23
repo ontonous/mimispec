@@ -297,8 +297,7 @@ impl<'a> Lexer<'a> {
                 let spaces = self.count_leading_spaces();
                 match self.peek() {
                     None => {
-                        // EOF: flush dedents and emit EOF
-                        return self.flush_eof();
+                        return Ok(self.flush_eof());
                     }
                     Some('\n') => {
                         self.bump(); // empty line
@@ -312,7 +311,7 @@ impl<'a> Lexer<'a> {
                     _ => {
                         if !spaces.is_multiple_of(4) {
                             return Err(ParseError::indent_error(
-                                start_line,
+                                start_line, start_col,
                                 format!("indentation must be a multiple of 4 spaces, found {}", spaces),
                             ));
                         }
@@ -594,7 +593,7 @@ impl<'a> Lexer<'a> {
         let current = *self.indent_stack.last().unwrap_or(&0);
         if target > current {
             return Err(ParseError::indent_error(
-                self.line,
+                self.line, self.col,
                 format!("dedent to {} exceeds current indent {}", target, current),
             ));
         }
@@ -614,7 +613,7 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn flush_eof(&mut self) -> Result<Token, ParseError> {
+    fn flush_eof(&mut self) -> Token {
         let line = self.line;
         let col = self.col;
         while self.indent_stack.len() > 1 {
@@ -622,11 +621,7 @@ impl<'a> Lexer<'a> {
             self.pending.push(Token::new(TokenKind::Dedent, line, col));
         }
         self.pending.push(Token::new(TokenKind::Eof, line, col));
-        if let Some(t) = self.pending.pop() {
-            Ok(t)
-        } else {
-            Ok(Token::new(TokenKind::Eof, line, col))
-        }
+        self.pending.pop().unwrap_or_else(|| Token::new(TokenKind::Eof, line, col))
     }
 
     fn string_token(&mut self, line: usize, col: usize) -> Result<Token, ParseError> {

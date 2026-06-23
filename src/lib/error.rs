@@ -101,11 +101,11 @@ impl ParseError {
         }
     }
 
-    pub fn indent_error(line: usize, message: String) -> Self {
+    pub fn indent_error(line: usize, col: usize, message: String) -> Self {
         Self {
             code: ErrorCode::E0003,
             line,
-            col: 0,
+            col,
             message: format!("indentation error at line {line}: {message}"),
             help: Some("indentation must be a multiple of 4 spaces".into()),
             suggestion: None,
