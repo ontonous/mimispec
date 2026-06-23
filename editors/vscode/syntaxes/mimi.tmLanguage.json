@@ -1,0 +1,155 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Mimi",
+  "scopeName": "source.mimi",
+  "fileTypes": [".mimi"],
+  "patterns": [
+    { "include": "#comment" },
+    { "include": "#string" },
+    { "include": "#fstring" },
+    { "include": "#number" },
+    { "include": "#keyword" },
+    { "include": "#builtin-type" },
+    { "include": "#builtin-func" },
+    { "include": "#operator" },
+    { "include": "#identifier" }
+  ],
+  "repository": {
+    "comment": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.mimi",
+          "match": "//.*$"
+        }
+      ]
+    },
+    "string": {
+      "name": "string.quoted.double.mimi",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape.mimi",
+          "match": "\\\\(n|t|r|\\\\|\"|'|0|x[0-9a-fA-F]{2}|u\\{[0-9a-fA-F]+\\})"
+        },
+        {
+          "name": "invalid.illegal.unescaped.mimi",
+          "match": "\\\\."
+        }
+      ]
+    },
+    "fstring": {
+      "name": "string.interpolated.mimi",
+      "begin": "f\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape.mimi",
+          "match": "\\\\(n|t|r|\\\\|\"|')"
+        },
+        {
+          "name": "meta.embedded.block.mimi",
+          "begin": "\\{",
+          "end": "\\}",
+          "patterns": [{ "include": "#keyword" }, { "include": "#builtin-type" }, { "include": "#identifier" }]
+        }
+      ]
+    },
+    "number": {
+      "name": "constant.numeric.mimi",
+      "match": "\\b(0[xX][0-9a-fA-F]+|0[oO][0-7]+|0[bB][01]+|\\d+(\\.\\d+)?([eE][+-]?\\d+)?)\\b"
+    },
+    "keyword": {
+      "patterns": [
+        {
+          "name": "keyword.control.mimi",
+          "match": "\\b(if|else|for|in|while|return|break|continue|match|quote)\\b"
+        },
+        {
+          "name": "keyword.declaration.mimi",
+          "match": "\\b(module|type|func|fn|actor|newtype|let|mut|pub|use|trait|impl|where|extern|dyn|drop|failure|comptime|old)\\b"
+        },
+        {
+          "name": "keyword.control.concurrent.mimi",
+          "match": "\\b(async|await|spawn|steps|parasteps)\\b"
+        },
+        {
+          "name": "keyword.contract.mimi",
+          "match": "\\b(requires|ensures|math|desc|rule|mms|with)\\b"
+        },
+        {
+          "name": "keyword.ownership.mimi",
+          "match": "\\b(ref|shared|local_shared|weak|weak_local|c_shared|c_borrow|c_borrow_mut|raw_string|arena|alloc|cap)\\b"
+        },
+        {
+          "name": "keyword.operator.logical.mimi",
+          "match": "\\b(and|or|not)\\b"
+        },
+        {
+          "name": "constant.language.boolean.mimi",
+          "match": "\\b(true|false)\\b"
+        },
+        {
+          "name": "constant.language.mimi",
+          "match": "\\b(unknown|__LINE__|__FILE__)\\b"
+        },
+        {
+          "name": "storage.modifier.mimi",
+          "match": "\\b(unsafe|inline|static)\\b"
+        }
+      ]
+    },
+    "builtin-type": {
+      "name": "storage.type.mimi",
+      "match": "\\b(bool|i8|i16|i32|i64|u8|u16|u32|u64|f32|f64|string|unit|nothing|List|Map|Option|Result|Set|Vec|Any|Func|Closure|Actor|Error|Never)\\b"
+    },
+    "builtin-func": {
+      "patterns": [
+        {
+          "name": "support.function.mimi",
+          "match": "\\b(println|print|input|len|push|pop|insert|remove|contains|get|set|keys|values|to_string|str_split|str_join|str_contains|str_replace|str_trim|str_parse_int|str_parse_float|type_name|exit|assert|panic|sizeof|alignof|offsetof|transmute)\\b"
+        }
+      ]
+    },
+    "operator": {
+      "patterns": [
+        {
+          "name": "keyword.operator.arithmetic.mimi",
+          "match": "(\\*\\*|\\*|/|%|\\+|-)"
+        },
+        {
+          "name": "keyword.operator.bitwise.mimi",
+          "match": "(&|\\^|~|<<|>>|>>>)"
+        },
+        {
+          "name": "keyword.operator.comparison.mimi",
+          "match": "(==|!=|<=|>=|<|>)"
+        },
+        {
+          "name": "keyword.operator.assignment.mimi",
+          "match": "(\\+=|-=|\\*=|/=|%=|&=|\\^=|\\|=)"
+        },
+        {
+          "name": "keyword.operator.logical.mimi",
+          "match": "(&&|\\|\\||!)"
+        },
+        {
+          "name": "keyword.operator.arrow.mimi",
+          "match": "(->|=>)"
+        },
+        {
+          "name": "keyword.operator.dereference.mimi",
+          "match": "\\."
+        },
+        {
+          "name": "keyword.operator.pipe.mimi",
+          "match": "\\|>"
+        }
+      ]
+    },
+    "identifier": {
+      "name": "variable.other.mimi",
+      "match": "[a-zA-Z_][a-zA-Z0-9_]*"
+    }
+  }
+}

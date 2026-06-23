@@ -1,0 +1,167 @@
+{
+  "name": "mimispec-vscode",
+  "displayName": "MimiSpec + Mimi",
+  "description": "MimiSpec (.mms) and Mimi (.mimi) language support for VS Code",
+  "version": "0.4.0",
+  "publisher": "ontonous",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ontonous/mimispec"
+  },
+  "engines": {
+    "vscode": "^1.74.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters"
+  ],
+  "keywords": [
+    "mimispec",
+    "mms",
+    "mimi",
+    "intent",
+    "specification",
+    "language"
+  ],
+  "activationEvents": [
+    "onLanguage:mimispec",
+    "onLanguage:mimi"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "mimispec",
+        "aliases": [
+          "MimiSpec",
+          "mimispec"
+        ],
+        "extensions": [
+          ".mms"
+        ],
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./icons/mms.svg",
+          "dark": "./icons/mms.svg"
+        }
+      },
+      {
+        "id": "mimi",
+        "aliases": [
+          "Mimi",
+          "mimi"
+        ],
+        "extensions": [
+          ".mimi"
+        ],
+        "configuration": "./mimi-language-configuration.json",
+        "icon": {
+          "light": "./icons/mimi.svg",
+          "dark": "./icons/mimi.svg"
+        }
+      }
+    ],
+    "grammars": [
+      {
+        "language": "mimispec",
+        "scopeName": "source.mimispec",
+        "path": "./syntaxes/mimispec.tmLanguage.json"
+      },
+      {
+        "language": "mimi",
+        "scopeName": "source.mimi",
+        "path": "./syntaxes/mimi.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "MimiSpec + Mimi",
+      "properties": {
+        "mimispec.binaryPath": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null,
+          "description": "Path to the mimispec CLI binary. If unset, the extension tries 'target/release/mimispec' relative to the workspace root."
+        },
+        "mimispec.validateOnSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run mimispec validation when saving .mms files."
+        },
+        "mimispec.validateOnOpen": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run mimispec validation when opening .mms files."
+        },
+        "mimi.binaryPath": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null,
+          "description": "Path to the mimi CLI binary. If unset, the extension tries 'target/release/mimi' or 'target/debug/mimi' relative to the workspace root."
+        },
+        "mimi.enableLsp": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable LSP-based diagnostics for .mimi files (uses 'mimi lsp')."
+        },
+        "mimi.validateOnSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run mimi check when saving .mimi files (only used when LSP is disabled)."
+        },
+        "mimi.validateOnOpen": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run mimi check when opening .mimi files (only used when LSP is disabled)."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "mimispec.validateFile",
+        "title": "MimiSpec: Validate Current File"
+      },
+      {
+        "command": "mimi.validateFile",
+        "title": "Mimi: Check Current File"
+      },
+      {
+        "command": "mimi.restartLsp",
+        "title": "Mimi: Restart LSP Server"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "mimispec.validateFile",
+          "when": "editorLangId == mimispec"
+        },
+        {
+          "command": "mimi.validateFile",
+          "when": "editorLangId == mimi"
+        },
+        {
+          "command": "mimi.restartLsp",
+          "when": "editorLangId == mimi"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^18.19.0",
+    "@types/vscode": "^1.74.0",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  }
+}

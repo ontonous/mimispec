@@ -155,6 +155,7 @@ mimispec/
 │   ├── version-management.md    # 版本管理与 CI/CD 规范
 │   └── stdlib-api.md            # Mimi 运行时标准库参考
 ├── mimispec-parser-mms/         # 用 MimiSpec 写的解析器参考实现
+├── editors/vscode/              # VS Code 扩展（语法高亮 + 诊断）
 ├── CHANGELOG.md
 ├── CONTRIBUTING.md
 └── AGENTS.md                    # AI 代理协作说明
@@ -177,6 +178,25 @@ mimispec/
 ## 许可证
 
 Apache 2.0 © 2026 ontonous
+
+---
+
+## VS Code 扩展
+
+项目包含完整的 VS Code 扩展，提供语法高亮和实时诊断：
+
+```bash
+cd editors/vscode
+npm install
+npm run compile
+```
+
+安装 `.vsix`：
+```bash
+code --install-extension editors/vscode/mimispec-vscode-*.vsix
+```
+
+扩展会自动查找工作区根目录下的 `target/release/mimispec` 二进制。详见 [editors/vscode/](editors/vscode/)。
 
 ---
 

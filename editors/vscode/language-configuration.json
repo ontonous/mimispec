@@ -1,0 +1,48 @@
+{
+  "comments": {
+    "lineComment": "//"
+  },
+  "brackets": [
+    [
+      "(",
+      ")"
+    ],
+    [
+      "[",
+      "]"
+    ]
+  ],
+  "autoClosingPairs": [
+    [
+      "\"",
+      "\""
+    ],
+    [
+      "(",
+      ")"
+    ],
+    [
+      "[",
+      "]"
+    ]
+  ],
+  "surroundingPairs": [
+    [
+      "\"",
+      "\""
+    ],
+    [
+      "(",
+      ")"
+    ],
+    [
+      "[",
+      "]"
+    ]
+  ],
+  "indentationRules": {
+    "increaseIndentPattern": "^\\s*(module|type|flow|func|ui|steps|if|else|for|while|parasteps|math|requires|ensures|stack|parallel|on)\\b.*:\\s*$",
+    "decreaseIndentPattern": "^\\s*else\\b.*$"
+  },
+  "wordPattern": "([a-zA-Z_][a-zA-Z0-9_]*)|\\?+|\\$+"
+}

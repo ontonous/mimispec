@@ -1,0 +1,135 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "MimiSpec",
+  "scopeName": "source.mimispec",
+  "fileTypes": [
+    ".mms"
+  ],
+  "patterns": [
+    {
+      "include": "#comment"
+    },
+    {
+      "include": "#decorator"
+    },
+    {
+      "include": "#string"
+    },
+    {
+      "include": "#number"
+    },
+    {
+      "include": "#keyword"
+    },
+    {
+      "include": "#operator"
+    },
+    {
+      "include": "#commitment"
+    },
+    {
+      "include": "#identifier"
+    }
+  ],
+  "repository": {
+    "comment": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.mimispec",
+          "match": "//.*$"
+        }
+      ]
+    },
+    "decorator": {
+      "patterns": [
+        {
+          "name": "meta.decorator.mimispec",
+          "match": "(@import)\\s+(\"[^\"]*\")",
+          "captures": {
+            "1": {
+              "name": "keyword.control.import.mimispec"
+            },
+            "2": {
+              "name": "string.quoted.double.mimispec"
+            }
+          }
+        }
+      ]
+    },
+    "string": {
+      "name": "string.quoted.double.mimispec",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape.mimispec",
+          "match": "\\\\(n|t|r|\\\\|\"|')"
+        },
+        {
+          "name": "invalid.illegal.unescaped.mimispec",
+          "match": "\\\\."
+        }
+      ]
+    },
+    "number": {
+      "name": "constant.numeric.mimispec",
+      "match": "\\b\\d+(\\.\\d+)?([eE][+-]?\\d+)?\\b"
+    },
+    "keyword": {
+      "patterns": [
+        {
+          "name": "keyword.control.mimispec",
+          "match": "\\b(if|else|for|while|done|exit|parasteps)\\b"
+        },
+        {
+          "name": "keyword.other.mimispec",
+          "match": "\\b(module|type|flow|func|ui|steps|requires|ensures|math|desc|on|with|error|stack|parallel|binds|rule)\\b"
+        },
+        {
+          "name": "keyword.operator.logical.mimispec",
+          "match": "\\b(and|or|not|in)\\b"
+        },
+        {
+          "name": "constant.language.boolean.mimispec",
+          "match": "\\b(true|false)\\b"
+        }
+      ]
+    },
+    "operator": {
+      "patterns": [
+        {
+          "name": "keyword.operator.pipe.mimispec",
+          "match": "\\|"
+        },
+        {
+          "name": "keyword.operator.arithmetic.mimispec",
+          "match": "(\\*\\*|\\*|/|@|\\+|-)"
+        },
+        {
+          "name": "keyword.operator.bitwise.mimispec",
+          "match": "(&|\\^|~|<<|>>|>>>)"
+        },
+        {
+          "name": "keyword.operator.assignment.mimispec",
+          "match": "(==|!=|<=|>=|=|<|>)"
+        },
+        {
+          "name": "keyword.operator punctuation.separator.key-value.mimispec",
+          "match": ":"
+        },
+        {
+          "name": "keyword.operator.dereference.mimispec",
+          "match": "\\."
+        }
+      ]
+    },
+    "commitment": {
+      "name": "storage.modifier.commitment.mimispec",
+      "match": "(\\$\\$\\?\\?|\\$\\$\\?|\\$\\$|\\$\\?\\?|\\$\\?|\\$|\\?\\?|\\?)"
+    },
+    "identifier": {
+      "name": "entity.name.identifier.mimispec",
+      "match": "[a-zA-Z_][a-zA-Z0-9_]*"
+    }
+  }
+}
