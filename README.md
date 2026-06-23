@@ -36,6 +36,7 @@ Every phase is a **syntactically valid `.mms` file**.
 
 ## 核心特性 / Core Features
 
+- **Agent-Native Design** — `.mms` as persistent intent artifact: `?` for exploration, `$` for lock, `rule` for guardrails, agent acts autonomously inside the fences. See [VISION.md](VISION.md)
 - **Fragment Architecture** — `module`, `type`, `flow`, `func`, `ui`, `steps`, expressions, UI nodes... any syntax subtree is a valid top-level Fragment
 - **Progressive Precision** — `desc` (natural language) → `requires`/`ensures` → `math:` blocks, step by step
 - **Built-in Commitment System** — `$`/`$$` marks confirmed designs, `?`/`??` marks uncertainty
@@ -149,6 +150,7 @@ mimispec/
 ├── mimispec-parser-mms/         # MimiSpec 写的参考解析器 / reference parser in MimiSpec
 ├── editors/vscode/              # VS Code 扩展 / VS Code extension
 ├── editors/monaco/              # Monaco 参考集成 / Monaco reference integration
+├── VISION.md                    # Agent 愿景 / Agent vision
 ├── CHANGELOG.md
 ├── CONTRIBUTING.md
 └── AGENTS.md                    # AI 代理协作指南 / AI agent guide
@@ -160,6 +162,7 @@ mimispec/
 
 | 文档 / Doc | 说明 / Description |
 |------|------|
+| [Agent 愿景 / Vision](VISION.md) | 通用 agent 的意图接口哲学 / The intent interface philosophy for universal agents |
 | [语法规范](docs/specification.md) | 完整语言参考 / Complete language reference |
 | [高级用法](docs/advanced-usage.md) | 模块化、契约设计、Saga、ML 规格 / Modular design, contracts, Saga, ML specs |
 | [版本管理](docs/version-management.md) | SemVer、分支模型、CI/CD / Versioning, branching, CI/CD |
