@@ -219,16 +219,24 @@ fn render_fstring(s: &FString) -> String {
 }
 
 fn escape_latex(s: &str) -> String {
-    s.replace('\\', "\\textbackslash{}")
-        .replace('&', "\\&")
-        .replace('%', "\\%")
-        .replace('$', "\\$")
-        .replace('#', "\\#")
-        .replace('_', "\\_")
-        .replace('{', "\\{")
-        .replace('}', "\\}")
-        .replace('~', "\\textasciitilde{}")
-        .replace('^', "\\textasciicircum{}")
+    // 单遍字符扫描，避免链式 replace 的顺序依赖和二次转义问题
+    let mut out = String::with_capacity(s.len() * 2);
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\textbackslash{}"),
+            '&' => out.push_str("\\&"),
+            '%' => out.push_str("\\%"),
+            '$' => out.push_str("\\$"),
+            '#' => out.push_str("\\#"),
+            '_' => out.push_str("\\_"),
+            '{' => out.push_str("\\{"),
+            '}' => out.push_str("\\}"),
+            '~' => out.push_str("\\textasciitilde{}"),
+            '^' => out.push_str("\\textasciicircum{}"),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 #[cfg(test)]

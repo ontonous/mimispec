@@ -3,6 +3,8 @@ use crate::error::ParseError;
 use crate::lexer::TokenKind;
 use crate::parser::{BinOp, Parser};
 
+const EXPR_RECURSION_LIMIT: u32 = 256;
+
 impl Parser {
     pub(super) fn parse_condition(&mut self) -> Result<Condition, ParseError> {
         if self.check(&TokenKind::Ellipsis) {
@@ -21,7 +23,20 @@ impl Parser {
     }
 
     pub(super) fn parse_expr(&mut self, min_prec: u8) -> Result<Expr, ParseError> {
-        let mut lhs = self.parse_primary()?;
+        self.parse_expr_depth(min_prec, 0)
+    }
+
+    fn parse_expr_depth(&mut self, min_prec: u8, depth: u32) -> Result<Expr, ParseError> {
+        if depth > EXPR_RECURSION_LIMIT {
+            let (line, col) = self.current_pos();
+            return Err(ParseError::unexpected_token(
+                "expression too deeply nested".into(),
+                "expression".into(),
+                line,
+                col,
+            ));
+        }
+        let mut lhs = self.parse_primary_depth(depth)?;
         loop {
             let (op, prec, right_assoc) = match self.peek_kind() {
                 Some(TokenKind::Or) => (BinOp::Or, 1u8, false),
@@ -59,7 +74,7 @@ impl Parser {
                 }
             };
             let next_min = if right_assoc { prec } else { prec + 1 };
-            let rhs = self.parse_expr(next_min)?;
+            let rhs = self.parse_expr_depth(next_min, depth + 1)?;
             lhs = match op {
                 BinOp::Or => Expr::Or {
                     left: Box::new(lhs),
@@ -130,10 +145,19 @@ impl Parser {
         Ok(lhs)
     }
 
-    fn parse_primary(&mut self) -> Result<Expr, ParseError> {
+    fn parse_primary_depth(&mut self, depth: u32) -> Result<Expr, ParseError> {
+        if depth > EXPR_RECURSION_LIMIT {
+            let (line, col) = self.current_pos();
+            return Err(ParseError::unexpected_token(
+                "expression too deeply nested".into(),
+                "expression".into(),
+                line,
+                col,
+            ));
+        }
         if self.check(&TokenKind::Not) {
             let keyword_commitment = self.expect_kw(TokenKind::Not, "`not`")?;
-            let inner = self.parse_expr(12)?;
+            let inner = self.parse_expr_depth(12, depth + 1)?;
             return Ok(Expr::Not {
                 expr: Box::new(inner),
                 keyword_commitment,
@@ -141,14 +165,14 @@ impl Parser {
         }
         if self.check(&TokenKind::Minus) {
             self.advance();
-            let inner = self.parse_expr(12)?;
+            let inner = self.parse_expr_depth(12, depth + 1)?;
             return Ok(Expr::Neg {
                 expr: Box::new(inner),
             });
         }
         if self.check(&TokenKind::BitNot) {
             self.advance();
-            let inner = self.parse_expr(12)?;
+            let inner = self.parse_expr_depth(12, depth + 1)?;
             return Ok(Expr::BitNot {
                 expr: Box::new(inner),
             });
@@ -157,7 +181,7 @@ impl Parser {
             Some(TokenKind::Ident(_)) => {
                 let id = self.fuzzy_ident()?;
                 let mut expr = Expr::Ident { value: id };
-                expr = self.parse_postfix(expr)?;
+                expr = self.parse_postfix_depth(expr, depth)?;
                 Ok(expr)
             }
             Some(TokenKind::String(_)) => {
@@ -190,7 +214,7 @@ impl Parser {
             }
             Some(TokenKind::LParen) => {
                 self.advance();
-                let inner = self.parse_expr(0)?;
+                let inner = self.parse_expr_depth(0, depth + 1)?;
                 self.expect(TokenKind::RParen, "`)`")?;
                 Ok(inner)
             }
@@ -198,9 +222,9 @@ impl Parser {
                 self.advance();
                 let mut items = Vec::new();
                 if !self.check(&TokenKind::RBracket) {
-                    items.push(self.parse_expr(0)?);
+                    items.push(self.parse_expr_depth(0, depth + 1)?);
                     while self.matches(&TokenKind::Comma) {
-                        items.push(self.parse_expr(0)?);
+                        items.push(self.parse_expr_depth(0, depth + 1)?);
                     }
                 }
                 self.expect(TokenKind::RBracket, "`]`")?;
@@ -221,7 +245,7 @@ impl Parser {
         }
     }
 
-    fn parse_postfix(&mut self, expr: Expr) -> Result<Expr, ParseError> {
+    fn parse_postfix_depth(&mut self, expr: Expr, depth: u32) -> Result<Expr, ParseError> {
         let mut expr = expr;
         loop {
             if self.matches(&TokenKind::Dot) {
@@ -235,9 +259,9 @@ impl Parser {
                 self.advance();
                 let mut args = Vec::new();
                 if !self.check(&TokenKind::RParen) {
-                    args.push(self.parse_expr(0)?);
+                    args.push(self.parse_expr_depth(0, depth + 1)?);
                     while self.matches(&TokenKind::Comma) {
-                        args.push(self.parse_expr(0)?);
+                        args.push(self.parse_expr_depth(0, depth + 1)?);
                     }
                 }
                 if self.check(&TokenKind::RParen) {
@@ -254,9 +278,9 @@ impl Parser {
                 self.advance();
                 let mut indices = Vec::new();
                 if !self.check(&TokenKind::RBracket) {
-                    indices.push(self.parse_expr(0)?);
+                    indices.push(self.parse_expr_depth(0, depth + 1)?);
                     while self.matches(&TokenKind::Comma) {
-                        indices.push(self.parse_expr(0)?);
+                        indices.push(self.parse_expr_depth(0, depth + 1)?);
                     }
                 }
                 self.expect(TokenKind::RBracket, "`]`")?;

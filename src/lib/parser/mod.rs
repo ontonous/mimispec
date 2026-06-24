@@ -661,6 +661,8 @@ impl Parser {
             TokenKind::Ge => Ok(Atom::Symbol { value: ">=".into() }),
             TokenKind::Question => Ok(Atom::Symbol { value: "?".into() }),
             TokenKind::QuestionQuestion => Ok(Atom::Symbol { value: "??".into() }),
+            TokenKind::Dollar => Ok(Atom::Symbol { value: "$".into() }),
+            TokenKind::DollarDollar => Ok(Atom::Symbol { value: "$$".into() }),
             _ => Err(ParseError::unexpected_token(
                 tok.kind.to_string(),
                 "atom".into(),

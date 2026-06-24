@@ -64,9 +64,7 @@ fn read_source(path: &Path) -> Option<String> {
     if path == Path::new("-") {
         use std::io::Read;
         let mut input = String::new();
-        std::io::stdin()
-            .read_to_string(&mut input)
-            .unwrap_or_default();
+        std::io::stdin().read_to_string(&mut input).ok()?;
         Some(input)
     } else {
         fs::read_to_string(path).ok()

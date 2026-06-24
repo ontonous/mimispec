@@ -224,9 +224,9 @@ pub struct Lexer<'a> {
     pending: Vec<Token>,
     indent_stack: Vec<usize>,
     at_line_start: bool,
-    /// Tracks whether we have passed a blank line since the last content line.
+    /// Tracks number of blank lines since the last content line.
     /// Used by the parser to detect blank-line breaks between fragments.
-    saw_blank_line: bool,
+    blank_line_count: u32,
 }
 
 impl<'a> Lexer<'a> {
@@ -238,7 +238,7 @@ impl<'a> Lexer<'a> {
             pending: Vec::new(),
             indent_stack: vec![0],
             at_line_start: true,
-            saw_blank_line: false,
+            blank_line_count: 0,
         }
     }
 
@@ -301,7 +301,7 @@ impl<'a> Lexer<'a> {
                     }
                     Some('\n') => {
                         self.bump(); // empty line
-                        self.saw_blank_line = true;
+                        self.blank_line_count = self.blank_line_count.saturating_add(1);
                         continue;
                     }
                     Some('/') if self.peek_second() == Some('/') => {
@@ -317,7 +317,7 @@ impl<'a> Lexer<'a> {
                         }
                         let current = *self.indent_stack.last().unwrap_or(&0);
                         if spaces > current {
-                            self.saw_blank_line = false;
+                            self.blank_line_count = 0;
                             self.indent_stack.push(spaces);
                             let mut t = Token {
                                 kind: TokenKind::Newline,
@@ -334,7 +334,7 @@ impl<'a> Lexer<'a> {
                             self.at_line_start = false;
                             return Ok(t);
                         } else if spaces < current {
-                            self.saw_blank_line = false;
+                            self.blank_line_count = 0;
                             self.at_line_start = false;
                             return self.emit_dedents(spaces);
                         } else {
@@ -344,10 +344,11 @@ impl<'a> Lexer<'a> {
                                 line: start_line,
                                 col: start_col,
                             };
-                            if self.saw_blank_line {
-                                self.saw_blank_line = false;
+                            // Push one extra Newline per blank line encountered
+                            for _ in 0..self.blank_line_count {
                                 self.pending.push(t.clone());
                             }
+                            self.blank_line_count = 0;
                             return Ok(t);
                         }
                     }

@@ -437,9 +437,10 @@ impl Renderer {
             Step::Parasteps { step } => self.render_parasteps_step(step),
             Step::Error { step } => self.render_error_step(step),
             Step::Desc { content } => self.render_desc(content),
-            Step::Placeholder { .. } => {
+            Step::Placeholder { keyword_commitment } => {
                 self.write_indent();
                 self.push("...");
+                self.push(&keyword_commitment.to_string());
                 self.newline();
             }
         }
@@ -748,7 +749,8 @@ fn render_atoms(atoms: &[Atom]) -> String {
 
 fn needs_space_between(prev: &Atom, curr: &Atom) -> bool {
     // 下一个是右括号/右方框/逗号/冒号/点：不加空格
-    if matches!(curr.symbol_value(), Some(")" | "]" | ">" | "," | ":" | ".")) {
+    // NOTE: `>` 排除在外——MimiSpec 中 `>` 是大于比较运算符，需要前后空格
+    if matches!(curr.symbol_value(), Some(")" | "]" | "," | ":" | ".")) {
         return false;
     }
     // 当前是左括号/左方框/左尖括号/点：不加空格
@@ -863,7 +865,11 @@ fn render_expr_prec(expr: &Expr, parent_prec: u8) -> String {
             let inner = items.iter().map(render_expr).collect::<Vec<_>>().join(", ");
             format!("[{}]", inner)
         }
-        Expr::Placeholder { .. } => "...".into(),
+        Expr::Placeholder { keyword_commitment } => {
+            let mut s = String::from("...");
+            s.push_str(&keyword_commitment.to_string());
+            s
+        }
         Expr::Not { expr, .. } => format!("not {}", render_expr_prec(expr, my_prec)),
         Expr::Neg { expr } => format!("-{}", render_expr_prec(expr, my_prec)),
         Expr::BitNot { expr } => format!("~{}", render_expr_prec(expr, my_prec)),
