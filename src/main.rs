@@ -1,33 +1,53 @@
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use mimispec::format::format_diagnostic;
 use mimispec::latex::render_file_latex;
 use mimispec::parse;
+use mimispec::resolver::Resolver;
+use mimispec::symbol::SymbolTable;
 use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 #[derive(Parser, Debug)]
-#[command(name = "mimispec", version, about = "MimiSpec parser CLI")]
-struct Args {
+#[command(name = "mimispec", version, about = "MimiSpec parser CLI", args_conflicts_with_subcommands = true)]
+struct Cli {
     /// .mms file(s) to parse; use - for stdin
     #[arg(default_value = "-")]
     files: Vec<PathBuf>,
 
     /// Show AST structure
-    #[arg(short, long)]
+    #[arg(short, long, global = true)]
     ast: bool,
 
     /// Output results as JSON (useful for editor integrations)
-    #[arg(short, long)]
+    #[arg(short, long, global = true)]
     json: bool,
 
     /// Render AST back to MimiSpec source
-    #[arg(short, long)]
+    #[arg(short, long, global = true)]
     render: bool,
 
     /// Render math expressions as LaTeX (lightweight, for MathJax/KaTeX)
-    #[arg(short, long)]
+    #[arg(short, long, global = true)]
     latex: bool,
+
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
+
+#[derive(Subcommand, Debug)]
+enum Commands {
+    /// Parse .mms file(s) and show diagnostics
+    Parse {
+        /// .mms file(s) to parse; use - for stdin
+        #[arg(default_value = "-")]
+        files: Vec<PathBuf>,
+    },
+    /// Build a directory of .mms files with cross-file resolution
+    Build {
+        /// Root directory to scan for .mms files
+        dir: PathBuf,
+    },
 }
 
 #[derive(Serialize)]
@@ -71,7 +91,13 @@ fn read_source(path: &Path) -> Option<String> {
     }
 }
 
-fn build_json_result(path: &Path, result: &mimispec::error::ParseResult, ast: bool, render: bool, latex: bool) -> JsonResult {
+fn build_json_result(
+    path: &Path,
+    result: &mimispec::error::ParseResult,
+    ast: bool,
+    render: bool,
+    latex: bool,
+) -> JsonResult {
     let ast_value = if ast {
         serde_json::to_value(&result.file).ok()
     } else {
@@ -109,13 +135,24 @@ fn build_json_result(path: &Path, result: &mimispec::error::ParseResult, ast: bo
     }
 }
 
-fn print_cli_output(path: &Path, result: &mimispec::error::ParseResult, json_result: &JsonResult, source: &str) {
+fn print_cli_output(
+    path: &Path,
+    result: &mimispec::error::ParseResult,
+    json_result: &JsonResult,
+    source: &str,
+) {
     if result.errors.is_empty() {
-        if json_result.render.is_some() && json_result.ast.is_none() && json_result.latex.is_none() {
+        if json_result.render.is_some()
+            && json_result.ast.is_none()
+            && json_result.latex.is_none()
+        {
             if let Some(source) = &json_result.render {
                 print!("{}", source);
             }
-        } else if json_result.latex.is_some() && json_result.ast.is_none() && json_result.render.is_none() {
+        } else if json_result.latex.is_some()
+            && json_result.ast.is_none()
+            && json_result.render.is_none()
+        {
             if let Some(source) = &json_result.latex {
                 println!("{}", source);
             }
@@ -177,7 +214,8 @@ fn parse_one(
     };
 
     let result = parse(&source);
-    let json_result = build_json_result(path, &result, ast || json, render || json, latex || json);
+    let json_result =
+        build_json_result(path, &result, ast || json, render || json, latex || json);
 
     if !json {
         print_cli_output(path, &result, &json_result, &source);
@@ -186,16 +224,20 @@ fn parse_one(
     (json_result.success, result.errors.len(), json_result)
 }
 
-fn main() {
-    let args = Args::parse();
-
+fn run_parse(
+    files: &[PathBuf],
+    ast: bool,
+    json: bool,
+    render: bool,
+    latex: bool,
+) {
     let mut total_errors = 0usize;
     let mut any_failure = false;
     let mut json_results = Vec::new();
 
-    // 串行处理每个文件，避免并行占用过高
-    for path in &args.files {
-        let (ok, errs, json_result) = parse_one(path, args.ast, args.json, args.render, args.latex);
+    for path in files {
+        let (ok, errs, json_result) =
+            parse_one(path, ast, json, render, latex);
         if !ok {
             any_failure = true;
         }
@@ -203,7 +245,7 @@ fn main() {
         json_results.push(json_result);
     }
 
-    if args.json {
+    if json {
         let output = JsonOutput {
             results: json_results,
         };
@@ -214,9 +256,129 @@ fn main() {
     }
 
     if any_failure {
-        if !args.json {
+        if !json {
             eprintln!("\nTotal error(s): {}", total_errors);
         }
         std::process::exit(1);
+    }
+}
+
+fn run_build(dir: &Path) {
+    let mut total_errors = 0usize;
+    let mut any_failure = false;
+
+    // Walk directory for .mms files
+    let mms_files = match find_mms_files(dir) {
+        Ok(files) => files,
+        Err(e) => {
+            eprintln!("Error scanning directory: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    if mms_files.is_empty() {
+        eprintln!("No .mms files found in {}", dir.display());
+        std::process::exit(0);
+    }
+
+    let mut resolver = Resolver::new(dir.to_path_buf());
+
+    for path in &mms_files {
+        resolver.resolve(path);
+    }
+
+    let resolve_errors = resolver.take_errors();
+    let files = resolver.take_files();
+
+    // Report resolve errors
+    for (_path, _err) in &resolve_errors {
+        any_failure = true;
+        total_errors += 1;
+    }
+
+    // Build symbol table
+    let symbols = SymbolTable::build(&files);
+    if symbols.has_conflicts() {
+        println!("\n⚠ Name conflicts detected:");
+        for conflict in symbols.conflicts() {
+            println!(
+                "  '{}' defined in {} locations:",
+                conflict.name,
+                conflict.entries.len()
+            );
+            for entry in &conflict.entries {
+                println!("    - {} ({})", entry.file.display(), entry.kind);
+            }
+        }
+        any_failure = true;
+    }
+
+    // Output summary
+    let success_count = mms_files.len() - resolve_errors.len();
+    println!(
+        "✓ Build complete: {} file(s) parsed, {} error(s)",
+        success_count, total_errors
+    );
+
+    if !symbols.all_names().is_empty() {
+        println!("\nDefined names ({}):", symbols.all_names().len());
+        for name in symbols.all_names() {
+            let entries = symbols.lookup(name);
+            let kinds: Vec<String> = entries.iter().map(|e| e.kind.to_string()).collect();
+            println!("  {} [{}]", name, kinds.join(", "));
+        }
+    }
+
+    if any_failure {
+        println!("\nResolve errors:");
+        for (path, err) in &resolve_errors {
+            println!("  {}: {}", path.display(), err);
+        }
+        std::process::exit(1);
+    }
+}
+
+fn find_mms_files(dir: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut files = Vec::new();
+    if !dir.is_dir() {
+        return Err(format!("{} is not a directory", dir.display()));
+    }
+
+    walk_dir(dir, &mut files).map_err(|e| e.to_string())?;
+    files.sort();
+    Ok(files)
+}
+
+fn walk_dir(dir: &Path, files: &mut Vec<PathBuf>) -> std::io::Result<()> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            // Skip hidden directories and common non-source dirs
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if !name.starts_with('.') && name != "target" && name != "node_modules" {
+                walk_dir(&path, files)?;
+            }
+        } else if path.extension().and_then(|e| e.to_str()) == Some("mms") {
+            files.push(path);
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    let cli = Cli::parse();
+
+    match &cli.command {
+        Some(Commands::Parse { files }) => {
+            run_parse(files, cli.ast, cli.json, cli.render, cli.latex);
+        }
+        Some(Commands::Build { dir }) => {
+            run_build(dir);
+        }
+        None => {
+            // Flat args = parse behavior (backward compatible)
+            run_parse(&cli.files, cli.ast, cli.json, cli.render, cli.latex);
+        }
     }
 }

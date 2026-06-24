@@ -13,7 +13,6 @@ impl Parser {
             self.advance();
             return Ok(FlowDef {
                 name,
-                desc: None,
                 rules: Vec::new(),
                 entries: vec![],
                 keyword_commitment,
@@ -24,7 +23,6 @@ impl Parser {
 
         Ok(FlowDef {
             name,
-            desc: None,
             rules: Vec::new(),
             entries,
             keyword_commitment,

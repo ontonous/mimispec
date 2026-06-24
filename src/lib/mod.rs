@@ -1,15 +1,30 @@
 pub mod ast;
+pub mod cache;
 pub mod error;
 pub mod format;
 pub mod latex;
 pub mod lexer;
 pub mod parser;
+pub mod query;
 pub mod render;
 mod render_util;
+pub mod resolver;
+pub mod symbol;
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use error::ParseResult;
 use lexer::Lexer;
 use parser::Parser;
+
+/// Return type for [`parse_file()`]: (main ParseResult, all resolved files, non-parse resolve errors).
+pub type ParseFileResult = (
+    ParseResult,
+    HashMap<PathBuf, Arc<ast::File>>,
+    Vec<(PathBuf, error::ResolveError)>,
+);
 
 /// Parse a MimiSpec source string into an AST, recovering as many fragments as possible.
 ///
@@ -108,6 +123,91 @@ pub fn parse_fragment(source: &str) -> ParseResult {
 /// strings, invalid escape sequences, or indentation errors).
 pub fn tokenize(source: &str) -> Result<Vec<lexer::Token>, error::ParseError> {
     Lexer::new(source).tokenize()
+}
+
+/// Parse a `.mms` file from disk and resolve its `@import` directives recursively.
+///
+/// Uses a [`resolver::Resolver`] to handle cross-file resolution with cycle detection.
+/// Returns the main file and a map of all resolved files.
+///
+/// # Errors
+///
+/// Returns `Err` if the file cannot be read or a cycle is detected. Parse errors
+/// within individual files are accumulated and accessible via the returned
+/// `Vec<(PathBuf, ResolveError)>`.
+pub fn parse_file(path: &Path) -> ParseFileResult {
+    let root_dir = path.parent().map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
+    let mut resolver = resolver::Resolver::new(root_dir);
+    let file = resolver.resolve(path);
+
+    let mut r_errors = Vec::new();
+    let mut resolve_errors = Vec::new();
+    for (p, err) in resolver.take_errors() {
+        match err {
+            error::ResolveError::ParseFailed { errors: parse_errs, .. } => {
+                r_errors.extend(parse_errs);
+            }
+            other => {
+                resolve_errors.push((p, other));
+            }
+        }
+    }
+
+    let result = ParseResult {
+        file: file.as_ref().map(|f| ast::File::clone(f)).unwrap_or_else(|| ast::File {
+            imports: vec![],
+            rules: vec![],
+            fragments: vec![],
+        }),
+        errors: r_errors,
+    };
+    let files = resolver.take_files();
+    (result, files, resolve_errors)
+}
+
+/// Cache that avoids re-parsing unchanged sources.
+///
+/// Useful for IDE scenarios where the same file is parsed repeatedly.
+/// Uses the full source text as the cache key for collision safety.
+pub struct IncrementalCache {
+    cache: HashMap<String, ParseResult>,
+}
+
+impl Default for IncrementalCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl IncrementalCache {
+    pub fn new() -> Self {
+        Self {
+            cache: HashMap::new(),
+        }
+    }
+
+    /// Parse `source`, or return a cached result if the source text matches.
+    /// The returned `ParseResult` is a clone of the cached entry.
+    pub fn parse(&mut self, source: &str) -> ParseResult {
+        if let Some(cached) = self.cache.get(source) {
+            return cached.clone();
+        }
+        let result = parse(source);
+        self.cache.insert(source.to_string(), result.clone());
+        result
+    }
+
+    pub fn clear(&mut self) {
+        self.cache.clear();
+    }
+
+    pub fn len(&self) -> usize {
+        self.cache.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.cache.is_empty()
+    }
 }
 
 #[cfg(test)]
@@ -603,7 +703,7 @@ func Pay(order):
         let Step::Assign { step } = &func.steps[0] else {
             panic!("expected assign")
         };
-        assert!(matches!(step.value, SimpleValue::Ident { ref value } if value.name == "..."));
+        assert!(matches!(step.value, SimpleValue::Placeholder { .. }));
     }
 
     #[test]
@@ -1330,6 +1430,223 @@ flow Good: ...
             .fragments
             .iter()
             .any(|f| matches!(f, Fragment::Flow { flow } if flow.name.name == "Good")));
+    }
+}
+
+#[cfg(test)]
+mod v0_2_tests {
+    use super::*;
+    use crate::ast::*;
+    use crate::error::ResolveError;
+    use crate::render::render_file;
+    use crate::resolver::Resolver;
+    use crate::symbol::SymbolTable;
+    use std::fs;
+    use std::path::Path;
+
+    fn create_temp_mms(dir: &Path, name: &str, content: &str) -> std::path::PathBuf {
+        let path = dir.join(name);
+        fs::write(&path, content).unwrap();
+        path
+    }
+
+    #[test]
+    fn incremental_cache_reuses_result() {
+        let mut cache = IncrementalCache::new();
+        let r1 = cache.parse("type X: A | B");
+        let r2 = cache.parse("type X: A | B");
+        assert!(r1.errors.is_empty());
+        assert!(r2.errors.is_empty());
+        assert_eq!(cache.len(), 1);
+    }
+
+    #[test]
+    fn incremental_cache_detects_change() {
+        let mut cache = IncrementalCache::new();
+        let r1 = cache.parse("type X: A | B");
+        let r2 = cache.parse("type Y: C | D");
+        assert_eq!(cache.len(), 2);
+        assert_eq!(r1.file.fragments.len(), 1);
+        assert_eq!(r2.file.fragments.len(), 1);
+    }
+
+    #[test]
+    fn atom_ellipsis_in_action_label() {
+        // `...` on its own line becomes Step::Placeholder, but we verify
+        // the render round-trip preserves it
+        let src = "func F:\n    steps:\n        ...\n";
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let rendered = render_file(&result.file);
+        assert!(rendered.contains("..."), "rendered: {}", rendered);
+        let reparsed = parse(&rendered);
+        assert!(reparsed.errors.is_empty(), "{:?}", reparsed.errors);
+    }
+
+    #[test]
+    fn atom_ellipsis_in_type_hint() {
+        // `...` as a type hint on a func param should parse as Atom::Ellipsis
+        let src = "func F(x: ...): ...";
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let Fragment::Func { func } = &result.file.fragments[0] else {
+            panic!("expected func")
+        };
+        assert_eq!(func.params.len(), 1);
+        assert_eq!(func.params[0].type_hint.len(), 1);
+        assert!(
+            matches!(&func.params[0].type_hint[0], Atom::Ellipsis { .. }),
+            "expected Atom::Ellipsis, got {:?}",
+            func.params[0].type_hint[0]
+        );
+    }
+
+    #[test]
+    fn placeholder_in_steps_with_desc() {
+        // `... desc "text"` on one line: `...` is a Step::Placeholder,
+        // `desc "text"` is a separate Step::Desc
+        let src = "func F:\n    steps:\n        ... desc \"placeholder step\"\n";
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let Fragment::Func { func } = &result.file.fragments[0] else {
+            panic!("expected func")
+        };
+        assert_eq!(func.steps.len(), 2);
+        assert!(matches!(&func.steps[0], Step::Placeholder { .. }));
+        assert!(matches!(&func.steps[1], Step::Desc { .. }));
+    }
+
+    #[test]
+    fn simple_value_placeholder_in_assign() {
+        let src = r#"
+func F:
+    steps:
+        x = ...
+"#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let Fragment::Func { func } = &result.file.fragments[0] else {
+            panic!("expected func")
+        };
+        let Step::Assign { step } = &func.steps[0] else {
+            panic!("expected assign")
+        };
+        assert!(
+            matches!(step.value, SimpleValue::Placeholder { .. }),
+            "expected Placeholder, got {:?}",
+            step.value
+        );
+    }
+
+    #[test]
+    fn cross_file_roundtrip() {
+        let dir = std::env::temp_dir().join("mimispec_test_cross_file");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        create_temp_mms(&dir, "types.mms", "type OrderStatus: New | Paid | Cancelled\n");
+        create_temp_mms(
+            &dir,
+            "main.mms",
+            r#"@import "types.mms"
+
+module Shop:
+    func Process(order):
+        steps:
+            check status >>> done
+"#,
+        );
+
+        let main_path = dir.join("main.mms");
+        let mut resolver = Resolver::new(dir.clone());
+        resolver.resolve(&main_path);
+        let files = resolver.take_files();
+
+        assert!(files.contains_key(&main_path.canonicalize().unwrap()));
+        assert!(files.contains_key(&dir.join("types.mms").canonicalize().unwrap()));
+
+        let main_file = files.get(&main_path.canonicalize().unwrap()).unwrap();
+        assert_eq!(main_file.imports.len(), 1);
+        assert_eq!(main_file.imports[0], "types.mms");
+
+        // Round-trip render
+        let rendered = render_file(main_file);
+        assert!(rendered.contains("@import"));
+        assert!(rendered.contains("module Shop"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cross_file_cycle_detection() {
+        let dir = std::env::temp_dir().join("mimispec_test_cycle");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        create_temp_mms(&dir, "a.mms", "@import \"b.mms\"\ntype A: X\n");
+        create_temp_mms(&dir, "b.mms", "@import \"a.mms\"\ntype B: Y\n");
+
+        let mut resolver = Resolver::new(dir.clone());
+        resolver.resolve(&dir.join("a.mms"));
+        let errors = resolver.take_errors();
+
+        let has_cycle = errors.iter().any(|(_p, e)| matches!(e, ResolveError::ImportCycle { .. }));
+        assert!(has_cycle, "expected ImportCycle error, got: {:?}", errors);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn symbol_table_conflict_detection() {
+        let dir = std::env::temp_dir().join("mimispec_test_symbols");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        create_temp_mms(&dir, "a.mms", "type Order: Pending | Paid\n");
+        create_temp_mms(&dir, "b.mms", "type Order: New | Old\n");
+
+        let mut resolver = Resolver::new(dir.clone());
+        resolver.resolve(&dir.join("a.mms"));
+        resolver.resolve(&dir.join("b.mms"));
+        let files = resolver.take_files();
+
+        let symbols = SymbolTable::build(&files);
+        let conflicts = symbols.conflicts();
+
+        let order_conflict = conflicts.iter().find(|c| c.name == "Order");
+        assert!(
+            order_conflict.is_some(),
+            "expected conflict for 'Order', got: {:?}",
+            conflicts
+        );
+
+        if let Some(conflict) = order_conflict {
+            assert_eq!(conflict.entries.len(), 2);
+        }
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolver_handles_file_not_found() {
+        let mut resolver = Resolver::new(PathBuf::from("/nonexistent"));
+        resolver.resolve(Path::new("/nonexistent/file.mms"));
+        let errors = resolver.take_errors();
+        assert!(!errors.is_empty(), "expected errors for nonexistent file");
+    }
+
+    #[test]
+    fn flow_def_no_desc_field() {
+        // FlowDef.desc was removed — verify flow parsing still works
+        let src = "flow Lifecycle:\n    Idle >>> Active: desc \"startup\"\n";
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let Fragment::Flow { flow } = &result.file.fragments[0] else {
+            panic!("expected flow")
+        };
+        assert_eq!(flow.entries.len(), 1);
+        // desc is now on the FlowArm, not FlowDef
+        assert!(flow.entries[0].arms[0].desc.is_some());
     }
 }
 

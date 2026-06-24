@@ -178,10 +178,6 @@ impl Parser {
                 None
             };
 
-            if self.check(&TokenKind::Newline) {
-                self.advance();
-            }
-
             let mut on_blocks = Vec::new();
             loop {
                 self.skip_newlines();
@@ -216,10 +212,6 @@ impl Parser {
         } else {
             None
         };
-
-        if self.check(&TokenKind::Newline) {
-            self.advance();
-        }
 
         let mut on_blocks = Vec::new();
         loop {

@@ -207,8 +207,6 @@ pub struct RuleDef {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FlowDef {
     pub name: Ident,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub desc: Option<Desc>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rules: Vec<RuleDef>,
     pub entries: Vec<FlowEntry>,
@@ -502,6 +500,9 @@ pub enum SimpleValue {
     List {
         items: Vec<Vec<Atom>>,
     },
+    Placeholder {
+        commitment: Commitment,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -584,6 +585,7 @@ pub enum Atom {
     Number { value: String },
     Symbol { value: String },
     List { items: Vec<Vec<Atom>> },
+    Ellipsis { commitment: Commitment },
 }
 
 // ── UI 块 ──────────────────────────────────────────────────────────────────

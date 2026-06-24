@@ -88,7 +88,15 @@ impl Parser {
                 Ok(tok) => {
                     let path = match &tok.kind {
                         TokenKind::String(s) => s.clone(),
-                        _ => unreachable!(),
+                        _ => {
+                            errors.push(ParseError::internal(
+                                "expected string after @import".into(),
+                                tok.line,
+                                tok.col,
+                            ));
+                            self.synchronize_past_import();
+                            continue;
+                        }
                     };
                     imports.push(path);
                 }
@@ -172,11 +180,14 @@ impl Parser {
     }
 
     pub(super) fn advance(&mut self) -> &Token {
-        let tok = &self.tokens[self.pos];
+        let tok = match self.tokens.get(self.pos) {
+            Some(t) => t,
+            None => return self.tokens.last().expect("Parser always has tokens"),
+        };
         if !matches!(tok.kind, TokenKind::Eof) {
             self.pos += 1;
         }
-        &self.tokens[self.pos.saturating_sub(1)]
+        self.tokens.get(self.pos.saturating_sub(1)).unwrap_or(tok)
     }
 
     pub(super) fn is_at_end(&self) -> bool {
@@ -631,12 +642,7 @@ impl Parser {
         let tok = self.advance().clone();
         if matches!(tok.kind, TokenKind::Ellipsis) {
             let commitment = self.commitment()?;
-            return Ok(Atom::Ident {
-                value: Ident {
-                    name: "...".into(),
-                    commitment,
-                },
-            });
+            return Ok(Atom::Ellipsis { commitment });
         }
         if let Some(kw) = tok.kind.as_keyword_str() {
             let commitment = self.commitment()?;
@@ -825,6 +831,9 @@ impl Parser {
             Atom::Number { value: n } => Ok(SimpleValue::Number { value: n.clone() }),
             Atom::List { items } => Ok(SimpleValue::List {
                 items: items.clone(),
+            }),
+            Atom::Ellipsis { commitment } => Ok(SimpleValue::Placeholder {
+                commitment: *commitment,
             }),
             Atom::Symbol { value } => Err(ParseError::unexpected_token(
                 value.clone(),

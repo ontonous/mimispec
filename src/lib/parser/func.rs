@@ -28,6 +28,18 @@ impl Parser {
         self.skip_newlines();
         if self.check(&TokenKind::Ellipsis) {
             self.advance();
+            if !self.line_will_end() {
+                let (found, line, col) = match self.peek() {
+                    Some(t) => (t.kind.to_string(), t.line, t.col),
+                    None => ("EOF".into(), 0, 0),
+                };
+                return Err(ParseError::unexpected_token(
+                    found,
+                    "end of line after `...`".into(),
+                    line,
+                    col,
+                ));
+            }
             return Ok(FuncDef {
                 name,
                 desc: None,
@@ -138,7 +150,7 @@ impl Parser {
                         self.pos = save;
                         self.emit_error(e);
                         let before = self.pos;
-                        self.synchronize_past_nested_block();
+                        self.synchronize_to_next_item_in_block();
                         if self.pos == before && !self.is_at_end() {
                             self.advance();
                         }

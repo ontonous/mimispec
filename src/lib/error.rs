@@ -1,4 +1,47 @@
+use std::path::PathBuf;
+
 use crate::ast::File;
+
+/// Cross-file resolution error.
+#[derive(Debug, Clone)]
+pub enum ResolveError {
+    /// Circular import detected.
+    ImportCycle { chain: Vec<PathBuf> },
+    /// File not found on disk.
+    FileNotFound { path: PathBuf },
+    /// File could not be read.
+    IoError { path: PathBuf, message: String },
+    /// File was parsed but with errors; partial AST available.
+    ParseFailed {
+        path: PathBuf,
+        errors: Vec<ParseError>,
+    },
+}
+
+impl std::fmt::Display for ResolveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ResolveError::ImportCycle { chain } => {
+                let paths: Vec<_> = chain.iter().map(|p| p.display().to_string()).collect();
+                write!(f, "import cycle detected: {}", paths.join(" → "))
+            }
+            ResolveError::FileNotFound { path } => {
+                write!(f, "file not found: {}", path.display())
+            }
+            ResolveError::IoError { path, message } => {
+                write!(f, "I/O error reading {}: {}", path.display(), message)
+            }
+            ResolveError::ParseFailed { path, errors } => {
+                write!(
+                    f,
+                    "parse errors in {}: {} error(s)",
+                    path.display(),
+                    errors.len()
+                )
+            }
+        }
+    }
+}
 
 /// Structured error code for categorizing and deduplicating parse errors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

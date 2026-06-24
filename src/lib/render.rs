@@ -260,7 +260,7 @@ impl Renderer {
         self.push(" ");
         self.push(&render_ident(&flow.name));
         self.push(":");
-        if flow.entries.is_empty() && flow.rules.is_empty() && flow.desc.is_none() {
+        if flow.entries.is_empty() && flow.rules.is_empty() {
             self.push(" ...");
             self.newline();
         } else {
@@ -799,6 +799,11 @@ fn render_atom(atom: &Atom) -> String {
                 .join(", ");
             format!("[{}]", inner)
         }
+        Atom::Ellipsis { commitment } => {
+            let mut s = String::from("...");
+            s.push_str(&commitment.to_string());
+            s
+        }
     }
 }
 
@@ -815,6 +820,11 @@ fn render_simple_value(value: &SimpleValue) -> String {
                 .collect::<Vec<_>>()
                 .join(", ");
             format!("[{}]", inner)
+        }
+        SimpleValue::Placeholder { commitment } => {
+            let mut s = String::from("...");
+            s.push_str(&commitment.to_string());
+            s
         }
     }
 }
