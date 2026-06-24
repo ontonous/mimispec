@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import { spawn } from 'child_process';
 
 interface JsonError {
+    code: string;
     line: number;
     col: number;
     message: string;
@@ -100,7 +101,8 @@ async function validate(doc: vscode.TextDocument): Promise<void> {
         const line = Math.max(1, err.line) - 1;
         const col = Math.max(1, err.col) - 1;
         const r = new vscode.Range(line, col, line, col + 1);
-        const d = new vscode.Diagnostic(r, err.message, vscode.DiagnosticSeverity.Error);
+        const msg = err.code ? `[${err.code}] ${err.message}` : err.message;
+        const d = new vscode.Diagnostic(r, msg, vscode.DiagnosticSeverity.Error);
         d.source = LANG;
         return d;
     });

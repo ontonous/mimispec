@@ -9,10 +9,11 @@
 
 import type * as monaco from 'monaco-editor';
 
-export type BlockContext = 'module' | 'func' | 'type' | 'rule' | 'flow' | 'ui' | 'steps' | 'unknown';
+export type BlockContext = 'module' | 'func' | 'type' | 'rule' | 'flow' | 'ui' | 'steps' | 'root' | 'unknown';
 
 function inferBlockContext(line: string): BlockContext {
   if (line.match(/^\s*$/)) return 'unknown';
+  if (line.match(/^@import\b/)) return 'root';
   if (line.match(/^module\s+/)) return 'module';
   if (line.match(/^func\s+/)) return 'func';
   if (line.match(/^type\s+/)) return 'type';
@@ -21,26 +22,33 @@ function inferBlockContext(line: string): BlockContext {
   if (line.match(/^ui\s+/)) return 'ui';
   if (line.match(/^steps:/)) return 'steps';
   if (line.match(/^parasteps/)) return 'steps';
-  if (line.match(/^(if|else|for|while)\b/)) return 'steps';
-  if (line.match(/^(requires|ensures|desc|on|with|done|exit|error)\b/)) return 'steps';
+  if (line.match(/^(if|else|for|while|error)\b/)) return 'steps';
+  if (line.match(/^(requires|ensures|desc|on|with|done|exit)\b/)) return 'steps';
   return 'unknown';
 }
 
 function filterKeywordsByContext(keyword: string, context: BlockContext): boolean {
   const keywordsByContext: Record<BlockContext, string[]> = {
+    root: ['@import'],
     module: ['type', 'rule', 'flow', 'func', 'ui', 'module', 'desc', 'math', 'and', 'or', 'not', 'in', 'true', 'false'],
     func: ['requires', 'ensures', 'steps', 'parasteps', 'desc', 'math', 'if', 'else', 'for', 'while', 'error', 'on', 'done', 'exit', 'and', 'or', 'not', 'in', 'true', 'false'],
-    type: ['desc', 'math', 'and', 'or', 'not', 'in', 'true', 'false'],
+    type: ['desc', 'math', 'rule', 'and', 'or', 'not', 'in', 'true', 'false'],
     rule: ['desc', 'requires', 'and', 'or', 'not', 'in', 'true', 'false'],
     flow: ['desc', 'requires', 'and', 'or', 'not', 'in', 'true', 'false'],
     ui: ['stack', 'parallel', 'binds', 'desc', 'on', 'requires', 'with', 'and', 'or', 'not', 'in', 'true', 'false'],
     steps: ['desc', 'if', 'else', 'for', 'while', 'parasteps', 'error', 'on', 'done', 'exit', 'and', 'or', 'not', 'in', 'true', 'false'],
-    unknown: ['module', 'type', 'rule', 'flow', 'func', 'ui', 'steps', 'parasteps', 'requires', 'ensures', 'math', 'desc', 'if', 'else', 'for', 'while', 'on', 'with', 'error', 'done', 'exit', 'and', 'or', 'not', 'in', 'true', 'false', 'parallel', 'stack', 'binds', '@import'],
+    unknown: ['@import', 'module', 'type', 'rule', 'flow', 'func', 'ui', 'steps', 'parasteps', 'requires', 'ensures', 'math', 'desc', 'if', 'else', 'for', 'while', 'on', 'with', 'error', 'done', 'exit', 'and', 'or', 'not', 'in', 'true', 'false', 'parallel', 'stack', 'binds'],
   };
   return (keywordsByContext[context] || keywordsByContext.unknown).includes(keyword);
 }
 
 const SNIPPETS: Record<string, { label: string; detail: string; insertText: string; documentation: string }> = {
+  importDirective: {
+    label: '@import',
+    detail: '跨文件引用',
+    insertText: '@import "${1:path/to/file.mms}"',
+    documentation: '跨文件引用指令，位于所有 Fragment 之前',
+  },
   func: {
     label: 'func',
     detail: '函数模板',
@@ -169,10 +177,10 @@ export function createMimiSpecCompletionProvider(monacoInstance: typeof monaco):
       const suggestions: monaco.languages.CompletionItem[] = [];
 
       const allKeywords = [
-        'module', 'type', 'rule', 'flow', 'func', 'ui', 'steps', 'parasteps',
+        '@import', 'module', 'type', 'rule', 'flow', 'func', 'ui', 'steps', 'parasteps',
         'requires', 'ensures', 'math', 'desc', 'if', 'else', 'for', 'while', 'on', 'with',
         'error', 'done', 'exit', 'parallel', 'stack', 'binds',
-        'and', 'or', 'not', 'in', 'true', 'false', '@import',
+        'and', 'or', 'not', 'in', 'true', 'false',
       ];
 
       for (const keyword of allKeywords) {
@@ -191,9 +199,10 @@ export function createMimiSpecCompletionProvider(monacoInstance: typeof monaco):
       }
 
       for (const [key, snippet] of Object.entries(SNIPPETS)) {
+        if (context === 'root' && key !== 'importDirective') continue;
         if (context === 'steps' && !['if', 'for', 'while', 'on', 'steps', 'parasteps', 'desc'].includes(key)) continue;
         if (context === 'func' && !['func', 'funcSimple', 'requires', 'ensures', 'math', 'steps', 'desc'].includes(key)) continue;
-        if (context === 'type' && !['type', 'typeRecord', 'math'].includes(key)) continue;
+        if (context === 'type' && !['type', 'typeRecord', 'rule', 'math'].includes(key)) continue;
         if (context === 'flow' && !['flow', 'flowState', 'desc', 'requires'].includes(key)) continue;
         if (context === 'ui' && !['ui', 'stack', 'parallel', 'desc', 'on', 'requires'].includes(key)) continue;
         if (context === 'module' && !['module', 'type', 'typeRecord', 'rule', 'flow', 'func', 'ui', 'math'].includes(key)) continue;
@@ -249,10 +258,42 @@ export function createMimiSpecCompletionProvider(monacoInstance: typeof monaco):
       for (const stateName of userDefined.flowStates) {
         suggestions.push({
           label: stateName,
-          kind: monacoInstance.languages.CompletionItemKind.Enum,
+          kind: monacoInstance.languages.CompletionItemKind.EnumMember,
           insertText: stateName,
           documentation: `Flow 状态: ${stateName}`,
           detail: '[flow state]',
+          range: {
+            startLineNumber: position.lineNumber,
+            startColumn: position.column,
+            endLineNumber: position.lineNumber,
+            endColumn: position.column,
+          },
+        });
+      }
+
+      for (const uiName of userDefined.uiViews) {
+        suggestions.push({
+          label: uiName,
+          kind: monacoInstance.languages.CompletionItemKind.Interface,
+          insertText: uiName,
+          documentation: `UI 视图: ${uiName}`,
+          detail: '[ui]',
+          range: {
+            startLineNumber: position.lineNumber,
+            startColumn: position.column,
+            endLineNumber: position.lineNumber,
+            endColumn: position.column,
+          },
+        });
+      }
+
+      for (const flowName of userDefined.flowNames) {
+        suggestions.push({
+          label: flowName,
+          kind: monacoInstance.languages.CompletionItemKind.Module,
+          insertText: flowName,
+          documentation: `Flow 定义: ${flowName}`,
+          detail: '[flow]',
           range: {
             startLineNumber: position.lineNumber,
             startColumn: position.column,
@@ -269,14 +310,14 @@ export function createMimiSpecCompletionProvider(monacoInstance: typeof monaco):
   return provider;
 }
 
-function scanUserDefined(content: string): { types: string[]; functions: string[]; flowStates: string[] } {
+function scanUserDefined(content: string): { types: string[]; functions: string[]; flowStates: string[]; uiViews: string[]; flowNames: string[] } {
   const types: string[] = [];
   const functions: string[] = [];
   const flowStates: string[] = [];
+  const uiViews: string[] = [];
+  const flowNames: string[] = [];
 
-  const lines = content.split('\n');
-
-  for (const line of lines) {
+  for (const line of content.split('\n')) {
     const trimmed = line.trim();
 
     const typeMatch = trimmed.match(/^type\s+(\w+)\s*:/);
@@ -300,13 +341,30 @@ function scanUserDefined(content: string): { types: string[]; functions: string[
       continue;
     }
 
+    const flowMatch = trimmed.match(/^flow\s+(\w+)\s*:/);
+    if (flowMatch) {
+      flowNames.push(flowMatch[1]);
+      continue;
+    }
+
+    const uiMatch = trimmed.match(/^ui\s+(\w+)/);
+    if (uiMatch) {
+      uiViews.push(uiMatch[1]);
+      continue;
+    }
+
     const flowStateMatch = trimmed.match(/^(\w+)\s+>>>\s+(\w+)/);
-    if (flowStateMatch && !flowStates.includes(flowStateMatch[1])) {
-      flowStates.push(flowStateMatch[1]);
+    if (flowStateMatch) {
+      if (!flowStates.includes(flowStateMatch[1])) {
+        flowStates.push(flowStateMatch[1]);
+      }
+      if (!flowStates.includes(flowStateMatch[2])) {
+        flowStates.push(flowStateMatch[2]);
+      }
     }
   }
 
-  return { types, functions, flowStates };
+  return { types, functions, flowStates, uiViews, flowNames };
 }
 
 export function registerMimiSpecCompletionProvider(monacoInstance: typeof monaco, languageId: string): void {

@@ -12,45 +12,25 @@ export const mimispecLanguage = {
   tokenPostfix: '.mms',
 
   keywords: [
-    'module',
-    'type',
-    'rule',
-    'flow',
-    'func',
-    'ui',
-    'stack',
-    'parallel',
-    'binds',
-    'parasteps',
-    'requires',
-    'ensures',
-    'math',
-    'steps',
-    'if',
-    'else',
-    'for',
-    'while',
-    'desc',
-    'on',
-    'with',
-    'error',
-    'and',
-    'or',
-    'not',
-    'in',
-    'done',
-    'exit',
-    'true',
-    'false',
+    'module', 'type', 'rule', 'flow', 'func', 'ui',
+    'stack', 'parallel', 'binds',
+    'parasteps', 'requires', 'ensures', 'math', 'steps',
+    'if', 'else', 'for', 'while',
+    'desc', 'on', 'with', 'error',
+    'and', 'or', 'not', 'in', 'done', 'exit',
+    'true', 'false',
   ],
 
   operators: ['==', '!=', '<=', '>=', '<', '>', '=', '|', '+', '-', '*', '/', '**', '&', '^', '~', '<<', '>>', '>>>'],
 
-  symbols: /[=><!:|\?]+/,
+  symbols: /[=><!:|\?\$]+/,
 
   tokenizer: {
     root: [
-      [/@@import\b/, 'keyword'],
+      [/@import\b/, 'keyword'],
+
+      [/\.\.\./, 'annotation'],
+
       [
         /[a-zA-Z_]\w*/,
         {
@@ -60,16 +40,25 @@ export const mimispecLanguage = {
           },
         },
       ],
+
       [/"/, { token: 'string.quote', bracket: '@open', next: '@string' }],
+
       [/[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/, 'number'],
+
       [/[(),:\[\]]/, 'delimiter'],
-      [/\.\.\./, 'annotation'],
-      [/\./, 'operator'],
-      [/\$\$?/, 'capture'],
-      [/\?\?|\?/, 'question'],
+
+      [/\./, 'operator.dereference'],
+
+      [/>>>/, 'operator'],
+
+      [/\$\$?\??|\?\??/, 'annotation'],
+
       [/@/, 'operator'],
+
       [/[=<>!|+\-*\/&^~]+/, { cases: { '@operators': 'operator', '@default': 'delimiter' } }],
+
       [/\/\/.*$/, 'comment'],
+
       [/\s+/, 'white'],
     ],
 
@@ -102,10 +91,10 @@ export const mimispecLanguageConfiguration: monaco.languages.LanguageConfigurati
   ],
   indentationRules: {
     increaseIndentPattern:
-      /^\s*(module|type|flow|func|ui|steps|if|else|for|while|parasteps|math|requires|ensures|stack|parallel|on)\b.*:\s*$/,
-    decreaseIndentPattern: /^\s*else\b.*$/,
+      /^\s*(module|type|flow|func|ui|steps|if|else|for|while|parasteps|math|requires|ensures|stack|parallel|on|error)\b.*:\s*$/,
+    decreaseIndentPattern: /^\s*\}\s*$/,
   },
-  wordPattern: /([a-zA-Z_][a-zA-Z0-9_]*)|\?+|\$+/,
+  wordPattern: /([a-zA-Z_][a-zA-Z0-9_]*)|\?\??|\$\$?\??|\.\.\./,
 };
 
 /* ============================================================
