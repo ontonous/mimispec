@@ -6,7 +6,9 @@
 **一门高信息密度的意图描述语言，专为人-AI 协作设计**
 
 [![CI](https://github.com/ontonous/mimispec/actions/workflows/ci.yml/badge.svg)](https://github.com/ontonous/mimispec/actions/workflows/ci.yml)
-[![Crates.io](https://img.shields.io/badge/crates.io-0.1.0-orange)](https://crates.io/crates/mimispec)
+[![Crates.io](https://img.shields.io/crates/v/mimispec)](https://crates.io/crates/mimispec)
+[![Downloads](https://img.shields.io/crates/d/mimispec)](https://crates.io/crates/mimispec)
+[![docs.rs](https://img.shields.io/docsrs/mimispec)](https://docs.rs/mimispec)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-2021-blueviolet)](https://www.rust-lang.org)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](CONTRIBUTING.md)
@@ -62,9 +64,16 @@ module$ Shop:
 
 ## 🚀 Quick Start / 快速开始
 
-### Install
+### Install / 安装
 
 ```bash
+# From crates.io (CLI tool)
+cargo install mimispec
+
+# Or as a library
+cargo add mimispec
+
+# Or build from source
 git clone https://github.com/ontonous/mimispec.git
 cd mimispec
 cargo build --release
@@ -85,7 +94,7 @@ mimispec *.mms --json                     # 多文件 / multiple files
 
 ```toml
 [dependencies]
-mimispec = { git = "https://github.com/ontonous/mimispec" }
+mimispec = "0.1"
 ```
 
 ```rust
@@ -235,7 +244,7 @@ A: Yes. MimiSpec is a fully self-contained specification language. AI tooling is
 A: `.mms` (MimiSpec) is the **intent design layer** — progressive, human-readable, fragment-friendly. `.mimi` (Mimi) is the **production compile target** — contract-verified, LLVM-compiled, with structured concurrency and linear capabilities.
 
 **Q: Is this ready for production?**  
-A: The parser (v0.1) is fully functional with 77 unit tests passing, error recovery, and complete AST rendering. Production tooling (cross-file linking, LSP, Mimi compilation) is on the roadmap.
+A: The parser (v0.1) is fully functional — published on [crates.io](https://crates.io/crates/mimispec) with 77 unit tests passing, error recovery, and complete AST rendering. CLI binary installable via `cargo install mimispec`. Production tooling (cross-file linking, LSP, Mimi compilation) is on the roadmap.
 
 **Q: How do I contribute?**  
 A: See [CONTRIBUTING.md](CONTRIBUTING.md). All contributions — code, docs, issues — are welcome.

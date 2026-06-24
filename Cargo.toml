@@ -9,7 +9,7 @@ keywords = ["intent", "specification", "language", "parser", "ai"]
 categories = ["parser-implementations", "development-tools"]
 homepage = "https://github.com/ontonous/mimispec"
 repository = "https://github.com/ontonous/mimispec"
-documentation = "https://github.com/ontonous/mimispec#readme"
+documentation = "https://docs.rs/mimispec"
 readme = "README.md"
 exclude = ["AGENTS.md", "mimispec-parser-mms/"]
 

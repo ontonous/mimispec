@@ -959,6 +959,10 @@ module OrderService:
 8. **always validate**：生成后用 `mimispec` CLI 验证每个文件。
 
 ```bash
+# Option 1: install from crates.io
+cargo install mimispec && mimispec ../project-mms/*.mms
+
+# Option 2: build from source
 cd mimispec && cargo build --release
 ./target/release/mimispec ../project-mms/*.mms
 ```
