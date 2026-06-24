@@ -1,27 +1,23 @@
 ---
-name: 功能请求
-about: 为 MimiSpec 语言或解析器提出新功能
+name: Feature Request / 功能请求
+about: Suggest an idea for MimiSpec / 为 MimiSpec 提出建议
 title: "[Feature] "
 labels: enhancement
 assignees: ""
 ---
 
-## 问题描述
+## Problem / 问题描述
 
-这个功能解决了什么问题？请描述使用场景。
+<!-- Is your feature request related to a problem? Please describe. -->
 
-## 建议方案
+## Solution / 解决方案
 
-你期望的解决方案是什么？
+<!-- Describe the solution you'd like -->
 
-```mms
-# 如果有的话，请给出语法示例
-```
+## Alternatives / 替代方案
 
-## 替代方案
+<!-- Describe alternatives you've considered -->
 
-你考虑过其他方案吗？
+## Additional context / 补充信息
 
-## 补充说明
-
-任何其他上下文或参考。
+<!-- Any additional context, examples, or screenshots -->

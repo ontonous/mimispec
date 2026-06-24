@@ -1,40 +1,33 @@
 ---
-name: Bug 报告
-about: 报告解析器或 CLI 的一个 bug
+name: Bug Report / Bug 报告
+about: Report a bug to help us improve / 报告 bug 帮助我们改进
 title: "[Bug] "
 labels: bug
 assignees: ""
 ---
 
-## 描述
+## Description / 描述
 
-请简要描述这个 bug 是什么。
+<!-- A clear and concise description of the bug -->
 
-## 复现步骤
+## Reproduction / 重现步骤
 
-```mms
-# 在此粘贴可复现的 .mms 源码
+```mimispec
+<!-- Minimal .mms source that triggers the bug -->
 ```
 
-```bash
-# 运行命令
-mimispec file.mms --ast
-```
+**Command / 命令**: `mimispec ...`
 
-## 期望行为
+**Expected behavior / 期望行为**:
 
-你期望发生什么？
+**Actual behavior / 实际行为**:
 
-## 实际行为
+## Environment / 环境
 
-实际发生了什么？（请粘贴完整错误输出）
+- MimiSpec version: [e.g. 0.1.0]
+- Rust version: `rustc --version`
+- OS: [e.g. Ubuntu 22.04]
 
-## 环境
+## Additional context / 补充信息
 
-- OS: [e.g. Linux, macOS]
-- mimispec 版本: `cargo run -- --version`
-- Rust 版本: `rustc --version`
-
-## 补充说明
-
-任何其他上下文。
+<!-- Any additional information, screenshots, etc. -->

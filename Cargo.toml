@@ -2,11 +2,16 @@
 name = "mimispec"
 version = "0.1.0"
 edition = "2021"
-authors = ["ontonous"]
+authors = ["ontonous <ontonous@gmail.com>"]
 license = "Apache-2.0"
-homepage = "https://github.com/ontos-hpc/mimispec"
-repository = "https://github.com/ontos-hpc/mimispec"
-documentation = "https://github.com/ontos-hpc/mimispec#readme"
+description = "A high-density intent description language for human-AI collaboration"
+keywords = ["intent", "specification", "language", "parser", "ai"]
+categories = ["parser-implementations", "development-tools", "language-design"]
+homepage = "https://github.com/ontonous/mimispec"
+repository = "https://github.com/ontonous/mimispec"
+documentation = "https://github.com/ontonous/mimispec#readme"
+readme = "README.md"
+exclude = ["AGENTS.md", "mimispec-parser-mms/"]
 
 [lib]
 name = "mimispec"

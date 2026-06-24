@@ -1,23 +1,24 @@
-## 描述
+## Description / 描述
 
-请简要描述此 PR 的内容和动机。
+<!-- Brief description of the changes / 变更的简短描述 -->
 
-## 类型
+## Type of Change / 变更类型
 
-- [ ] 新功能（feat）
-- [ ] Bug 修复（fix）
-- [ ] 重构（refactor）
-- [ ] 文档（docs）
-- [ ] 测试（test）
-- [ ] 构建/CI（chore）
+- [ ] feat: New feature / 新功能
+- [ ] fix: Bug fix / Bug 修复
+- [ ] refactor: Code refactor / 重构
+- [ ] docs: Documentation / 文档
+- [ ] test: Test changes / 测试
+- [ ] chore: Maintenance / 维护
 
-## 检查清单
+## Checklist / 检查清单
 
-- [ ] `cargo clippy` 零警告
-- [ ] `cargo test --lib` 全部通过
-- [ ] 涉及语法变更时已更新 `docs/specification.md`
-- [ ] 涉及公共 API 变更时已更新 CHANGELOG
+- [ ] `cargo clippy` passes with zero warnings / 零警告
+- [ ] `cargo test --lib` passes / 单元测试通过
+- [ ] `cargo test` passes / 全量测试通过
+- [ ] New tests added for bug fixes or features / 新功能/修复有测试覆盖
+- [ ] Documentation updated if needed / 相关文档已更新
 
-## 相关 Issue
+## Related Issues / 相关 Issue
 
-Closes #
+<!-- Closes #... -->
