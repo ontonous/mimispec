@@ -59,6 +59,7 @@ impl Parser {
 
         self.skip_newlines();
         self.expect(TokenKind::Indent, "indented block")?;
+        self.enter_block()?;
 
         let mut desc = None;
         let mut math = None;
@@ -72,8 +73,21 @@ impl Parser {
             }
 
             if self.check(&TokenKind::Rule) {
-                while self.check(&TokenKind::Rule) {
-                    pending_field_rules.push(self.parse_rule_def()?);
+                let mut had_error = false;
+                while self.check(&TokenKind::Rule) && !had_error {
+                    match self.parse_rule_def() {
+                        Ok(rule) => pending_field_rules.push(rule),
+                        Err(e) => {
+                            self.emit_error(e);
+                            had_error = true;
+                        }
+                    }
+                }
+                if had_error {
+                    self.synchronize_to_next_item_in_block();
+                    if self.check(&TokenKind::Dedent) || self.is_at_end() {
+                        break;
+                    }
                 }
                 continue;
             }
@@ -107,6 +121,7 @@ impl Parser {
         if self.check(&TokenKind::Dedent) {
             self.advance();
         }
+        self.leave_block();
 
         Ok(TypeDef {
             name,

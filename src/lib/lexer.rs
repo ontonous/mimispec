@@ -301,7 +301,7 @@ impl<'a> Lexer<'a> {
                     }
                     Some('\n') => {
                         self.bump(); // empty line
-                        self.blank_line_count = self.blank_line_count.saturating_add(1);
+                        self.blank_line_count = self.blank_line_count.saturating_add(1).min(100);
                         continue;
                     }
                     Some('/') if self.peek_second() == Some('/') => {

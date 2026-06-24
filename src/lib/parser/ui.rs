@@ -40,6 +40,7 @@ impl Parser {
     fn parse_ui_root(&mut self) -> Result<UiNode, ParseError> {
         self.skip_newlines();
         self.expect(TokenKind::Indent, "indented block")?;
+        self.enter_block()?;
         self.skip_newlines();
         let node = match self.peek_kind() {
             Some(TokenKind::Stack) => self.parse_stack_node(),
@@ -60,6 +61,7 @@ impl Parser {
         if self.check(&TokenKind::Dedent) {
             self.advance();
         }
+        self.leave_block();
         Ok(node)
     }
 

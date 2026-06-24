@@ -17,7 +17,10 @@ pub struct Parser {
     pub(super) pos: usize,
     pub(super) pending_rules: Vec<RuleDef>,
     pub(super) errors: Vec<ParseError>,
+    block_depth: u32,
 }
+
+const MAX_BLOCK_DEPTH: u32 = 256;
 
 #[derive(Clone, Copy)]
 pub(super) enum BinOp {
@@ -45,7 +48,25 @@ impl Parser {
             pos: 0,
             pending_rules: Vec::new(),
             errors: Vec::new(),
+            block_depth: 0,
         }
+    }
+
+    pub(super) fn enter_block(&mut self) -> Result<(), ParseError> {
+        if self.block_depth > MAX_BLOCK_DEPTH {
+            let (line, col) = self.current_pos();
+            return Err(ParseError::internal(
+                "block nesting too deep".into(),
+                line,
+                col,
+            ));
+        }
+        self.block_depth += 1;
+        Ok(())
+    }
+
+    pub(super) fn leave_block(&mut self) {
+        self.block_depth = self.block_depth.saturating_sub(1);
     }
 
     pub(super) fn emit_error(&mut self, err: ParseError) {
@@ -459,6 +480,7 @@ impl Parser {
     ) -> Result<Vec<T>, ParseError> {
         self.skip_newlines();
         self.expect(TokenKind::Indent, "indented block")?;
+        self.enter_block()?;
         let mut items = Vec::new();
         loop {
             self.skip_newlines();
@@ -479,6 +501,7 @@ impl Parser {
         if self.check(&TokenKind::Dedent) {
             self.advance();
         }
+        self.leave_block();
         Ok(items)
     }
 

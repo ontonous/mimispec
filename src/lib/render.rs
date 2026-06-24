@@ -260,7 +260,7 @@ impl Renderer {
         self.push(" ");
         self.push(&render_ident(&flow.name));
         self.push(":");
-        if flow.entries.is_empty() {
+        if flow.entries.is_empty() && flow.rules.is_empty() && flow.desc.is_none() {
             self.push(" ...");
             self.newline();
         } else {
@@ -586,7 +586,7 @@ impl Renderer {
             }
             _ => false,
         };
-        if ui.binds.is_none() && root_is_empty {
+        if root_is_empty {
             self.push(" ...");
             self.newline();
         } else {

@@ -46,6 +46,7 @@ impl Parser {
             });
         }
         self.expect(TokenKind::Indent, "indented block")?;
+        self.enter_block()?;
 
         let mut desc = None;
         let mut rules = Vec::new();
@@ -66,7 +67,7 @@ impl Parser {
                 self.advance();
                 continue;
             }
-            while self.check(&TokenKind::Rule) {
+            if self.check(&TokenKind::Rule) {
                 let rule_errors = self.consume_pending_rules();
                 for e in rule_errors {
                     self.emit_error(e);
@@ -75,7 +76,7 @@ impl Parser {
                 rules.extend(collected);
                 let newline_count = self.skip_newlines_and_count();
                 if newline_count < 3 {
-                    break;
+                    continue;
                 }
             }
             self.skip_newlines();
@@ -151,6 +152,7 @@ impl Parser {
         if self.check(&TokenKind::Dedent) {
             self.advance();
         }
+        self.leave_block();
 
         Ok(FuncDef {
             name,
