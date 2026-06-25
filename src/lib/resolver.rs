@@ -123,27 +123,38 @@ impl Resolver {
     }
 
     fn canonicalize(&mut self, path: &Path) -> Option<PathBuf> {
-        if path.is_absolute() {
-            if path.exists() {
-                path.canonicalize().ok()
-            } else {
-                self.errors
-                    .push((path.to_path_buf(), ResolveError::FileNotFound { path: path.to_path_buf() }));
-                None
-            }
+        let candidate = if path.is_absolute() {
+            path.to_path_buf()
         } else {
-            let candidate = self.root_dir.join(path);
-            if candidate.exists() {
-                candidate.canonicalize().ok()
-            } else {
-                self.errors.push((
-                    path.to_path_buf(),
-                    ResolveError::FileNotFound {
-                        path: candidate,
-                    },
-                ));
-                None
-            }
+            self.root_dir.join(path)
+        };
+        let canonical = candidate.canonicalize().ok().or_else(|| {
+            self.errors.push((
+                path.to_path_buf(),
+                ResolveError::FileNotFound {
+                    path: candidate,
+                },
+            ));
+            None
+        })?;
+
+        // Path traversal guard: resolved path must be under the root directory.
+        let root = self.root_dir.canonicalize().ok()?;
+        if !canonical.starts_with(&root) {
+            self.errors.push((
+                path.to_path_buf(),
+                ResolveError::IoError {
+                    path: canonical,
+                    message: format!(
+                        "import path '{}' resolves outside root directory '{}'",
+                        path.display(),
+                        root.display(),
+                    ),
+                },
+            ));
+            return None;
         }
+
+        Some(canonical)
     }
 }

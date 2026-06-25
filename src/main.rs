@@ -251,7 +251,9 @@ fn run_parse(
         };
         println!(
             "{}",
-            serde_json::to_string_pretty(&output).unwrap_or_default()
+            serde_json::to_string_pretty(&output).unwrap_or_else(|e| {
+                format!("{{\"error\": \"JSON serialization failed: {}\"}}", e)
+            })
         );
     }
 

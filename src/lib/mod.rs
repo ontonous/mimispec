@@ -192,7 +192,7 @@ pub fn parse_file(path: &Path) -> ParseFileResult {
 /// Useful for IDE scenarios where the same file is parsed repeatedly.
 /// Uses a content hash of the source as the cache key for space efficiency.
 pub struct IncrementalCache {
-    cache: HashMap<u64, ParseResult>,
+    cache: HashMap<u64, (String, ParseResult)>,
 }
 
 impl Default for IncrementalCache {
@@ -212,11 +212,13 @@ impl IncrementalCache {
     /// The returned `ParseResult` is a clone of the cached entry.
     pub fn parse(&mut self, source: &str) -> ParseResult {
         let key = hash_source(source);
-        if let Some(cached) = self.cache.get(&key) {
-            return cached.clone();
+        if let Some((cached_source, cached_result)) = self.cache.get(&key) {
+            if cached_source == source {
+                return cached_result.clone();
+            }
         }
         let result = parse(source);
-        self.cache.insert(key, result.clone());
+        self.cache.insert(key, (source.to_string(), result.clone()));
         result
     }
 
@@ -1496,6 +1498,14 @@ mod v0_2_tests {
     use crate::symbol::SymbolTable;
     use std::fs;
     use std::path::Path;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEST_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    fn unique_temp_dir(prefix: &str) -> std::path::PathBuf {
+        let id = TEST_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!("mimispec_test_{}_{}", prefix, id))
+    }
 
     fn create_temp_mms(dir: &Path, name: &str, content: &str) -> std::path::PathBuf {
         let path = dir.join(name);
@@ -1593,7 +1603,7 @@ func F:
 
     #[test]
     fn cross_file_roundtrip() {
-        let dir = std::env::temp_dir().join("mimispec_test_cross_file");
+        let dir = unique_temp_dir("cross_file_roundtrip");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
 
@@ -1632,7 +1642,7 @@ module Shop:
 
     #[test]
     fn cross_file_cycle_detection() {
-        let dir = std::env::temp_dir().join("mimispec_test_cycle");
+        let dir = unique_temp_dir("cycle");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
 
@@ -1651,7 +1661,7 @@ module Shop:
 
     #[test]
     fn symbol_table_conflict_detection() {
-        let dir = std::env::temp_dir().join("mimispec_test_symbols");
+        let dir = unique_temp_dir("symbols");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
 

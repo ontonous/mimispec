@@ -1,7 +1,7 @@
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 /// 意图后缀：附加在关键字、标识符或字符串上，表示作者对该节点的锁定与不确定程度。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
 #[non_exhaustive]
 pub enum Commitment {
     #[serde(rename = "none")]
@@ -85,7 +85,7 @@ impl std::fmt::Display for Commitment {
 }
 
 /// 带模糊后缀的标识符（如 `desc?`、`Order?`）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Ident {
     pub name: String,
     #[serde(default)]
@@ -93,7 +93,7 @@ pub struct Ident {
 }
 
 /// 带模糊后缀的字符串字面量（如 `"..."?`）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct FString {
     pub value: String,
     #[serde(default)]
@@ -101,7 +101,7 @@ pub struct FString {
 }
 
 /// 源文件根节点（v0.3: fragments 而非 modules，含 imports）。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct File {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub imports: Vec<String>,
@@ -111,7 +111,7 @@ pub struct File {
 }
 
 /// 顶层 Fragment（v0.3 新架构）。任何 Fragment 都可以作为合法顶层存在。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind")]
 #[non_exhaustive]
 pub enum Fragment {
@@ -150,7 +150,7 @@ pub enum Fragment {
 }
 
 /// 模块或子模块。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Module {
     pub name: Ident,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -165,7 +165,7 @@ pub struct Module {
     pub keyword_commitment: Commitment,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct TypeDef {
     pub name: Ident,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -179,7 +179,7 @@ pub struct TypeDef {
     pub keyword_commitment: Commitment,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind")]
 #[non_exhaustive]
 pub enum TypeBody {
@@ -187,7 +187,7 @@ pub enum TypeBody {
     Record { fields: Vec<Field> },
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Field {
     pub name: Ident,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -195,14 +195,14 @@ pub struct Field {
     pub type_hint: Vec<Atom>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct RuleDef {
     pub desc: Desc,
     #[serde(default)]
     pub keyword_commitment: Commitment,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct FlowDef {
     pub name: Ident,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -212,7 +212,7 @@ pub struct FlowDef {
     pub keyword_commitment: Commitment,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct FlowEntry {
     pub state: Ident,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -220,7 +220,7 @@ pub struct FlowEntry {
     pub arms: Vec<FlowArm>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct FlowArm {
     pub to: Ident,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -235,7 +235,7 @@ pub struct FlowArm {
     pub requires_keyword_commitment: Commitment,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct FuncDef {
     pub name: Ident,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -264,14 +264,14 @@ pub struct FuncDef {
     pub steps_keyword_commitment: Commitment,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Param {
     pub name: Ident,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub type_hint: Vec<Atom>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Capability {
     pub name: Ident,
     #[serde(default)]
@@ -279,7 +279,7 @@ pub struct Capability {
 }
 
 /// `requires` / `ensures` 条件：结构化表达式或自然语言字符串。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind")]
 #[non_exhaustive]
 pub enum Condition {
@@ -288,7 +288,7 @@ pub enum Condition {
 }
 
 /// 简单表达式 AST（支持比较、逻辑连接）。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind")]
 #[non_exhaustive]
 pub enum Expr {
@@ -412,14 +412,14 @@ pub enum Expr {
 }
 
 /// math: 块，包含一组数学语句（定义、约束或推导）。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct MathBlock {
     pub statements: Vec<MathStatement>,
     #[serde(default)]
     pub keyword_commitment: Commitment,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind")]
 #[non_exhaustive]
 pub enum MathStatement {
@@ -429,7 +429,7 @@ pub enum MathStatement {
     Expr { expr: Expr },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[non_exhaustive]
 pub enum CompareOp {
     Eq,
@@ -441,7 +441,7 @@ pub enum CompareOp {
 }
 
 /// 步骤：动作、控制流、错误处理等。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind")]
 #[non_exhaustive]
 pub enum Step {
@@ -456,7 +456,7 @@ pub enum Step {
     Placeholder { keyword_commitment: Commitment }, // v0.3 新增：... 占位符
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ActionStep {
     #[serde(default)]
     pub label: Vec<Atom>,
@@ -470,7 +470,7 @@ pub struct ActionStep {
 
 /// 赋值步骤：target = simple_value。
 /// `=` 只能出现在动作行，右侧必须是简单值（枚举值、字段值、字面量、列表字面量）。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct AssignStep {
     pub target: Expr,
     pub value: SimpleValue,
@@ -483,7 +483,7 @@ pub struct AssignStep {
 }
 
 /// 赋值右侧允许的简单值。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind")]
 #[non_exhaustive]
 pub enum SimpleValue {
@@ -509,7 +509,7 @@ pub enum SimpleValue {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct IfStep {
     pub cond: Condition,
     pub then_branch: Vec<Step>,
@@ -521,7 +521,7 @@ pub struct IfStep {
     pub else_keyword_commitment: Commitment,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ForStep {
     pub var: Ident,
     pub iterable: Vec<Atom>,
@@ -530,7 +530,7 @@ pub struct ForStep {
     pub keyword_commitment: Commitment,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct WhileStep {
     pub cond: Condition,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -540,7 +540,7 @@ pub struct WhileStep {
     pub keyword_commitment: Commitment,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ParastepsStep {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<FString>,
@@ -549,7 +549,7 @@ pub struct ParastepsStep {
     pub keyword_commitment: Commitment,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ErrorStep {
     pub message: FString,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -558,7 +558,7 @@ pub struct ErrorStep {
     pub keyword_commitment: Commitment,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct OnBlock {
     pub condition: Vec<Atom>,
     pub steps: Vec<Step>,
@@ -566,13 +566,13 @@ pub struct OnBlock {
     pub keyword_commitment: Commitment,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ToTarget {
     pub target: Ident,
 }
 
 /// `desc` 独立语义：关键字位置 `?` 表示存在性不确定；字符串位置 `?` 表示内容不确定。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Desc {
     #[serde(default)]
     pub need_commitment: Commitment,
@@ -580,7 +580,7 @@ pub struct Desc {
 }
 
 /// 原始词法单元，用于保留 AI/人类书写的自由动作标签或类型提示。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind")]
 #[non_exhaustive]
 pub enum Atom {
@@ -594,7 +594,7 @@ pub enum Atom {
 
 // ── UI 块 ──────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct UiDef {
     pub name: Ident,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -606,7 +606,7 @@ pub struct UiDef {
     pub keyword_commitment: Commitment,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind")]
 #[non_exhaustive]
 pub enum UiNode {
@@ -616,7 +616,7 @@ pub enum UiNode {
     Error { error: UiErrorNode },
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct UiErrorNode {
     pub message: FString,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -625,7 +625,7 @@ pub struct UiErrorNode {
     pub keyword_commitment: Commitment,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct StackNode {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<FString>,
@@ -634,7 +634,7 @@ pub struct StackNode {
     pub keyword_commitment: Commitment,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct UiLeaf {
     pub content: FString,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -651,13 +651,13 @@ pub struct UiLeaf {
     pub on: Option<OnBinding>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct OnBinding {
     pub event_name: EventName,
     pub action: ActionExpr,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind")]
 #[non_exhaustive]
 pub enum EventName {
@@ -665,12 +665,12 @@ pub enum EventName {
     Natural { text: FString },
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ActionExpr {
     pub actions: Vec<Action>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind")]
 #[non_exhaustive]
 pub enum Action {

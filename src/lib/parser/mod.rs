@@ -186,7 +186,9 @@ impl Parser {
             }
             tok
         } else {
-            self.tokens.last().expect("Parser always has tokens")
+            self.tokens.last().unwrap_or_else(|| {
+                panic!("Parser: advance() called on empty token list — this is a bug")
+            })
         }
     }
 
@@ -756,7 +758,14 @@ impl Parser {
             ));
         }
         let mut iter = atoms.iter();
-        let first = iter.next().unwrap();
+        let Some(first) = iter.next() else {
+            return Err(ParseError::unexpected_token(
+                "empty".into(),
+                "assignment target".into(),
+                line,
+                col,
+            ));
+        };
         let Atom::Ident { value: first_ident } = first else {
             return Err(ParseError::unexpected_token(
                 "non-identifier target".into(),

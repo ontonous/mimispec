@@ -197,10 +197,10 @@ impl Parser {
             }
             Some(TokenKind::Number(_)) => {
                 let n = self.advance();
-                let value = match &n.kind {
-                    TokenKind::Number(s) => s.clone(),
-                    _ => unreachable!(),
+                let TokenKind::Number(value) = &n.kind else {
+                    unreachable!("advance() guaranteed Number token");
                 };
+                let value = value.clone();
                 Ok(Expr::Number { value })
             }
             Some(TokenKind::True) => {
