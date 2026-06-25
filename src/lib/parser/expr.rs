@@ -68,6 +68,10 @@ impl Parser {
                 BinOp::Or => self.expect_kw(TokenKind::Or, "`or`")?,
                 BinOp::And => self.expect_kw(TokenKind::And, "`and`")?,
                 BinOp::In => self.expect_kw(TokenKind::In, "`in`")?,
+                BinOp::Cmp(_) => {
+                    self.advance();
+                    Commitment::None
+                }
                 _ => {
                     self.advance();
                     Commitment::None
@@ -95,6 +99,7 @@ impl Parser {
                     left: Box::new(lhs),
                     op,
                     right: Box::new(rhs),
+                    keyword_commitment,
                 },
                 BinOp::BitOr => Expr::BitOr {
                     left: Box::new(lhs),
@@ -164,17 +169,19 @@ impl Parser {
             });
         }
         if self.check(&TokenKind::Minus) {
-            self.advance();
+            let keyword_commitment = self.expect_kw(TokenKind::Minus, "`-`")?;
             let inner = self.parse_expr_depth(12, depth + 1)?;
             return Ok(Expr::Neg {
                 expr: Box::new(inner),
+                keyword_commitment,
             });
         }
         if self.check(&TokenKind::BitNot) {
-            self.advance();
+            let keyword_commitment = self.expect_kw(TokenKind::BitNot, "`~`")?;
             let inner = self.parse_expr_depth(12, depth + 1)?;
             return Ok(Expr::BitNot {
                 expr: Box::new(inner),
+                keyword_commitment,
             });
         }
         match self.peek_kind() {

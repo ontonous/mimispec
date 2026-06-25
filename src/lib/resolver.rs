@@ -8,7 +8,7 @@ use crate::cache::ImportCache;
 use crate::error::ResolveError;
 use crate::parse;
 
-const MAX_RESOLVE_DEPTH: u32 = 256;
+const MAX_RESOLVE_DEPTH: u32 = 32;
 
 pub struct Resolver {
     cache: ImportCache,

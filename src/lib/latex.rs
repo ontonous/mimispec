@@ -95,8 +95,8 @@ fn render_expr_prec(expr: &Expr, parent_prec: u8) -> String {
         Expr::Placeholder { .. } => "\\ldots".into(),
 
         Expr::Not { expr, .. } => format!("\\neg {}", render_expr_prec(expr, my_prec)),
-        Expr::Neg { expr } => format!("-{}", render_expr_prec(expr, my_prec)),
-        Expr::BitNot { expr } => format!("\\sim {}", render_expr_prec(expr, my_prec)),
+        Expr::Neg { expr, .. } => format!("-{}", render_expr_prec(expr, my_prec)),
+        Expr::BitNot { expr, .. } => format!("\\sim {}", render_expr_prec(expr, my_prec)),
 
         Expr::And { left, right, .. } => format!(
             "{} \\land {}",
@@ -113,7 +113,7 @@ fn render_expr_prec(expr: &Expr, parent_prec: u8) -> String {
             render_expr_prec(left, my_prec),
             render_expr_prec(right, my_prec)
         ),
-        Expr::Compare { left, op, right } => {
+        Expr::Compare { left, op, right, .. } => {
             let op_s = match op {
                 CompareOp::Eq => "=",
                 CompareOp::Ne => "\\neq",

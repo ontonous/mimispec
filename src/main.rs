@@ -340,16 +340,28 @@ fn run_build(dir: &Path) {
 
 fn find_mms_files(dir: &Path) -> Result<Vec<PathBuf>, String> {
     let mut files = Vec::new();
+    let mut visited = std::collections::HashSet::new();
     if !dir.is_dir() {
         return Err(format!("{} is not a directory", dir.display()));
     }
 
-    walk_dir(dir, &mut files).map_err(|e| e.to_string())?;
+    walk_dir(dir, &mut files, &mut visited).map_err(|e| e.to_string())?;
     files.sort();
     Ok(files)
 }
 
-fn walk_dir(dir: &Path, files: &mut Vec<PathBuf>) -> std::io::Result<()> {
+fn walk_dir(
+    dir: &Path,
+    files: &mut Vec<PathBuf>,
+    visited: &mut std::collections::HashSet<std::path::PathBuf>,
+) -> std::io::Result<()> {
+    let canonical = match dir.canonicalize() {
+        Ok(p) => p,
+        Err(_) => return Ok(()),
+    };
+    if !visited.insert(canonical) {
+        return Ok(());
+    }
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
@@ -357,7 +369,7 @@ fn walk_dir(dir: &Path, files: &mut Vec<PathBuf>) -> std::io::Result<()> {
             // Skip hidden directories and common non-source dirs
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
             if !name.starts_with('.') && name != "target" && name != "node_modules" {
-                walk_dir(&path, files)?;
+                walk_dir(&path, files, visited)?;
             }
         } else if path.extension().and_then(|e| e.to_str()) == Some("mms") {
             files.push(path);

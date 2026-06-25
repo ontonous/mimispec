@@ -27,6 +27,7 @@ pub fn render_file(file: &File) -> String {
 struct Renderer {
     buf: String,
     indent: usize,
+    indent_cache: String,
     pending_blank: bool,
 }
 
@@ -35,6 +36,7 @@ impl Renderer {
         Self {
             buf: String::new(),
             indent: 0,
+            indent_cache: String::new(),
             pending_blank: false,
         }
     }
@@ -51,12 +53,13 @@ impl Renderer {
         self.buf.push('\n');
     }
 
-    fn indent(&self) -> String {
-        "    ".repeat(self.indent)
+    fn write_indent(&mut self) {
+        self.buf.push_str(&self.indent_cache);
     }
 
-    fn write_indent(&mut self) {
-        self.push(&self.indent());
+    fn set_indent(&mut self, level: usize) {
+        self.indent = level;
+        self.indent_cache = "    ".repeat(level);
     }
 
     fn blank_line(&mut self) {
@@ -151,7 +154,7 @@ impl Renderer {
         self.push(&render_ident(&module.name));
         self.push(":");
         self.newline();
-        self.indent += 1;
+        self.set_indent(self.indent + 1);
 
         if let Some(desc) = &module.desc {
             self.render_desc(desc);
@@ -173,7 +176,7 @@ impl Renderer {
             }
             self.render_fragment(item);
         }
-        self.indent -= 1;
+        self.set_indent(self.indent - 1);
     }
 
     fn render_type_def(&mut self, typedef: &TypeDef) {
@@ -189,14 +192,14 @@ impl Renderer {
                 if variants.len() > 4 {
                     // Multi-line enum (方案A): one variant per line with leading `|`
                     self.newline();
-                    self.indent += 1;
+                    self.set_indent(self.indent + 1);
                     for v in variants {
                         self.write_indent();
                         self.push("| ");
                         self.push(&render_ident(v));
                         self.newline();
                     }
-                    self.indent -= 1;
+                    self.set_indent(self.indent - 1);
                 } else {
                     // Inline enum: A | B | C
                     for (i, v) in variants.iter().enumerate() {
@@ -220,7 +223,7 @@ impl Renderer {
                     self.newline();
                 } else {
                     self.newline();
-                    self.indent += 1;
+                    self.set_indent(self.indent + 1);
                     for rule in &typedef.rules {
                         self.render_rule(rule);
                     }
@@ -233,7 +236,7 @@ impl Renderer {
                     if let Some(math) = &typedef.math {
                         self.render_math_block(math);
                     }
-                    self.indent -= 1;
+                    self.set_indent(self.indent - 1);
                 }
             }
         }
@@ -265,14 +268,14 @@ impl Renderer {
             self.newline();
         } else {
             self.newline();
-            self.indent += 1;
+            self.set_indent(self.indent + 1);
             for rule in &flow.rules {
                 self.render_rule(rule);
             }
             for entry in &flow.entries {
                 self.render_flow_entry(entry);
             }
-            self.indent -= 1;
+            self.set_indent(self.indent - 1);
         }
     }
 
@@ -300,11 +303,11 @@ impl Renderer {
         } else {
             self.push(":");
             self.newline();
-            self.indent += 1;
+            self.set_indent(self.indent + 1);
             for arm in &entry.arms {
                 self.render_flow_arm(arm);
             }
-            self.indent -= 1;
+            self.set_indent(self.indent - 1);
         }
     }
 
@@ -357,7 +360,7 @@ impl Renderer {
             return;
         }
         self.newline();
-        self.indent += 1;
+        self.set_indent(self.indent + 1);
 
         if let Some(desc) = &func.desc {
             self.render_desc(desc);
@@ -392,7 +395,7 @@ impl Renderer {
             self.newline();
             self.render_steps_block(&func.steps);
         }
-        self.indent -= 1;
+        self.set_indent(self.indent - 1);
     }
 
     fn render_desc(&mut self, desc: &Desc) {
@@ -410,21 +413,21 @@ impl Renderer {
         self.push(&math.keyword_commitment.to_string());
         self.push(":");
         self.newline();
-        self.indent += 1;
+        self.set_indent(self.indent + 1);
         for stmt in &math.statements {
             self.write_indent();
             self.push(&render_math_statement(stmt));
             self.newline();
         }
-        self.indent -= 1;
+        self.set_indent(self.indent - 1);
     }
 
     fn render_steps_block(&mut self, steps: &[Step]) {
-        self.indent += 1;
+        self.set_indent(self.indent + 1);
         for step in steps {
             self.render_step(step);
         }
-        self.indent -= 1;
+        self.set_indent(self.indent - 1);
     }
 
     fn render_step(&mut self, step: &Step) {
@@ -586,14 +589,17 @@ impl Renderer {
             }
             _ => false,
         };
-        if root_is_empty {
+        if root_is_empty && ui.rules.is_empty() {
             self.push(" ...");
             self.newline();
         } else {
             self.newline();
-            self.indent += 1;
+            self.set_indent(self.indent + 1);
+            for rule in &ui.rules {
+                self.render_rule(rule);
+            }
             self.render_ui_node(&ui.root);
-            self.indent -= 1;
+            self.set_indent(self.indent - 1);
         }
     }
 
@@ -617,11 +623,11 @@ impl Renderer {
         }
         self.push(":");
         self.newline();
-        self.indent += 1;
+        self.set_indent(self.indent + 1);
         for child in &stack.children {
             self.render_ui_node(child);
         }
-        self.indent -= 1;
+        self.set_indent(self.indent - 1);
     }
 
     fn render_ui_leaf(&mut self, leaf: &UiLeaf) {
@@ -632,11 +638,15 @@ impl Renderer {
             self.push(&render_desc_inline(desc));
         }
         if let Some(req) = &leaf.requires {
-            self.push(" requires ");
+            self.push(" requires");
+            self.push(&leaf.requires_keyword_commitment.to_string());
+            self.push(" ");
             self.push(&render_condition(req));
         }
         if !leaf.with.is_empty() {
-            self.push(" with ");
+            self.push(" with");
+            self.push(&leaf.with_keyword_commitment.to_string());
+            self.push(" ");
             self.push(&render_capabilities(&leaf.with));
         }
         if let Some(on) = &leaf.on {
@@ -881,8 +891,22 @@ fn render_expr_prec(expr: &Expr, parent_prec: u8) -> String {
             s
         }
         Expr::Not { expr, .. } => format!("not {}", render_expr_prec(expr, my_prec)),
-        Expr::Neg { expr } => format!("-{}", render_expr_prec(expr, my_prec)),
-        Expr::BitNot { expr } => format!("~{}", render_expr_prec(expr, my_prec)),
+        Expr::Neg {
+            expr,
+            keyword_commitment,
+        } => format!(
+            "-{}{}",
+            render_expr_prec(expr, my_prec),
+            keyword_commitment
+        ),
+        Expr::BitNot {
+            expr,
+            keyword_commitment,
+        } => format!(
+            "~{}{}",
+            render_expr_prec(expr, my_prec),
+            keyword_commitment
+        ),
         Expr::And { left, right, .. } => {
             format!(
                 "{} and {}",
@@ -902,7 +926,12 @@ fn render_expr_prec(expr: &Expr, parent_prec: u8) -> String {
             render_expr_prec(left, my_prec),
             render_expr_prec(right, my_prec)
         ),
-        Expr::Compare { left, op, right } => {
+        Expr::Compare {
+            left,
+            op,
+            right,
+            keyword_commitment,
+        } => {
             let op_s = match op {
                 CompareOp::Eq => "==",
                 CompareOp::Ne => "!=",
@@ -912,9 +941,10 @@ fn render_expr_prec(expr: &Expr, parent_prec: u8) -> String {
                 CompareOp::Ge => ">=",
             };
             format!(
-                "{} {} {}",
+                "{} {}{} {}",
                 render_expr_prec(left, my_prec),
                 op_s,
+                keyword_commitment,
                 render_expr_prec(right, my_prec)
             )
         }

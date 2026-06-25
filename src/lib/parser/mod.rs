@@ -248,7 +248,7 @@ impl Parser {
                 let t = self.peek().unwrap();
                 return Err(ParseError::unexpected_token(
                     t.kind.to_string(),
-                    "锁后缀必须在不确定后缀之前（`?$` / `?$$` 等顺序非法）".into(),
+                    "lock suffix must come before uncertainty suffix (`?$` / `?$$` ordering is invalid)".into(),
                     t.line,
                     t.col,
                 ));
@@ -261,7 +261,7 @@ impl Parser {
                 let t = self.peek().unwrap();
                 return Err(ParseError::unexpected_token(
                     t.kind.to_string(),
-                    "锁后缀必须在不确定后缀之前（`?$` / `?$$` 等顺序非法）".into(),
+                    "lock suffix must come before uncertainty suffix (`?$` / `?$$` ordering is invalid)".into(),
                     t.line,
                     t.col,
                 ));
@@ -521,8 +521,9 @@ impl Parser {
     pub(super) fn consume_pending_rules(&mut self) -> Vec<ParseError> {
         let mut errors = Vec::new();
         loop {
-            let mut lookahead = self.pos;
+            // Count newlines between the current position and the next non-newline token
             let mut newline_count = 0;
+            let mut lookahead = self.pos;
             while matches!(
                 self.tokens.get(lookahead).map(|t| &t.kind),
                 Some(TokenKind::Newline)
@@ -534,8 +535,10 @@ impl Parser {
             if newline_count >= 3 {
                 break;
             }
-            if newline_count > 0 {
-                self.pos = lookahead;
+
+            // Advance past newlines (not a direct assignment — uses normal advance path)
+            for _ in 0..newline_count {
+                self.advance();
             }
 
             if !self.check(&TokenKind::Rule) {
@@ -572,7 +575,7 @@ impl Parser {
             Fragment::TypeDef { typedef } => typedef.rules.extend(rules),
             Fragment::Flow { flow } => flow.rules.extend(rules),
             Fragment::Func { func } => func.rules.extend(rules),
-            Fragment::Ui { .. } => { /* UiDef 暂不支持 rules */ }
+            Fragment::Ui { ui } => ui.rules.extend(rules),
             _ => { /* Steps/Expr/UiNode/Desc/Placeholder 不支持 rule 附着 */ }
         }
     }

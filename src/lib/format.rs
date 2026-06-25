@@ -66,22 +66,26 @@ fn source_line_at(source: &str, line: usize, col: usize) -> (String, usize) {
         return (String::new(), col);
     }
 
-    let mut current_line = 1usize;
+    // Precompute line start offsets for O(1) lookup
+    let mut line_starts = Vec::new();
+    line_starts.push(0);
     for (idx, ch) in source.char_indices() {
-        if current_line == line {
-            let line_start = idx;
-            let rest = &source[line_start..];
-            let line_end = rest.find('\n').map(|n| line_start + n).unwrap_or(source.len());
-            let src_line = &source[line_start..line_end];
-            // Clamp col to line length (1-indexed)
-            let effective_col = col.min(src_line.chars().count()).max(1);
-            return (src_line.to_string(), effective_col);
-        }
         if ch == '\n' {
-            current_line += 1;
+            line_starts.push(idx + 1);
         }
     }
-    (String::new(), col)
+
+    if line > line_starts.len() {
+        return (String::new(), col);
+    }
+
+    let line_start = line_starts[line - 1];
+    let rest = &source[line_start..];
+    let line_end = rest.find('\n').map(|n| line_start + n).unwrap_or(source.len());
+    let src_line = &source[line_start..line_end];
+    // Clamp col to line length (1-indexed)
+    let effective_col = col.min(src_line.chars().count()).max(1);
+    (src_line.to_string(), effective_col)
 }
 
 #[cfg(test)]

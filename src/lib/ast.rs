@@ -48,22 +48,22 @@ impl Commitment {
         )
     }
 
-    /// 是否带不确定标记（作用于节点本身或锁定本身）。
+    /// 是否带不确定标记（单 `?`，作用于节点本身或锁定本身）。
     pub fn has_question(&self) -> bool {
         matches!(
             self,
-            Self::Question | Self::LockedQuestion | Self::StrongLockedQuestion
-        )
-    }
-
-    /// 是否带完全委托标记。
-    pub fn has_question_question(&self) -> bool {
-        matches!(
-            self,
-            Self::QuestionQuestion
+            Self::Question
+                | Self::LockedQuestion
+                | Self::StrongLockedQuestion
+                | Self::QuestionQuestion
                 | Self::LockedQuestionQuestion
                 | Self::StrongLockedQuestionQuestion
         )
+    }
+
+    /// 是否带完全委托标记（`??`，不含锁定成分）。
+    pub fn has_question_question(&self) -> bool {
+        matches!(self, Self::QuestionQuestion)
     }
 }
 
@@ -200,8 +200,6 @@ pub struct RuleDef {
     pub desc: Desc,
     #[serde(default)]
     pub keyword_commitment: Commitment,
-    #[serde(default)]
-    pub line: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -338,9 +336,13 @@ pub enum Expr {
         left: Box<Expr>,
         op: CompareOp,
         right: Box<Expr>,
+        #[serde(default)]
+        keyword_commitment: Commitment,
     },
     Neg {
         expr: Box<Expr>,
+        #[serde(default)]
+        keyword_commitment: Commitment,
     },
     Add {
         left: Box<Expr>,
@@ -380,6 +382,8 @@ pub enum Expr {
     },
     BitNot {
         expr: Box<Expr>,
+        #[serde(default)]
+        keyword_commitment: Commitment,
     },
     Shl {
         left: Box<Expr>,
@@ -595,6 +599,8 @@ pub struct UiDef {
     pub name: Ident,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub binds: Option<Ident>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rules: Vec<RuleDef>,
     pub root: UiNode,
     #[serde(default)]
     pub keyword_commitment: Commitment,
@@ -636,7 +642,11 @@ pub struct UiLeaf {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requires: Option<Condition>,
     #[serde(default)]
+    pub requires_keyword_commitment: Commitment,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub with: Vec<Capability>,
+    #[serde(default)]
+    pub with_keyword_commitment: Commitment,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on: Option<OnBinding>,
 }

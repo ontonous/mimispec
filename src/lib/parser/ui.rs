@@ -18,6 +18,7 @@ impl Parser {
             return Ok(UiDef {
                 name,
                 binds,
+                rules: vec![],
                 root: UiNode::Stack {
                     stack: StackNode {
                         description: None,
@@ -32,6 +33,7 @@ impl Parser {
         Ok(UiDef {
             name,
             binds,
+            rules: vec![],
             root,
             keyword_commitment,
         })
@@ -144,7 +146,9 @@ impl Parser {
         let content = self.fuzzy_string()?;
         let mut desc = None;
         let mut requires = None;
+        let mut requires_kw_commitment = Commitment::None;
         let mut with = Vec::new();
+        let mut with_kw_commitment = Commitment::None;
         let mut on_binding = None;
 
         loop {
@@ -154,10 +158,10 @@ impl Parser {
             if self.matches(&TokenKind::Desc) {
                 desc = Some(self.parse_desc_after_keyword()?);
             } else if self.check(&TokenKind::Requires) {
-                let _requires_kw_commitment = self.expect_kw(TokenKind::Requires, "`requires`")?;
+                requires_kw_commitment = self.expect_kw(TokenKind::Requires, "`requires`")?;
                 requires = Some(self.parse_condition()?);
             } else if self.check(&TokenKind::With) {
-                let _with_kw_commitment = self.expect_kw(TokenKind::With, "`with`")?;
+                with_kw_commitment = self.expect_kw(TokenKind::With, "`with`")?;
                 with = self.parse_capabilities()?;
             } else if self.check(&TokenKind::On) {
                 on_binding = Some(self.parse_on_binding()?);
@@ -171,7 +175,9 @@ impl Parser {
                 content,
                 desc,
                 requires,
+                requires_keyword_commitment: requires_kw_commitment,
                 with,
+                with_keyword_commitment: with_kw_commitment,
                 on: on_binding,
             },
         })
