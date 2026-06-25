@@ -2,8 +2,7 @@
 
 # 🧩 MimiSpec
 
-**A high-density intent description language for human-AI collaboration**  
-**一门高信息密度的意图描述语言，专为人-AI 协作设计**
+**A high-density intent description language for human-AI collaboration**
 
 [![CI](https://github.com/ontonous/mimispec/actions/workflows/ci.yml/badge.svg)](https://github.com/ontonous/mimispec/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/mimispec)](https://crates.io/crates/mimispec)
@@ -19,22 +18,20 @@
 
 MimiSpec embeds a **progressive workflow** — from uncertainty to structured to fully locked — directly into the syntax. Every phase of design is a **syntactically valid `.mms` file**.
 
-MimiSpec 将"不确定 → 部分结构化 → 完整锁定"的渐进式工作流嵌入语法本身。每个阶段都是**语法合法的 `.mms` 文件**。
-
 ```
 // Phase 1: Raw intent, fully delegated to AI
 module?? Shop:
     type?? Order:
-        desc?? "订单数据，包含买家、商品、金额和状态"
+        desc?? "Order data, including buyer, product, amount, and status"
     func?? Pay:
         steps:
-            desc?? "检查余额"
-            desc?? "扣款"
+            desc?? "Check balance"
+            desc?? "Deduct payment"
 
 // Phase 5: Fully locked architecture
 module$ Shop:
     type$ OrderStatus: New | Pending | Paid | Shipped | Cancelled
-    rule$ "支付必须幂等"
+    rule$ "Payment must be idempotent"
     func$ Pay(order, amount):
         requires$: order.status == Pending
         ensures$: order.status == Paid
@@ -46,7 +43,7 @@ module$ Shop:
 
 ---
 
-## ✨ Core Features / 核心特性
+## ✨ Core Features
 
 | Feature | Description |
 |---------|-------------|
@@ -62,9 +59,9 @@ module$ Shop:
 
 ---
 
-## 🚀 Quick Start / 快速开始
+## 🚀 Quick Start
 
-### Install / 安装
+### Install
 
 ```bash
 # From crates.io (CLI tool)
@@ -79,18 +76,18 @@ cd mimispec
 cargo build --release
 ```
 
-### CLI Usage / 命令行使用
+### CLI Usage
 
 ```bash
-mimispec path/to/file.mms --ast           # 输出 AST / dump AST
-mimispec path/to/file.mms --json          # 输出 JSON / JSON output (for IDE)
-mimispec path/to/file.mms --render        # 渲染回源码 / render back to source
-mimispec path/to/file.mms --latex         # 渲染数学为 LaTeX / render math to LaTeX
-echo "func Hello: steps:\n    say hi" | mimispec - --ast  # 标准输入 / stdin
-mimispec *.mms --json                     # 多文件 / multiple files
+mimispec path/to/file.mms --ast           # dump AST
+mimispec path/to/file.mms --json          # JSON output (for IDE)
+mimispec path/to/file.mms --render        # render back to source
+mimispec path/to/file.mms --latex         # render math to LaTeX
+echo "func Hello: steps:\n    say hi" | mimispec - --ast  # stdin
+mimispec *.mms --json                     # multiple files
 ```
 
-### Library Usage / 作为库使用
+### Library Usage
 
 ```toml
 [dependencies]
@@ -120,7 +117,7 @@ if result.errors.is_empty() {
 
 ---
 
-## 📖 Syntax Preview / 语法预览
+## 📖 Syntax Preview
 
 | Structure | Example |
 |-----------|---------|
@@ -128,72 +125,72 @@ if result.errors.is_empty() {
 | Record | `type Order:\n    id: u64\n    status: Status` |
 | Function | `func Pay(order):\n    requires: order.status == Pending\n    steps:\n        charge payment >>> done` |
 | State Machine | `flow Lifecycle:\n    New >>> Pending:\n    Pending >>> Paid:\n    Paid >>> Done:` |
-| UI View | `ui Panel binds Model:\n    stack:\n        "标题" on tap: DoSomething()` |
-| Parallel | `parasteps "加载数据":\n    load users\n    load orders` |
+| UI View | `ui Panel binds Model:\n    stack:\n        "Title" on tap: DoSomething()` |
+| Parallel | `parasteps "Load Data":\n    load users\n    load orders` |
 | Math | `math:\n    scores = Q @ K.T / sqrt(d_k)` |
 
 Full syntax: [docs/specification.md](docs/specification.md)
 
 ---
 
-## 📁 Project Structure / 项目结构
+## 📁 Project Structure
 
 ```
 mimispec/
 ├── src/
-│   ├── main.rs                  # CLI 入口 / CLI entry
+│   ├── main.rs                  # CLI entry
 │   └── lib/
-│       ├── mod.rs               # 公共 API / public API (parse, tokenize)
-│       ├── ast.rs               # AST 类型定义 / AST types
-│       ├── error.rs             # 错误系统 / error system
-│       ├── lexer.rs             # 词法分析器 / lexer (indent/dedent)
+│       ├── mod.rs               # Public API (parse, tokenize)
+│       ├── ast.rs               # AST types
+│       ├── error.rs             # Error system
+│       ├── lexer.rs             # Lexer (indent/dedent)
 │       ├── parser/
-│       │   ├── mod.rs           # 解析器核心 / parser core
-│       │   ├── expr.rs          # Pratt 表达式解析器 / Pratt expression parser
-│       │   ├── fragment.rs      # Fragment 分发 / fragment dispatch
-│       │   ├── func.rs          # FuncDef 解析 / FuncDef parser
-│       │   ├── module.rs        # Module 解析 / Module parser
-│       │   ├── flow.rs          # FlowDef 解析 / FlowDef parser
-│       │   ├── step.rs          # Step 解析 / Step parser
-│       │   ├── type.rs          # TypeDef 解析 / TypeDef parser
-│       │   ├── ui.rs            # UiDef 解析 / UiDef parser
-│       │   └── rule.rs          # RuleDef 解析 / RuleDef parser
-│       ├── render.rs            # AST → 源码渲染 / AST → source renderer
-│       ├── render_util.rs       # 表达式优先级工具 / expression precedence
-│       ├── format.rs            # 诊断格式化 / diagnostic formatter
-│       └── latex.rs             # LaTeX 数学渲染 / LaTeX math renderer
+│       │   ├── mod.rs           # Parser core
+│       │   ├── expr.rs          # Pratt expression parser
+│       │   ├── fragment.rs      # Fragment dispatch
+│       │   ├── func.rs          # FuncDef parser
+│       │   ├── module.rs        # Module parser
+│       │   ├── flow.rs          # FlowDef parser
+│       │   ├── step.rs          # Step parser
+│       │   ├── type.rs          # TypeDef parser
+│       │   ├── ui.rs            # UiDef parser
+│       │   └── rule.rs          # RuleDef parser
+│       ├── render.rs            # AST → source renderer
+│       ├── render_util.rs       # Expression precedence utils
+│       ├── format.rs            # Diagnostic formatter
+│       └── latex.rs             # LaTeX math renderer
 ├── docs/
-│   ├── specification.md         # 语法规范 / syntax specification
-│   ├── advanced-usage.md        # 高级用法 / advanced usage
-│   ├── version-management.md    # 版本管理 / version management
-│   └── stdlib-api.md            # 标准库参考 / stdlib API reference
-├── mimispec-parser-mms/         # 参考解析器 (MimiSpec 自身编写) / reference parser in MimiSpec
+│   ├── specification.md         # Syntax specification
+│   ├── advanced-usage.md        # Advanced usage
+│   ├── version-management.md    # Version management
+│   └── stdlib-api.md            # Stdlib API reference
+├── mimispec-parser-mms/         # Reference parser in MimiSpec
 ├── editors/
-│   ├── vscode/                  # VS Code 扩展 / VS Code extension
-│   └── monaco/                  # Monaco 参考集成 / Monaco reference integration
+│   ├── vscode/                  # VS Code extension
+│   └── monaco/                  # Monaco reference integration
 ├── CHANGELOG.md
 ├── CONTRIBUTING.md
 ├── SECURITY.md
-└── AGENTS.md                    # AI 代理协作指南 / AI agent guide
+└── AGENTS.md                    # AI agent guide
 ```
 
 ---
 
-## 📚 Documentation / 文档
+## 📚 Documentation
 
 | Document | Description |
 |----------|-------------|
-| [Syntax Specification](docs/specification.md) | Full language reference / 完整语言参考 (1329 lines) |
-| [Advanced Usage](docs/advanced-usage.md) | Modular design, contracts, Saga, ML specs / 模块化、契约设计、Saga、ML 规格 |
-| [Version Management](docs/version-management.md) | SemVer, branching model, CI/CD / 版本管理、分支模型、CI/CD |
-| [Stdlib API](docs/stdlib-api.md) | Mimi runtime 16-module reference / Mimi 运行时 16 模块参考 |
-| [Contribution Guide](CONTRIBUTING.md) | Dev environment & PR workflow / 开发环境与 PR 流程 |
-| [Code of Conduct](CODE_OF_CONDUCT.md) | Community guidelines / 社区行为准则 |
-| [Security Policy](SECURITY.md) | Vulnerability reporting / 安全漏洞报告 |
+| [Syntax Specification](docs/specification.md) | Full language reference (1329 lines) |
+| [Advanced Usage](docs/advanced-usage.md) | Modular design, contracts, Saga, ML specs |
+| [Version Management](docs/version-management.md) | SemVer, branching model, CI/CD |
+| [Stdlib API](docs/stdlib-api.md) | Mimi runtime 16-module reference |
+| [Contribution Guide](CONTRIBUTING.md) | Dev environment & PR workflow |
+| [Code of Conduct](CODE_OF_CONDUCT.md) | Community guidelines |
+| [Security Policy](SECURITY.md) | Vulnerability reporting |
 
 ---
 
-## 💻 Editor Support / 编辑器支持
+## 💻 Editor Support
 
 ### VS Code
 
@@ -218,21 +215,20 @@ See [editors/monaco/](editors/monaco/) for details.
 
 ---
 
-## 🎯 Design Philosophy / 设计哲学
+## 🎯 Design Philosophy
 
-> **From Scratch to Full** — 碎片是起点，聚合是过程，完整是结果。  
-> Fragments are the starting point, aggregation is the process, completeness is the result.
+> **From Scratch to Full** — Fragments are the starting point, aggregation is the process, completeness is the result.
 
-| Principle | 原则 |
-|-----------|------|
-| Write `desc "..."` when uncertain, AI fills the details | 不确定时写 `desc "..."`，AI 负责填充细节 |
-| Add `?` for ambiguity, `$` when locked | 模糊时加 `?`，锁定后加 `$` |
-| Every fragment is a valid `.mms` file | 碎片阶段就是一个合法的 `.mms` 文件 |
-| The parser never rejects for incompleteness | 解析器不因"不完整"而拒绝 |
+| Principle |
+|-----------|
+| Write `desc "..."` when uncertain, AI fills the details |
+| Add `?` for ambiguity, `$` when locked |
+| Every fragment is a valid `.mms` file |
+| The parser never rejects for incompleteness |
 
 ---
 
-## ❓ FAQ / 常见问题
+## ❓ FAQ
 
 **Q: How is MimiSpec different from TypeSpec / Smithy / OpenAPI?**  
 A: MimiSpec targets **human-AI collaboration**, not just API contracts. Its progressive precision model (`desc` → structured → locked) and Fragment architecture are designed for iterative design workflows with AI partners.
@@ -251,13 +247,13 @@ A: See [CONTRIBUTING.md](CONTRIBUTING.md). All contributions — code, docs, iss
 
 ---
 
-## 🔒 Security / 安全
+## 🔒 Security
 
 Please report security vulnerabilities to **ontonous@gmail.com**.  
 See [SECURITY.md](SECURITY.md) for details.
 
 ---
 
-## 📄 License / 许可证
+## 📄 License
 
 Apache 2.0 © 2026 ontonous. See [LICENSE](LICENSE).
