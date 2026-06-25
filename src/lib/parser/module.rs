@@ -74,11 +74,7 @@ impl Parser {
                     Err(e) => {
                         pending_item_rules.clear();
                         self.emit_error(e);
-                        let before = self.pos;
-                        self.synchronize_past_nested_block();
-                        if self.pos == before && !self.is_at_end() {
-                            self.advance();
-                        }
+                        self.try_sync(|p| p.synchronize_past_nested_block());
                         if self.check(&TokenKind::Dedent) || self.is_at_end() {
                             break;
                         }

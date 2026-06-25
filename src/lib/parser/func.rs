@@ -135,13 +135,13 @@ impl Parser {
                 let keyword_commitment = self.expect_kw(TokenKind::Math, "`math`")?;
                 self.expect(TokenKind::Colon, "`:`")?;
                 math = Some(MathBlock {
-                    statements: self.parse_block(|p| p.parse_math_statement())?,
+                    statements: self.parse_block(|p| p.parse_math_statement()),
                     keyword_commitment,
                 });
             } else if self.check(&TokenKind::Steps) {
                 steps_keyword_commitment = self.expect_kw(TokenKind::Steps, "`steps`")?;
                 self.expect(TokenKind::Colon, "`:`")?;
-                steps = self.parse_block(|p| p.parse_step())?;
+                steps = self.parse_block(|p| p.parse_step());
             } else {
                 let save = self.pos;
                 match self.parse_step() {
@@ -149,11 +149,7 @@ impl Parser {
                     Err(e) => {
                         self.pos = save;
                         self.emit_error(e);
-                        let before = self.pos;
-                        self.synchronize_to_next_item_in_block();
-                        if self.pos == before && !self.is_at_end() {
-                            self.advance();
-                        }
+                        self.try_sync(|p| p.synchronize_to_next_item_in_block());
                         if self.check(&TokenKind::Dedent) || self.is_at_end() {
                             break;
                         }

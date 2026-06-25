@@ -305,7 +305,7 @@ impl Parser {
     pub(super) fn parse_math_block(&mut self) -> Result<MathBlock, ParseError> {
         let keyword_commitment = self.expect_kw(TokenKind::Math, "`math`")?;
         self.expect(TokenKind::Colon, "`:`")?;
-        let statements = self.parse_block(|p| p.parse_math_statement())?;
+        let statements = self.parse_block(|p| p.parse_math_statement());
         Ok(MathBlock {
             statements,
             keyword_commitment,

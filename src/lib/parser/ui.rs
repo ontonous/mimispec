@@ -97,7 +97,7 @@ impl Parser {
             None
         };
         self.expect(TokenKind::Colon, "`:`")?;
-        let children = self.parse_block(|p| p.parse_ui_node())?;
+        let children = self.parse_block(|p| p.parse_ui_node());
         Ok(UiNode::Stack {
             stack: StackNode {
                 description,
@@ -115,7 +115,7 @@ impl Parser {
             None
         };
         self.expect(TokenKind::Colon, "`:`")?;
-        let children = self.parse_block(|p| p.parse_ui_node())?;
+        let children = self.parse_block(|p| p.parse_ui_node());
         Ok(UiNode::Parallel {
             parallel: StackNode {
                 description,

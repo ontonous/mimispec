@@ -63,6 +63,7 @@ impl Parser {
 
         let mut desc = None;
         let mut math = None;
+        let mut rules: Vec<RuleDef> = Vec::new();
         let mut fields = Vec::new();
         let mut pending_field_rules: Vec<RuleDef> = Vec::new();
 
@@ -76,7 +77,14 @@ impl Parser {
                 let mut had_error = false;
                 while self.check(&TokenKind::Rule) && !had_error {
                     match self.parse_rule_def() {
-                        Ok(rule) => pending_field_rules.push(rule),
+                        Ok(rule) => {
+                            let newline_count = self.skip_newlines_and_count();
+                            if newline_count >= 3 && fields.is_empty() {
+                                rules.push(rule);
+                            } else {
+                                pending_field_rules.push(rule);
+                            }
+                        }
                         Err(e) => {
                             self.emit_error(e);
                             had_error = true;
@@ -126,7 +134,7 @@ impl Parser {
         Ok(TypeDef {
             name,
             desc,
-            rules: Vec::new(),
+            rules,
             math,
             body: TypeBody::Record { fields },
             keyword_commitment,

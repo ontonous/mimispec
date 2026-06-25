@@ -19,7 +19,7 @@ impl Parser {
             });
         }
 
-        let entries = self.parse_block(|p| p.parse_flow_entry())?;
+        let entries = self.parse_block(|p| p.parse_flow_entry());
 
         Ok(FlowDef {
             name,
@@ -41,7 +41,7 @@ impl Parser {
             })
         } else {
             self.expect(TokenKind::Colon, "`:` or `to`")?;
-            let arms = self.parse_block(|p| p.parse_flow_arm_in_block())?;
+            let arms = self.parse_block(|p| p.parse_flow_arm_in_block());
             Ok(FlowEntry {
                 state,
                 rules: Vec::new(),

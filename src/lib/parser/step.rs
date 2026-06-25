@@ -31,14 +31,14 @@ impl Parser {
         let if_keyword_commitment = self.expect_kw(TokenKind::If, "`if`")?;
         let cond = self.parse_condition()?;
         self.expect(TokenKind::Colon, "`:`")?;
-        let then_branch = self.parse_block(|p| p.parse_step())?;
+        let then_branch = self.parse_block(|p| p.parse_step());
         let mut else_branch = None;
         let mut else_keyword_commitment = Commitment::None;
         self.skip_newlines();
         if self.check(&TokenKind::Else) {
             else_keyword_commitment = self.expect_kw(TokenKind::Else, "`else`")?;
             self.expect(TokenKind::Colon, "`:`")?;
-            else_branch = Some(self.parse_block(|p| p.parse_step())?);
+            else_branch = Some(self.parse_block(|p| p.parse_step()));
         }
         Ok(Step::If {
             step: IfStep {
@@ -62,7 +62,7 @@ impl Parser {
             TokenKind::Eof,
         ])?;
         self.expect(TokenKind::Colon, "`:`")?;
-        let body = self.parse_block(|p| p.parse_step())?;
+        let body = self.parse_block(|p| p.parse_step());
         Ok(Step::For {
             step: ForStep {
                 var,
@@ -82,7 +82,7 @@ impl Parser {
             None
         };
         self.expect(TokenKind::Colon, "`:`")?;
-        let body = self.parse_block(|p| p.parse_step())?;
+        let body = self.parse_block(|p| p.parse_step());
         Ok(Step::While {
             step: WhileStep {
                 cond,
@@ -101,7 +101,7 @@ impl Parser {
             None
         };
         self.expect(TokenKind::Colon, "`:`")?;
-        let steps = self.parse_block(|p| p.parse_step())?;
+        let steps = self.parse_block(|p| p.parse_step());
         Ok(Step::Parasteps {
             step: ParastepsStep {
                 description,
@@ -242,7 +242,7 @@ impl Parser {
             TokenKind::Eof,
         ])?;
         self.expect(TokenKind::Colon, "`:`")?;
-        let steps = self.parse_block(|p| p.parse_step())?;
+        let steps = self.parse_block(|p| p.parse_step());
         Ok(OnBlock {
             condition,
             steps,

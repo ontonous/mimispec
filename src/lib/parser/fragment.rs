@@ -62,7 +62,7 @@ impl Parser {
     fn parse_steps_fragment(&mut self) -> Result<Fragment, ParseError> {
         let keyword_commitment = self.expect_kw(TokenKind::Steps, "`steps`")?;
         self.expect(TokenKind::Colon, "`:`")?;
-        let steps = self.parse_block(|p| p.parse_step())?;
+        let steps = self.parse_block(|p| p.parse_step());
         Ok(Fragment::Steps {
             keyword_commitment,
             steps,

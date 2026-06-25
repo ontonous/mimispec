@@ -180,14 +180,14 @@ impl Parser {
     }
 
     pub(super) fn advance(&mut self) -> &Token {
-        let tok = match self.tokens.get(self.pos) {
-            Some(t) => t,
-            None => return self.tokens.last().expect("Parser always has tokens"),
-        };
-        if !matches!(tok.kind, TokenKind::Eof) {
-            self.pos += 1;
+        if let Some(tok) = self.tokens.get(self.pos) {
+            if !matches!(tok.kind, TokenKind::Eof) {
+                self.pos += 1;
+            }
+            tok
+        } else {
+            self.tokens.last().expect("Parser always has tokens")
         }
-        self.tokens.get(self.pos.saturating_sub(1)).unwrap_or(tok)
     }
 
     pub(super) fn is_at_end(&self) -> bool {
@@ -483,15 +483,29 @@ impl Parser {
         }
     }
 
+    /// Helper: run a sync function, and if the position didn't advance,
+    /// force-advance one token to avoid infinite loops.
+    pub(super) fn try_sync<F: FnOnce(&mut Self)>(&mut self, sync: F) {
+        let before = self.pos;
+        sync(self);
+        if self.pos == before && !self.is_at_end() {
+            self.advance();
+        }
+    }
+
     // ── block parsing ────────────────────────────────────────────────────────
 
     pub(super) fn parse_block<T>(
         &mut self,
         mut parse_item: impl FnMut(&mut Self) -> Result<T, ParseError>,
-    ) -> Result<Vec<T>, ParseError> {
+    ) -> Vec<T> {
         self.skip_newlines();
-        self.expect(TokenKind::Indent, "indented block")?;
-        self.enter_block()?;
+        if self.expect(TokenKind::Indent, "indented block").is_err() {
+            return Vec::new();
+        }
+        if self.enter_block().is_err() {
+            return Vec::new();
+        }
         let mut items = Vec::new();
         loop {
             self.skip_newlines();
@@ -513,7 +527,7 @@ impl Parser {
             self.advance();
         }
         self.leave_block();
-        Ok(items)
+        items
     }
 
     // ── rule management ──────────────────────────────────────────────────────

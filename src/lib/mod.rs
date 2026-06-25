@@ -153,13 +153,28 @@ pub fn parse_file(path: &Path) -> ParseFileResult {
         }
     }
 
-    let result = ParseResult {
-        file: file.as_ref().map(|f| ast::File::clone(f)).unwrap_or_else(|| ast::File {
-            imports: vec![],
-            rules: vec![],
-            fragments: vec![],
-        }),
-        errors: r_errors,
+    let result = if file.is_none() && r_errors.is_empty() {
+        // resolve() returned None but no parse errors — the failure is
+        // in resolve_errors (IoError, ImportCycle). Surface it in
+        // ParseResult.errors so callers checking result.errors see it.
+        let msg = resolve_errors.first().map(|(p, e)| format!("{}: {}", p.display(), e)).unwrap_or_else(|| "unknown resolve error".into());
+        ParseResult {
+            file: ast::File {
+                imports: vec![],
+                rules: vec![],
+                fragments: vec![],
+            },
+            errors: vec![error::ParseError::internal(msg, 0, 0)],
+        }
+    } else {
+        ParseResult {
+            file: file.as_ref().map(|f| ast::File::clone(f)).unwrap_or_else(|| ast::File {
+                imports: vec![],
+                rules: vec![],
+                fragments: vec![],
+            }),
+            errors: r_errors,
+        }
     };
     let files = resolver.take_files();
     (result, files, resolve_errors)
