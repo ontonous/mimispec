@@ -7,7 +7,7 @@
 [![CI](https://github.com/ontonous/mimispec/actions/workflows/ci.yml/badge.svg)](https://github.com/ontonous/mimispec/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/mimispec)](https://crates.io/crates/mimispec)
 [![Downloads](https://img.shields.io/crates/d/mimispec)](https://crates.io/crates/mimispec)
-[![docs.rs](https://img.shields.io/docsrs/mimispec)](https://docs.rs/mimispec)
+[![docs.rs](https://docs.rs/mimispec/badge.svg)](https://docs.rs/mimispec)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-2021-blueviolet)](https://www.rust-lang.org)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](CONTRIBUTING.md)
