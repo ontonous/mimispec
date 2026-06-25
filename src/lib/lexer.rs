@@ -1,5 +1,8 @@
 use crate::error::ParseError;
 
+const BLANK_LINE_CAP: u32 = 4;
+const TAB_WIDTH: usize = 4;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TokenKind {
     // Keywords
@@ -301,7 +304,7 @@ impl<'a> Lexer<'a> {
                     }
                     Some('\n') => {
                         self.bump(); // empty line
-                        self.blank_line_count = self.blank_line_count.saturating_add(1).min(100);
+                        self.blank_line_count = self.blank_line_count.saturating_add(1).min(BLANK_LINE_CAP);
                         continue;
                     }
                     Some('/') if self.peek_second() == Some('/') => {
@@ -562,7 +565,7 @@ impl<'a> Lexer<'a> {
                 count += 1;
                 self.bump();
             } else if c == '\t' {
-                count += 4;
+                count += TAB_WIDTH;
                 self.bump();
             } else {
                 break;

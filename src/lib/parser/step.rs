@@ -170,7 +170,7 @@ impl Parser {
                 None
             };
 
-        let to = if self.matches(&TokenKind::Arrow) {
+            let to = if self.matches(&TokenKind::Arrow) {
                 Some(ToTarget {
                     target: self.fuzzy_ident()?,
                 })

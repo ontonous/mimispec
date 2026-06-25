@@ -77,6 +77,7 @@ impl Parser {
             }
             if self.check(&TokenKind::Ellipsis) {
                 self.advance();
+                self.commitment()?;
                 continue;
             }
             if self.check(&TokenKind::Rule) {

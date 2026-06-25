@@ -328,10 +328,10 @@ impl Parser {
 
     pub(super) fn fuzzy_string(&mut self) -> Result<FString, ParseError> {
         let tok = self.expect_string()?;
-        let value = match &tok.kind {
-            TokenKind::String(s) => s.clone(),
-            _ => unreachable!(),
+        let TokenKind::String(value) = &tok.kind else {
+            unreachable!("expect_string() guaranteed String token")
         };
+        let value = value.clone();
         let commitment = self.commitment()?;
         Ok(FString { value, commitment })
     }
@@ -348,6 +348,19 @@ impl Parser {
         let mut count = 0;
         while self.check(&TokenKind::Newline) {
             self.advance();
+            count += 1;
+        }
+        count
+    }
+
+    pub(super) fn peek_newline_count(&self) -> usize {
+        let mut count = 0;
+        let mut lookahead = self.pos;
+        while matches!(
+            self.tokens.get(lookahead).map(|t| &t.kind),
+            Some(TokenKind::Newline)
+        ) {
+            lookahead += 1;
             count += 1;
         }
         count
@@ -535,22 +548,13 @@ impl Parser {
     pub(super) fn consume_pending_rules(&mut self) -> Vec<ParseError> {
         let mut errors = Vec::new();
         loop {
-            // Count newlines between the current position and the next non-newline token
-            let mut newline_count = 0;
-            let mut lookahead = self.pos;
-            while matches!(
-                self.tokens.get(lookahead).map(|t| &t.kind),
-                Some(TokenKind::Newline)
-            ) {
-                lookahead += 1;
-                newline_count += 1;
-            }
+            let newline_count = self.peek_newline_count();
 
             if newline_count >= 3 {
                 break;
             }
 
-            // Advance past newlines (not a direct assignment — uses normal advance path)
+            // Advance past newlines
             for _ in 0..newline_count {
                 self.advance();
             }

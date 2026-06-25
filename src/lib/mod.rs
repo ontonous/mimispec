@@ -12,6 +12,7 @@ pub mod resolver;
 pub mod symbol;
 
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -125,6 +126,12 @@ pub fn tokenize(source: &str) -> Result<Vec<lexer::Token>, error::ParseError> {
     Lexer::new(source).tokenize()
 }
 
+// Content hash for IncrementalCache keys.
+fn hash_source(source: &str) -> u64 {    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    source.hash(&mut hasher);
+    hasher.finish()
+}
+
 /// Parse a `.mms` file from disk and resolve its `@import` directives recursively.
 ///
 /// Uses a [`resolver::Resolver`] to handle cross-file resolution with cycle detection.
@@ -183,9 +190,9 @@ pub fn parse_file(path: &Path) -> ParseFileResult {
 /// Cache that avoids re-parsing unchanged sources.
 ///
 /// Useful for IDE scenarios where the same file is parsed repeatedly.
-/// Uses the full source text as the cache key for collision safety.
+/// Uses a content hash of the source as the cache key for space efficiency.
 pub struct IncrementalCache {
-    cache: HashMap<String, ParseResult>,
+    cache: HashMap<u64, ParseResult>,
 }
 
 impl Default for IncrementalCache {
@@ -204,11 +211,12 @@ impl IncrementalCache {
     /// Parse `source`, or return a cached result if the source text matches.
     /// The returned `ParseResult` is a clone of the cached entry.
     pub fn parse(&mut self, source: &str) -> ParseResult {
-        if let Some(cached) = self.cache.get(source) {
+        let key = hash_source(source);
+        if let Some(cached) = self.cache.get(&key) {
             return cached.clone();
         }
         let result = parse(source);
-        self.cache.insert(source.to_string(), result.clone());
+        self.cache.insert(key, result.clone());
         result
     }
 
@@ -1445,6 +1453,36 @@ flow Good: ...
             .fragments
             .iter()
             .any(|f| matches!(f, Fragment::Flow { flow } if flow.name.name == "Good")));
+    }
+
+    #[test]
+    fn render_atom_sequence_roundtrip() {
+        // Atom 序列空格启发式（needs_space_between）的往返测试。
+        // 涵盖标识符、符号、列表字面量的各种组合。
+        let cases = vec![
+            "Map[K, V]",
+            "List[Map[K, V]]",
+            "a, b, c",
+            "func(a, b) -> Result",
+            "x = y",
+            "type X: A | B | C",
+        ];
+        for src in cases {
+            let result = parse(src);
+            // 部分 case 可能不是合法顶层 fragment，但至少能产生 AST 且往返不 panic
+            let rendered = render_file(&result.file);
+            // 解析渲染结果：不应有新的错误
+            let reparsed = parse(&rendered);
+            if !result.errors.is_empty() {
+                // 输入本身有错误是预期的（如逗号在顶层无意义）
+                continue;
+            }
+            assert!(
+                reparsed.errors.is_empty(),
+                "round-trip failed for {src:?}:\nrendered:\n{rendered}\nerrors: {:?}",
+                reparsed.errors
+            );
+        }
     }
 }
 

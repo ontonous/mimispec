@@ -20,6 +20,46 @@ use crate::error::ParseError;
 ///                  ^^^
 /// ```
 pub fn format_diagnostic(err: &ParseError, source: &str) -> String {
+    err.format_with_source(source)
+}
+
+/// Precompute line start offsets for O(1) source line lookup.
+pub fn compute_line_starts(source: &str) -> Vec<usize> {
+    let mut line_starts = Vec::new();
+    line_starts.push(0);
+    for (idx, ch) in source.char_indices() {
+        if ch == '\n' {
+            line_starts.push(idx + 1);
+        }
+    }
+    line_starts
+}
+
+/// Return the source line (1-indexed) and the effective column for underlining.
+/// Falls back gracefully if the line or column is out of range.
+fn source_line_at(line_starts: &[usize], source: &str, line: usize, col: usize) -> (String, usize) {
+    if source.is_empty() || line == 0 || line > line_starts.len() {
+        return (String::new(), col);
+    }
+
+    let line_start = line_starts[line - 1];
+    let rest = &source[line_start..];
+    let line_end = rest.find('\n').map(|n| line_start + n).unwrap_or(source.len());
+    let src_line = &source[line_start..line_end];
+    let effective_col = col.min(src_line.chars().count()).max(1);
+    (src_line.to_string(), effective_col)
+}
+
+/// Computes line starts once and reuses for multiple errors.
+pub fn format_diagnostics(errors: &[ParseError], source: &str) -> Vec<String> {
+    let line_starts = compute_line_starts(source);
+    errors
+        .iter()
+        .map(|err| format_diagnostic_with_starts(err, source, &line_starts))
+        .collect()
+}
+
+pub(crate) fn format_diagnostic_with_starts(err: &ParseError, source: &str, line_starts: &[usize]) -> String {
     let mut buf = String::new();
 
     // Error header
@@ -43,11 +83,9 @@ pub fn format_diagnostic(err: &ParseError, source: &str) -> String {
     }
 
     // Source context
-    let (src_line, underline_col) = source_line_at(source, err.line, err.col);
+    let (src_line, underline_col) = source_line_at(line_starts, source, err.line, err.col);
     if !src_line.is_empty() {
         buf.push_str(&format!("  {:>4} │ {}\n", err.line, src_line));
-        // Build underline: spaces up to (underline_col - 1), then ^
-        // col is 1-indexed
         let pad = underline_col.saturating_sub(1);
         buf.push_str("        │ ");
         for _ in 0..pad {
@@ -57,35 +95,6 @@ pub fn format_diagnostic(err: &ParseError, source: &str) -> String {
     }
 
     buf
-}
-
-/// Return the source line (1-indexed) and the effective column for underlining.
-/// Falls back gracefully if the line or column is out of range.
-fn source_line_at(source: &str, line: usize, col: usize) -> (String, usize) {
-    if source.is_empty() || line == 0 {
-        return (String::new(), col);
-    }
-
-    // Precompute line start offsets for O(1) lookup
-    let mut line_starts = Vec::new();
-    line_starts.push(0);
-    for (idx, ch) in source.char_indices() {
-        if ch == '\n' {
-            line_starts.push(idx + 1);
-        }
-    }
-
-    if line > line_starts.len() {
-        return (String::new(), col);
-    }
-
-    let line_start = line_starts[line - 1];
-    let rest = &source[line_start..];
-    let line_end = rest.find('\n').map(|n| line_start + n).unwrap_or(source.len());
-    let src_line = &source[line_start..line_end];
-    // Clamp col to line length (1-indexed)
-    let effective_col = col.min(src_line.chars().count()).max(1);
-    (src_line.to_string(), effective_col)
 }
 
 #[cfg(test)]

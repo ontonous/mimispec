@@ -317,6 +317,17 @@ impl ParseError {
             suggestion: None,
         }
     }
+
+    /// Format this error with source-context display.
+    ///
+    /// Renders the error with the relevant source line and a caret underline
+    /// pointing at the error location. Line start offsets are computed once
+    /// per call (O(source_len)) — for bulk formatting of many errors, use
+    /// [`crate::format::format_diagnostics`] instead.
+    pub fn format_with_source(&self, source: &str) -> String {
+        let line_starts = crate::format::compute_line_starts(source);
+        crate::format::format_diagnostic_with_starts(self, source, &line_starts)
+    }
 }
 
 impl std::fmt::Display for ParseError {

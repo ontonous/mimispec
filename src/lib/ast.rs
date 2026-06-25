@@ -25,7 +25,6 @@ pub enum Commitment {
     StrongLockedQuestionQuestion,
 }
 
-#[allow(dead_code)]
 impl Commitment {
     /// 是否处于某种锁定状态（含锁定但存疑）。
     pub fn is_locked(&self) -> bool {
@@ -62,6 +61,7 @@ impl Commitment {
     }
 
     /// 是否带完全委托标记（`??`，不含锁定成分）。
+    #[allow(dead_code)]
     pub fn has_question_question(&self) -> bool {
         matches!(self, Self::QuestionQuestion)
     }

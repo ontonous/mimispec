@@ -345,37 +345,38 @@ fn find_mms_files(dir: &Path) -> Result<Vec<PathBuf>, String> {
         return Err(format!("{} is not a directory", dir.display()));
     }
 
-    walk_dir(dir, &mut files, &mut visited).map_err(|e| e.to_string())?;
-    files.sort();
-    Ok(files)
-}
-
-fn walk_dir(
-    dir: &Path,
-    files: &mut Vec<PathBuf>,
-    visited: &mut std::collections::HashSet<std::path::PathBuf>,
-) -> std::io::Result<()> {
-    let canonical = match dir.canonicalize() {
-        Ok(p) => p,
-        Err(_) => return Ok(()),
-    };
-    if !visited.insert(canonical) {
-        return Ok(());
-    }
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_dir() {
-            // Skip hidden directories and common non-source dirs
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if !name.starts_with('.') && name != "target" && name != "node_modules" {
-                walk_dir(&path, files, visited)?;
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(current) = stack.pop() {
+        let canonical = match current.canonicalize() {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        if !visited.insert(canonical) {
+            continue;
+        }
+        let entries = match fs::read_dir(&current) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for entry in entries {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            let path = entry.path();
+            if path.is_dir() {
+                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if !name.starts_with('.') && name != "target" && name != "node_modules" {
+                    stack.push(path);
+                }
+            } else if path.extension().and_then(|e| e.to_str()) == Some("mms") {
+                files.push(path);
             }
-        } else if path.extension().and_then(|e| e.to_str()) == Some("mms") {
-            files.push(path);
         }
     }
-    Ok(())
+
+    files.sort();
+    Ok(files)
 }
 
 fn main() {

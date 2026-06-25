@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -12,7 +12,8 @@ const MAX_RESOLVE_DEPTH: u32 = 32;
 
 pub struct Resolver {
     cache: ImportCache,
-    resolving: Vec<PathBuf>,
+    resolving: HashSet<PathBuf>,
+    resolving_order: Vec<PathBuf>,
     files: HashMap<PathBuf, Arc<File>>,
     errors: Vec<(PathBuf, ResolveError)>,
     root_dir: PathBuf,
@@ -23,7 +24,8 @@ impl Resolver {
     pub fn new(root_dir: PathBuf) -> Self {
         Self {
             cache: ImportCache::new(),
-            resolving: Vec::new(),
+            resolving: HashSet::new(),
+            resolving_order: Vec::new(),
             files: HashMap::new(),
             errors: Vec::new(),
             root_dir,
@@ -36,7 +38,7 @@ impl Resolver {
             self.errors.push((
                 path.to_path_buf(),
                 ResolveError::ImportCycle {
-                    chain: self.resolving.clone(),
+                    chain: self.resolving_order.clone(),
                 },
             ));
             return None;
@@ -49,7 +51,7 @@ impl Resolver {
         }
 
         if self.resolving.contains(&canonical) {
-            let chain = self.resolving.clone();
+            let chain = self.resolving_order.clone();
             self.errors
                 .push((canonical, ResolveError::ImportCycle { chain }));
             return None;
@@ -92,14 +94,16 @@ impl Resolver {
         let file_arc = self.cache.insert(canonical.clone(), file, current_mtime);
 
         self.depth += 1;
-        self.resolving.push(canonical.clone());
+        self.resolving.insert(canonical.clone());
+        self.resolving_order.push(canonical.clone());
         let import_paths: Vec<String> = file_arc.imports.clone();
         for import_path in &import_paths {
             let parent = canonical.parent().unwrap_or(Path::new("."));
             let resolved = parent.join(import_path);
             self.resolve(&resolved);
         }
-        self.resolving.pop();
+        self.resolving_order.pop();
+        self.resolving.remove(&canonical);
         self.depth -= 1;
 
         self.files.insert(canonical, file_arc.clone());

@@ -10,8 +10,14 @@ struct CacheEntry {
     file: Arc<File>,
 }
 
-pub(crate) struct ImportCache {
+pub struct ImportCache {
     entries: HashMap<PathBuf, CacheEntry>,
+}
+
+impl Default for ImportCache {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ImportCache {
