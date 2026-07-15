@@ -1,6 +1,7 @@
 pub mod ast;
 pub mod cache;
 pub mod collaboration;
+pub mod diagnostics;
 pub mod error;
 pub mod format;
 pub mod latex;

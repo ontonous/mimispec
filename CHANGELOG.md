@@ -33,6 +33,8 @@
   that accept suffix-only lock challenges and reject lock-bypass content edits.
 - Added human-only `UnlockToken` for weakening strong locks and parent/child
   lock propagation checks for nested AI edits.
+- Added first-wave intent diagnostics with decision/delegation queues,
+  commitment summaries, syntax/attachment guidance, and stable diagnostic codes.
 
 ### Fixed
 - Preserved commitment suffixes when rendering boolean values, `not`, `and`,
