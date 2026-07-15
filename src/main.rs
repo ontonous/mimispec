@@ -77,7 +77,7 @@ enum Commands {
         /// .mms file(s) to analyze; use - for stdin
         #[arg(default_value = "-")]
         files: Vec<PathBuf>,
-        /// Profile name: mimi (default) or generic
+        /// Profile name: mimi (default), generic, rust, or typescript
         #[arg(long, default_value = "mimi")]
         target: String,
         /// Release scope label
@@ -402,14 +402,13 @@ fn run_profile(files: &[PathBuf], target: &str, scope: &str, json: bool) {
         if !parsed.errors.is_empty() {
             any_error = true;
         }
-        let analysis = match target {
-            "mimi" => mimispec::profile::analyze_mimi_profile(&parsed.document, scope),
-            "generic" => mimispec::profile::analyze_generic_profile(&parsed.document, scope),
-            other => {
+        let analysis = match mimispec::profile::builtin_profile(target) {
+            Some(profile) => profile.analyze(&parsed.document, scope),
+            None => {
                 any_error = true;
                 if !json {
                     eprintln!(
-                        "{}: unknown profile `{other}` (use mimi|generic)",
+                        "{}: unknown profile `{target}` (use mimi|generic|rust|typescript)",
                         path.display()
                     );
                 }

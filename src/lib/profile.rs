@@ -54,6 +54,158 @@ impl TargetCapabilities {
             ],
         }
     }
+
+    pub fn rust_reference() -> Self {
+        Self {
+            modules: true,
+            types: true,
+            functions: true,
+            flows: false,
+            ui: false,
+            contracts: true,
+            concurrency: true,
+            formal_verification: false,
+            notes: vec![
+                "Rust reference profile maps modules/types/functions deeply.".into(),
+                "Flow intent is partial: encode as enums + match or a state crate.".into(),
+                "Formal verification is out of band (not assumed).".into(),
+            ],
+        }
+    }
+
+    pub fn typescript_reference() -> Self {
+        Self {
+            modules: true,
+            types: true,
+            functions: true,
+            flows: false,
+            ui: true,
+            contracts: false,
+            concurrency: false,
+            formal_verification: false,
+            notes: vec![
+                "TypeScript reference profile maps modules/types/functions and UI residuals."
+                    .into(),
+                "Contracts and Flow are partial/unsupported and must be reported.".into(),
+            ],
+        }
+    }
+}
+
+/// Stable target profile protocol for Core materialization clients.
+pub trait TargetProfile {
+    fn id(&self) -> ProfileId;
+    fn capabilities(&self) -> TargetCapabilities;
+    fn analyze(&self, document: &LosslessDocument, release_scope: &str) -> ProfileAnalysis;
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MimiProfile;
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct GenericProfile;
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RustProfile;
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TypeScriptProfile;
+
+impl TargetProfile for MimiProfile {
+    fn id(&self) -> ProfileId {
+        ProfileId {
+            name: "mimi".into(),
+            version: "0.30.0+".into(),
+        }
+    }
+
+    fn capabilities(&self) -> TargetCapabilities {
+        TargetCapabilities::mimi_native()
+    }
+
+    fn analyze(&self, document: &LosslessDocument, release_scope: &str) -> ProfileAnalysis {
+        let plan = plan_materialization(document, release_scope);
+        analyze_profile(document, self.id(), self.capabilities(), plan)
+    }
+}
+
+impl TargetProfile for GenericProfile {
+    fn id(&self) -> ProfileId {
+        ProfileId {
+            name: "generic".into(),
+            version: "0.1.0".into(),
+        }
+    }
+
+    fn capabilities(&self) -> TargetCapabilities {
+        TargetCapabilities::generic_minimal()
+    }
+
+    fn analyze(&self, document: &LosslessDocument, release_scope: &str) -> ProfileAnalysis {
+        let plan = plan_materialization(document, release_scope);
+        analyze_profile(document, self.id(), self.capabilities(), plan)
+    }
+}
+
+impl TargetProfile for RustProfile {
+    fn id(&self) -> ProfileId {
+        ProfileId {
+            name: "rust".into(),
+            version: "0.1.0".into(),
+        }
+    }
+
+    fn capabilities(&self) -> TargetCapabilities {
+        TargetCapabilities::rust_reference()
+    }
+
+    fn analyze(&self, document: &LosslessDocument, release_scope: &str) -> ProfileAnalysis {
+        let plan = plan_materialization(document, release_scope);
+        analyze_profile(document, self.id(), self.capabilities(), plan)
+    }
+}
+
+impl TargetProfile for TypeScriptProfile {
+    fn id(&self) -> ProfileId {
+        ProfileId {
+            name: "typescript".into(),
+            version: "0.1.0".into(),
+        }
+    }
+
+    fn capabilities(&self) -> TargetCapabilities {
+        TargetCapabilities::typescript_reference()
+    }
+
+    fn analyze(&self, document: &LosslessDocument, release_scope: &str) -> ProfileAnalysis {
+        let plan = plan_materialization(document, release_scope);
+        analyze_profile(document, self.id(), self.capabilities(), plan)
+    }
+}
+
+/// Resolve a built-in profile by name.
+pub fn builtin_profile(name: &str) -> Option<Box<dyn TargetProfile>> {
+    match name {
+        "mimi" => Some(Box::new(MimiProfile)),
+        "generic" => Some(Box::new(GenericProfile)),
+        "rust" => Some(Box::new(RustProfile)),
+        "typescript" | "ts" => Some(Box::new(TypeScriptProfile)),
+        _ => None,
+    }
+}
+
+/// Conformance helper: profiles must report every selected slot as supported,
+/// partial, or an explicit gap.
+pub fn profile_conformance(
+    profile: &dyn TargetProfile,
+    document: &LosslessDocument,
+) -> Result<(), String> {
+    let analysis = profile.analyze(document, "conformance");
+    assert_no_silent_drops(&analysis.plan.selection, &analysis)?;
+    if analysis.capabilities.notes.is_empty() {
+        return Err("profile must declare capability notes".into());
+    }
+    Ok(())
 }
 
 /// One intent that the selected profile cannot fully satisfy.
@@ -96,16 +248,7 @@ pub struct ProfileAnalysis {
 /// This reports mapping readiness and capability gaps. Actual `.mimi` generation
 /// remains an external adapter responsibility.
 pub fn analyze_mimi_profile(document: &LosslessDocument, release_scope: &str) -> ProfileAnalysis {
-    let plan = plan_materialization(document, release_scope);
-    analyze_profile(
-        document,
-        ProfileId {
-            name: "mimi".into(),
-            version: "0.30.0+".into(),
-        },
-        TargetCapabilities::mimi_native(),
-        plan,
-    )
+    MimiProfile.analyze(document, release_scope)
 }
 
 /// Probe a generic minimal profile for non-Mimi targets.
@@ -113,16 +256,18 @@ pub fn analyze_generic_profile(
     document: &LosslessDocument,
     release_scope: &str,
 ) -> ProfileAnalysis {
-    let plan = plan_materialization(document, release_scope);
-    analyze_profile(
-        document,
-        ProfileId {
-            name: "generic".into(),
-            version: "0.1.0".into(),
-        },
-        TargetCapabilities::generic_minimal(),
-        plan,
-    )
+    GenericProfile.analyze(document, release_scope)
+}
+
+pub fn analyze_rust_profile(document: &LosslessDocument, release_scope: &str) -> ProfileAnalysis {
+    RustProfile.analyze(document, release_scope)
+}
+
+pub fn analyze_typescript_profile(
+    document: &LosslessDocument,
+    release_scope: &str,
+) -> ProfileAnalysis {
+    TypeScriptProfile.analyze(document, release_scope)
 }
 
 fn analyze_profile(
@@ -399,5 +544,43 @@ func Pay$:
             .gaps
             .iter()
             .any(|gap| { gap.severity == GapSeverity::Info && gap.slot_header.contains("Draft") }));
+    }
+
+    #[test]
+    fn target_profile_trait_and_conformance_cover_builtins() {
+        let source = r#"func Pay$:
+    requires: true
+    steps:
+        charge payment
+
+flow$ Checkout:
+    Pending >>> Paid:
+
+ui Panel$:
+    stack:
+        "Title"
+"#;
+        let doc = parse_lossless(source).document;
+        for name in ["mimi", "generic", "rust", "typescript"] {
+            let profile = builtin_profile(name).expect(name);
+            profile_conformance(profile.as_ref(), &doc).expect(name);
+        }
+
+        let rust = analyze_rust_profile(&doc, "pay");
+        assert!(rust
+            .gaps
+            .iter()
+            .any(|gap| gap.slot_header.contains("Checkout")));
+
+        let ts = analyze_typescript_profile(&doc, "pay");
+        assert!(ts.capabilities.ui);
+        assert!(
+            ts.supported_slots
+                .iter()
+                .chain(ts.partial_slots.iter())
+                .any(|slot| slot.header.contains("Panel")
+                    || slot.kind == crate::lossless::SourceNodeKind::Ui)
+                || ts.gaps.iter().any(|gap| gap.slot_header.contains("Panel"))
+        );
     }
 }

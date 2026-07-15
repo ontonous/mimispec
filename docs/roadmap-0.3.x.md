@@ -362,6 +362,10 @@ not be implemented by routing through Mimi's `mms {}` super-comment block.
 
 ## 11. v0.3.7: Generic Target Profile API
 
+> Implementation status: `TargetProfile` trait, built-in mimi/generic/rust/
+> typescript profiles, and `profile_conformance` are available. Deeper
+> language-specific adapters remain later work.
+
 ### Goal
 
 Open materialization to other programming languages without reducing MimiSpec

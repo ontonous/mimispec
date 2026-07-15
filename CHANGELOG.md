@@ -46,6 +46,8 @@
   unsupported-intent gap reporting, and `mimispec profile --target mimi|generic`.
 - Added `DocumentSession` for full-text incremental collaboration document state
   with versioned snapshots, hover/tokens/code actions, and plan/profile helpers.
+- Stabilized the generic `TargetProfile` trait with built-in mimi/generic/rust/
+  typescript profiles, conformance checks, and CLI target selection.
 
 ### Fixed
 - Preserved commitment suffixes when rendering boolean values, `not`, `and`,

@@ -87,6 +87,7 @@ mimispec diagnose path/to/file.mms        # decision/delegation queues + intent 
 mimispec path/to/file.mms --diagnostics   # same as diagnose
 mimispec materialize path/to/file.mms --scope payments-v1  # commit-ready materialization plan
 mimispec profile path/to/file.mms --target mimi --scope payments-v1
+mimispec profile path/to/file.mms --target rust|typescript|generic
 echo "func Hello: steps:\n    say hi" | mimispec - --ast  # stdin
 mimispec *.mms --json                     # multiple files
 ```
