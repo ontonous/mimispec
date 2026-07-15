@@ -44,6 +44,8 @@
   `mimispec materialize` for commit-ready slot planning.
 - Added first-party/generic target profile analysis with capability matrices,
   unsupported-intent gap reporting, and `mimispec profile --target mimi|generic`.
+- Added `DocumentSession` for full-text incremental collaboration document state
+  with versioned snapshots, hover/tokens/code actions, and plan/profile helpers.
 
 ### Fixed
 - Preserved commitment suffixes when rendering boolean values, `not`, `and`,

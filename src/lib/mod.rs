@@ -15,6 +15,7 @@ pub mod query;
 pub mod render;
 mod render_util;
 pub mod resolver;
+pub mod session;
 pub mod symbol;
 
 use std::collections::HashMap;
