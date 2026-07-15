@@ -37,6 +37,8 @@
   commitment summaries, syntax/attachment guidance, and stable diagnostic codes.
 - Added intent-conflict and intent-gap heuristics, plus `mimispec diagnose`
   (and `--diagnostics`) for human/JSON collaboration reports.
+- Added library-level IDE protocol helpers: semantic tokens, commitment hover,
+  actor-aware code actions, and an `ide_snapshot` combining queues/diagnostics.
 
 ### Fixed
 - Preserved commitment suffixes when rendering boolean values, `not`, `and`,

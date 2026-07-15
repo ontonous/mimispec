@@ -4,6 +4,7 @@ pub mod collaboration;
 pub mod diagnostics;
 pub mod error;
 pub mod format;
+pub mod ide;
 pub mod latex;
 pub mod lexer;
 pub mod lossless;

@@ -256,6 +256,11 @@ Shift diagnostics from parser-only errors toward useful specification guidance.
 
 ## 8. v0.3.4: IDE Protocol
 
+> Implementation status: library-level protocol helpers are landing in
+> `ide::{semantic_tokens, hover_at, code_actions_for_node, ide_snapshot}`. They
+> reuse the same transition validator and diagnostics queues as Core. A
+> long-running LSP server and editor wiring remain later work.
+
 ### Goal
 
 Provide the language services required by OSE, VS Code, and Monaco without
