@@ -387,6 +387,11 @@ to a lowest-common-denominator model.
 
 ## 12. v0.3.8: OSE Workflow Integration
 
+> Implementation status: `workflow::{build_workflow_board, semantic_diff,
+> filter_active_challenges}` and `mimispec workflow` provide the first
+> state-driven board over decision/delegation/materialization queues. Full OSE
+> product integration remains external.
+
 ### Goal
 
 Replace the single linear Draft/Review/Lock model with a state-driven queue over

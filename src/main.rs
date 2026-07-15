@@ -84,6 +84,15 @@ enum Commands {
         #[arg(long, default_value = "default")]
         scope: String,
     },
+    /// Build an OSE-facing workflow board from slot states
+    Workflow {
+        /// .mms file(s) to analyze; use - for stdin
+        #[arg(default_value = "-")]
+        files: Vec<PathBuf>,
+        /// Release scope label
+        #[arg(long, default_value = "default")]
+        scope: String,
+    },
 }
 
 #[derive(Serialize)]
@@ -445,6 +454,82 @@ fn run_profile(files: &[PathBuf], target: &str, scope: &str, json: bool) {
     }
 }
 
+fn run_workflow(files: &[PathBuf], scope: &str, json: bool) {
+    let mut results = Vec::new();
+    let mut any_error = false;
+
+    for path in files {
+        let source = match read_source(path) {
+            Some(s) => s,
+            None => {
+                any_error = true;
+                if !json {
+                    eprintln!("{}: failed to read source", path.display());
+                }
+                continue;
+            }
+        };
+        let parsed = mimispec::parse_lossless(&source);
+        if !parsed.errors.is_empty() {
+            any_error = true;
+        }
+        let board = mimispec::workflow::build_workflow_board(&parsed.document, scope, &[]);
+        if json {
+            results.push(serde_json::json!({
+                "path": path.display().to_string(),
+                "board": board,
+            }));
+        } else {
+            print_workflow_board(path, &board);
+        }
+    }
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({ "results": results }))
+                .unwrap_or_else(|e| format!("{{\"error\": \"JSON serialization failed: {}\"}}", e))
+        );
+    }
+
+    if any_error {
+        std::process::exit(1);
+    }
+}
+
+fn print_workflow_board(path: &Path, board: &mimispec::workflow::WorkflowBoard) {
+    println!("== {} ==", path.display());
+    println!(
+        "scope: {}  ready={}  decisions={} delegations={} challenges={} materialize={}",
+        board.release_scope,
+        board.readiness.ready,
+        board.decision.len(),
+        board.delegation.len(),
+        board.lock_challenges.len(),
+        board.materialization.len()
+    );
+    println!("readiness: {}", board.readiness.summary);
+    if !board.decision.is_empty() {
+        println!("decision queue:");
+        for task in &board.decision {
+            println!("  - {}", task.title);
+        }
+    }
+    if !board.delegation.is_empty() {
+        println!("delegation queue:");
+        for task in &board.delegation {
+            println!("  - {}", task.title);
+        }
+    }
+    if !board.materialization.is_empty() {
+        println!("materialization:");
+        for task in &board.materialization {
+            println!("  - {}", task.title);
+        }
+    }
+    println!();
+}
+
 fn print_profile_analysis(path: &Path, analysis: &mimispec::profile::ProfileAnalysis) {
     println!("== {} ==", path.display());
     println!(
@@ -685,6 +770,9 @@ fn main() {
             scope,
         }) => {
             run_profile(files, target, scope, cli.json);
+        }
+        Some(Commands::Workflow { files, scope }) => {
+            run_workflow(files, scope, cli.json);
         }
         None => {
             if cli.diagnostics {

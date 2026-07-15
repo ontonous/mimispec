@@ -48,6 +48,8 @@
   with versioned snapshots, hover/tokens/code actions, and plan/profile helpers.
 - Stabilized the generic `TargetProfile` trait with built-in mimi/generic/rust/
   typescript profiles, conformance checks, and CLI target selection.
+- Added OSE workflow board APIs (`workflow::build_workflow_board`, semantic
+  diff, rejected-challenge filtering) and `mimispec workflow`.
 
 ### Fixed
 - Preserved commitment suffixes when rendering boolean values, `not`, `and`,

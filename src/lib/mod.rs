@@ -17,6 +17,7 @@ mod render_util;
 pub mod resolver;
 pub mod session;
 pub mod symbol;
+pub mod workflow;
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
