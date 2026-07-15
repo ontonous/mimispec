@@ -180,8 +180,9 @@ as an opt-in API for IDE and collaboration clients.
 > Implementation status: early foundation is landing. Protected node hashes,
 > `LockChallenge` construction, identical-challenge deduplication, and
 > before/after AI document patch validation (`validate_ai_document_patch`) are
-> available on top of the 0.3.0 transition validator. Strong-lock unlock tokens
-> and richer multi-slot patch provenance remain in progress.
+> available on top of the 0.3.0 transition validator. Human-only `UnlockToken`
+> issuance and parent/child lock propagation checks are also available. Richer
+> multi-slot patch provenance remains in progress.
 
 ### Goal
 

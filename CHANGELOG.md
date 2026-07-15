@@ -31,6 +31,8 @@
   challenge-fingerprint deduplication for AI lock challenges.
 - Added `validate_ai_document_patch` for before/after lossless revision checks
   that accept suffix-only lock challenges and reject lock-bypass content edits.
+- Added human-only `UnlockToken` for weakening strong locks and parent/child
+  lock propagation checks for nested AI edits.
 
 ### Fixed
 - Preserved commitment suffixes when rendering boolean values, `not`, `and`,

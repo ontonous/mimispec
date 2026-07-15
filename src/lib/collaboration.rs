@@ -390,6 +390,138 @@ pub struct HumanAuthorization {
     pub unlock_strong_lock: bool,
 }
 
+/// Explicit human-issued token required to weaken or remove a strong lock.
+///
+/// Tooling must obtain this from a Human actor session; AI cannot mint it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct UnlockToken {
+    pub node: SourceNodeId,
+    pub from: Commitment,
+    pub nonce: u64,
+}
+
+impl UnlockToken {
+    pub fn issue(
+        node: SourceNodeId,
+        from: Commitment,
+        nonce: u64,
+    ) -> Result<Self, TransitionViolation> {
+        if from.lock_intent() != LockIntent::StrongLocked {
+            return Err(TransitionViolation::StrongUnlockAuthorizationRequired);
+        }
+        Ok(Self { node, from, nonce })
+    }
+
+    pub fn authorizes(&self, node: SourceNodeId, from: Commitment) -> bool {
+        self.node == node && self.from == from && from.lock_intent() == LockIntent::StrongLocked
+    }
+}
+
+/// Parent/child lock propagation decision for nested slots.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PropagationViolation {
+    StrongParentBlocksChildEdit,
+    OrdinaryParentBlocksStructure,
+    ExplicitOpenChildOnly,
+}
+
+/// Decide whether an AI edit to a child slot is allowed under a parent lock.
+///
+/// - Ordinary `$` parent: protects parent identity/structure; explicit `?`/`??`
+///   children may still evolve their own content.
+/// - Strong `$$` parent: protects the whole structural subtree. Only children
+///   that already carry explicit open review/delegation (`?`/`??`) may evolve,
+///   and only without structural boundary changes on the parent.
+pub fn validate_child_under_parent(
+    parent: Commitment,
+    child_from: Commitment,
+    child_to: Commitment,
+    child_effects: TransitionEffects,
+    actor: Actor,
+) -> Result<(), PropagationViolation> {
+    if actor == Actor::Human {
+        return Ok(());
+    }
+
+    match parent.lock_intent() {
+        LockIntent::Open => Ok(()),
+        LockIntent::Locked => {
+            // Ordinary lock: child content may evolve only when the child itself
+            // is not protected, or via allowed AI transitions on that child.
+            if child_from.protects_content()
+                && child_effects.changes_protected_boundary()
+                && validate_transition(&TransitionRequest {
+                    actor: Actor::Ai,
+                    from: child_from,
+                    to: child_to,
+                    effects: child_effects,
+                    authorization: HumanAuthorization::default(),
+                    challenge_reason: Some("nested"),
+                })
+                .is_err()
+            {
+                return Err(PropagationViolation::OrdinaryParentBlocksStructure);
+            }
+            Ok(())
+        }
+        LockIntent::StrongLocked => {
+            // Strong parent: only explicit open children (`?`/`??` without `$`)
+            // remain editable by AI.
+            let child_is_explicit_open = matches!(
+                child_from,
+                Commitment::Question | Commitment::QuestionQuestion
+            );
+            if !child_is_explicit_open {
+                if child_from != child_to || child_effects.changes_protected_boundary() {
+                    return Err(PropagationViolation::StrongParentBlocksChildEdit);
+                }
+                return Ok(());
+            }
+            if child_effects.structure_changed || child_effects.attachment_changed {
+                return Err(PropagationViolation::ExplicitOpenChildOnly);
+            }
+            // Open child content may change; state transitions still go through
+            // the normal AI matrix.
+            if child_from != child_to
+                && validate_transition(&TransitionRequest {
+                    actor: Actor::Ai,
+                    from: child_from,
+                    to: child_to,
+                    effects: child_effects,
+                    authorization: HumanAuthorization::default(),
+                    challenge_reason: None,
+                })
+                .is_err()
+            {
+                return Err(PropagationViolation::ExplicitOpenChildOnly);
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Validate a human unlock of a strong-locked slot using an unlock token.
+pub fn validate_strong_unlock(
+    token: &UnlockToken,
+    node: SourceNodeId,
+    from: Commitment,
+    to: Commitment,
+) -> TransitionDecision {
+    if from.lock_intent() != LockIntent::StrongLocked {
+        return Err(TransitionViolation::StrongUnlockAuthorizationRequired);
+    }
+    if to.lock_intent() == LockIntent::StrongLocked {
+        // Still strong-locked family; no unlock token required for in-family
+        // review transitions performed by Human.
+        return Ok(());
+    }
+    if !token.authorizes(node, from) {
+        return Err(TransitionViolation::StrongUnlockAuthorizationRequired);
+    }
+    Ok(())
+}
+
 /// 由调用方描述的转移影响。0.3.2 的 patch validator 将负责从真实 patch 证明这些值。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub struct TransitionEffects {
@@ -867,5 +999,116 @@ mod tests {
         assert!(results
             .iter()
             .any(|result| { matches!(result, Err(TransitionViolation::AiTransitionForbidden)) }));
+    }
+
+    #[test]
+    fn unlock_token_is_required_to_weaken_strong_lock() {
+        let source = r#"func Pay$$:
+    steps:
+        charge payment
+"#;
+        let doc = crate::parse_lossless(source).document;
+        let func = doc
+            .nodes()
+            .iter()
+            .find(|node| node.kind == crate::lossless::SourceNodeKind::Func)
+            .unwrap()
+            .id;
+
+        assert!(UnlockToken::issue(func, Commitment::Locked, 1).is_err());
+        let token = UnlockToken::issue(func, Commitment::StrongLocked, 7).unwrap();
+        assert!(
+            validate_strong_unlock(&token, func, Commitment::StrongLocked, Commitment::Locked)
+                .is_ok()
+        );
+        assert_eq!(
+            validate_strong_unlock(
+                &token,
+                func,
+                Commitment::StrongLockedQuestion,
+                Commitment::Locked
+            ),
+            Err(TransitionViolation::StrongUnlockAuthorizationRequired)
+        );
+        assert_eq!(
+            validate_strong_unlock(
+                &UnlockToken {
+                    node: SourceNodeId(999),
+                    from: Commitment::StrongLocked,
+                    nonce: 1
+                },
+                func,
+                Commitment::StrongLocked,
+                Commitment::None
+            ),
+            Err(TransitionViolation::StrongUnlockAuthorizationRequired)
+        );
+    }
+
+    #[test]
+    fn parent_child_lock_propagation_matrix() {
+        assert_eq!(
+            validate_child_under_parent(
+                Commitment::StrongLocked,
+                Commitment::None,
+                Commitment::Question,
+                TransitionEffects {
+                    content_changed: true,
+                    ..TransitionEffects::default()
+                },
+                Actor::Ai,
+            ),
+            Err(PropagationViolation::StrongParentBlocksChildEdit)
+        );
+
+        assert!(validate_child_under_parent(
+            Commitment::StrongLocked,
+            Commitment::QuestionQuestion,
+            Commitment::Question,
+            TransitionEffects {
+                content_changed: true,
+                ..TransitionEffects::default()
+            },
+            Actor::Ai,
+        )
+        .is_ok());
+
+        assert_eq!(
+            validate_child_under_parent(
+                Commitment::StrongLocked,
+                Commitment::Question,
+                Commitment::Question,
+                TransitionEffects {
+                    structure_changed: true,
+                    ..TransitionEffects::default()
+                },
+                Actor::Ai,
+            ),
+            Err(PropagationViolation::ExplicitOpenChildOnly)
+        );
+
+        assert!(validate_child_under_parent(
+            Commitment::StrongLocked,
+            Commitment::None,
+            Commitment::Question,
+            TransitionEffects {
+                content_changed: true,
+                ..TransitionEffects::default()
+            },
+            Actor::Human,
+        )
+        .is_ok());
+
+        assert!(validate_child_under_parent(
+            Commitment::Locked,
+            Commitment::None,
+            Commitment::Question,
+            TransitionEffects {
+                content_changed: true,
+                ..TransitionEffects::default()
+            },
+            Actor::Ai,
+        )
+        .is_ok());
     }
 }
