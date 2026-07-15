@@ -24,6 +24,9 @@
   Fragments.
 - Added line-comment attachment classification (`trailing` / `leading` /
   `free`) with optional target node IDs on the lossless document.
+- Added structured Fragment moves that relocate a top-level node while carrying
+  its attached rule prelude, plus attachment/commitment fingerprints used to
+  assert formatter stability.
 
 ### Fixed
 - Preserved commitment suffixes when rendering boolean values, `not`, `and`,

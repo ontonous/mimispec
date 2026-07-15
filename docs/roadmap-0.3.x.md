@@ -139,8 +139,9 @@ commitment.is_commit_ready()
 > occurrences expose unique IDs, exact spans, attachment decisions, target
 > anchors, scope anchors, and nested target IDs when available. Line comments
 > are classified as trailing, leading, or free with optional target node IDs.
-> Structured-edit APIs that move Fragments while carrying rule preludes remain
-> later 0.3.1 work.
+> Structured Fragment moves (`move_fragment` / `move_fragment_reparse`) carry
+> attached rule preludes, and formatter attachment fingerprints check that
+> semantic render does not reattach or drop rules.
 
 ### Goal
 

@@ -385,6 +385,12 @@ impl LosslessDocument {
         self.node(id).map(|node| node.spans.full)
     }
 
+    /// Top-level Fragment kinds that structured edit may relocate as a unit.
+    pub fn is_movable_fragment(&self, id: SourceNodeId) -> bool {
+        self.node(id)
+            .is_some_and(|node| node.kind.is_top_level_fragment())
+    }
+
     pub fn line_index(&self) -> &LineIndex {
         &self.line_index
     }
@@ -397,6 +403,200 @@ impl LosslessDocument {
     pub fn render_lossless(&self) -> &str {
         &self.source
     }
+
+    /// Byte range that should travel with a structured move, including the
+    /// attached rule prelude and one trailing newline when present.
+    pub fn movable_chunk_span(&self, id: SourceNodeId) -> Option<ByteSpan> {
+        let full = self.movable_span(id)?;
+        let source = self.source();
+        let mut end = full.end as usize;
+        if source[end..].starts_with("\r\n") {
+            end += 2;
+        } else if source.as_bytes().get(end) == Some(&b'\n')
+            || source.as_bytes().get(end) == Some(&b'\r')
+        {
+            end += 1;
+        }
+        Some(ByteSpan::new(full.start as usize, end))
+    }
+
+    /// Relocate a top-level Fragment, carrying its attached rule prelude text.
+    ///
+    /// Returns a new source string. The current document remains immutable.
+    pub fn move_fragment(
+        &self,
+        id: SourceNodeId,
+        destination: MoveDestination,
+    ) -> Result<String, MoveError> {
+        if !self.is_movable_fragment(id) {
+            return Err(MoveError::NotMovableFragment);
+        }
+        let chunk = self.movable_chunk_span(id).ok_or(MoveError::UnknownNode)?;
+        let insert_at = self.resolve_destination(destination, id, chunk)?;
+        Ok(splice_move(self.source(), chunk, insert_at))
+    }
+
+    /// Relocate a top-level Fragment and reparse the resulting revision.
+    pub fn move_fragment_reparse(
+        &self,
+        id: SourceNodeId,
+        destination: MoveDestination,
+    ) -> Result<LosslessParseResult, MoveError> {
+        let source = self.move_fragment(id, destination)?;
+        Ok(crate::parse_lossless(&source))
+    }
+
+    /// Stable attachment fingerprint for formatter and structured-edit checks.
+    ///
+    /// Each entry is `(rule text, attachment kind, target kind or scope kind)`.
+    pub fn rule_attachment_fingerprint(&self) -> Vec<(String, RuleAttachment, Option<String>)> {
+        self.rules
+            .iter()
+            .map(|rule| {
+                let text = self.text(rule.span).unwrap_or_default().trim().to_string();
+                let target = match rule.attachment {
+                    RuleAttachment::Attached => rule
+                        .target
+                        .and_then(|id| self.node(id))
+                        .map(|node| format!("{:?}", node.kind))
+                        .or_else(|| {
+                            rule.target_anchor
+                                .and_then(|span| self.text(span))
+                                .map(|text| format!("anchor:{text}"))
+                        }),
+                    RuleAttachment::Environment => rule
+                        .scope_anchor
+                        .and_then(|span| self.text(span))
+                        .map(|text| format!("scope:{text}"))
+                        .or(Some("scope:file".into())),
+                    RuleAttachment::DroppedByRecovery => Some("dropped".into()),
+                    RuleAttachment::Pending => Some("pending".into()),
+                };
+                (text, rule.attachment, target)
+            })
+            .collect()
+    }
+
+    /// Commitment suffix fingerprint: `(anchor text, suffix value, slot kind)`.
+    pub fn commitment_fingerprint(&self) -> Vec<(String, Commitment, String)> {
+        self.commitment_slots
+            .iter()
+            .filter(|slot| slot.semantic_slot && slot.value != Commitment::None)
+            .map(|slot| {
+                let anchor = self.text(slot.anchor_span).unwrap_or_default().to_string();
+                (anchor, slot.value, format!("{:?}", slot.anchor_kind))
+            })
+            .collect()
+    }
+
+    fn resolve_destination(
+        &self,
+        destination: MoveDestination,
+        moving: SourceNodeId,
+        chunk: ByteSpan,
+    ) -> Result<u32, MoveError> {
+        let insert_at = match destination {
+            MoveDestination::ByteOffset(offset) => {
+                if offset as usize > self.source().len()
+                    || !self.source().is_char_boundary(offset as usize)
+                {
+                    return Err(MoveError::InvalidDestination);
+                }
+                offset
+            }
+            MoveDestination::Before(target) => {
+                if target == moving {
+                    return Err(MoveError::InvalidDestination);
+                }
+                if !self.is_movable_fragment(target) {
+                    return Err(MoveError::NotMovableFragment);
+                }
+                self.movable_span(target)
+                    .ok_or(MoveError::UnknownNode)?
+                    .start
+            }
+            MoveDestination::After(target) => {
+                if target == moving {
+                    return Err(MoveError::InvalidDestination);
+                }
+                if !self.is_movable_fragment(target) {
+                    return Err(MoveError::NotMovableFragment);
+                }
+                self.movable_chunk_span(target)
+                    .ok_or(MoveError::UnknownNode)?
+                    .end
+            }
+        };
+
+        // Inserting inside the removed chunk is undefined.
+        if insert_at > chunk.start && insert_at < chunk.end {
+            return Err(MoveError::InvalidDestination);
+        }
+        Ok(insert_at)
+    }
+}
+
+/// Where a structured Fragment move should land.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MoveDestination {
+    Before(SourceNodeId),
+    After(SourceNodeId),
+    ByteOffset(u32),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MoveError {
+    UnknownNode,
+    NotMovableFragment,
+    InvalidDestination,
+}
+
+impl SourceNodeKind {
+    pub fn is_top_level_fragment(self) -> bool {
+        matches!(
+            self,
+            Self::Module
+                | Self::TypeDef
+                | Self::Flow
+                | Self::Func
+                | Self::Ui
+                | Self::Steps
+                | Self::Expr
+                | Self::UiNode
+                | Self::Placeholder
+        )
+    }
+}
+
+fn splice_move(source: &str, chunk: ByteSpan, insert_at: u32) -> String {
+    let start = chunk.start as usize;
+    let end = chunk.end as usize;
+    let insert_at = insert_at as usize;
+    let moved = &source[start..end];
+    let without = format!("{}{}", &source[..start], &source[end..]);
+    let adjusted = if insert_at <= start {
+        insert_at
+    } else {
+        insert_at - (end - start)
+    };
+    let mut result = String::with_capacity(source.len());
+    result.push_str(&without[..adjusted]);
+    // Keep a blank-line separator when inserting between non-empty neighbors.
+    if adjusted > 0 && !moved.starts_with(['\n', '\r']) {
+        let before = &without[..adjusted];
+        if !before.ends_with('\n') && !before.ends_with('\r') {
+            result.push('\n');
+        }
+    }
+    result.push_str(moved);
+    if adjusted < without.len() {
+        let after = &without[adjusted..];
+        if !moved.ends_with('\n') && !moved.ends_with('\r') && !after.starts_with(['\n', '\r']) {
+            result.push('\n');
+        }
+        result.push_str(after);
+    }
+    result
 }
 
 #[derive(Debug, Clone)]
@@ -1663,5 +1863,159 @@ flow Checkout:
             result.document.text(groups[2].target_span.unwrap()),
             Some(">>> Paid:")
         );
+    }
+
+    #[test]
+    fn move_fragment_carries_attached_rule_prelude() {
+        let source = r#"rule "must audit"
+func Pay:
+    steps:
+        charge payment
+
+type Status: Active | Paid
+"#;
+        let original = parse_lossless(source);
+        assert!(original.errors.is_empty(), "{:?}", original.errors);
+        let func = original
+            .document
+            .nodes()
+            .iter()
+            .find(|node| node.kind == SourceNodeKind::Func)
+            .unwrap()
+            .id;
+        let typedef = original
+            .document
+            .nodes()
+            .iter()
+            .find(|node| node.kind == SourceNodeKind::TypeDef)
+            .unwrap()
+            .id;
+
+        let moved = original
+            .document
+            .move_fragment_reparse(func, MoveDestination::After(typedef))
+            .expect("move should succeed");
+        assert!(moved.errors.is_empty(), "{:?}", moved.errors);
+
+        let text = moved.document.render_lossless();
+        assert!(
+            text.find("type Status").unwrap() < text.find("rule \"must audit\"").unwrap(),
+            "func+rule should follow typedef:\n{text}"
+        );
+        assert!(
+            text.find("rule \"must audit\"").unwrap() < text.find("func Pay").unwrap(),
+            "rule prelude must stay in front of func:\n{text}"
+        );
+
+        let pay_rule = moved
+            .document
+            .rules()
+            .iter()
+            .find(|rule| moved.document.text(rule.span) == Some("rule \"must audit\""))
+            .unwrap();
+        assert_eq!(pay_rule.attachment, RuleAttachment::Attached);
+        let target = moved.document.node(pay_rule.target.unwrap()).unwrap();
+        assert_eq!(target.kind, SourceNodeKind::Func);
+    }
+
+    #[test]
+    fn move_rejects_nested_and_self_destination() {
+        let source = r#"type User:
+    name: String
+
+func Pay: ...
+"#;
+        let original = parse_lossless(source);
+        let field = original
+            .document
+            .nodes()
+            .iter()
+            .find(|node| node.kind == SourceNodeKind::Field)
+            .unwrap()
+            .id;
+        let func = original
+            .document
+            .nodes()
+            .iter()
+            .find(|node| node.kind == SourceNodeKind::Func)
+            .unwrap()
+            .id;
+        assert_eq!(
+            original
+                .document
+                .move_fragment(field, MoveDestination::After(func)),
+            Err(MoveError::NotMovableFragment)
+        );
+        assert_eq!(
+            original
+                .document
+                .move_fragment(func, MoveDestination::Before(func)),
+            Err(MoveError::InvalidDestination)
+        );
+    }
+
+    #[test]
+    fn semantic_render_preserves_rule_attachment_and_suffixes() {
+        let source = r#"rule "audit payments"
+func Pay$:
+    steps:
+        charge payment
+
+rule "environment only"
+
+type Status?: Active | Paid
+"#;
+        let before = parse_lossless(source);
+        assert!(before.errors.is_empty(), "{:?}", before.errors);
+        let mut fingerprint = before.document.rule_attachment_fingerprint();
+        fingerprint.sort_by(|left, right| {
+            left.0
+                .cmp(&right.0)
+                .then(format!("{:?}", left.1).cmp(&format!("{:?}", right.1)))
+        });
+        let mut commitments = before.document.commitment_fingerprint();
+        commitments.sort_by(|left, right| {
+            left.0
+                .cmp(&right.0)
+                .then(format!("{:?}", left.1).cmp(&format!("{:?}", right.1)))
+                .then(left.2.cmp(&right.2))
+        });
+
+        let rendered = crate::render::render_file(before.document.semantic());
+        let after = parse_lossless(&rendered);
+        assert!(after.errors.is_empty(), "{:?}", after.errors);
+
+        let mut after_fingerprint = after.document.rule_attachment_fingerprint();
+        after_fingerprint.sort_by(|left, right| {
+            left.0
+                .cmp(&right.0)
+                .then(format!("{:?}", left.1).cmp(&format!("{:?}", right.1)))
+        });
+        let mut after_commitments = after.document.commitment_fingerprint();
+        after_commitments.sort_by(|left, right| {
+            left.0
+                .cmp(&right.0)
+                .then(format!("{:?}", left.1).cmp(&format!("{:?}", right.1)))
+                .then(left.2.cmp(&right.2))
+        });
+
+        assert_eq!(
+            after_fingerprint, fingerprint,
+            "formatter changed rule attachment\nbefore:\n{source}\nafter:\n{rendered}"
+        );
+        assert_eq!(
+            after_commitments, commitments,
+            "formatter changed commitment suffixes\nbefore:\n{source}\nafter:\n{rendered}"
+        );
+
+        // Environment rules stay detached; attached rules stay attached.
+        assert!(after.document.rules().iter().any(|rule| {
+            after.document.text(rule.span) == Some("rule \"audit payments\"")
+                && rule.attachment == RuleAttachment::Attached
+        }));
+        assert!(after.document.rules().iter().any(|rule| {
+            after.document.text(rule.span) == Some("rule \"environment only\"")
+                && rule.attachment == RuleAttachment::Environment
+        }));
     }
 }

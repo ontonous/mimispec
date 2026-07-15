@@ -146,7 +146,15 @@ impl Renderer {
         }
     }
 
+    /// Render fragment-level rules as a front prelude so reparse keeps them attached.
+    fn render_attached_prelude(&mut self, rules: &[RuleDef]) {
+        for rule in rules {
+            self.render_rule(rule);
+        }
+    }
+
     fn render_module(&mut self, module: &Module) {
+        self.render_attached_prelude(&module.rules);
         self.write_indent();
         self.push("module");
         self.push(&module.keyword_commitment.to_string());
@@ -158,9 +166,6 @@ impl Renderer {
 
         if let Some(desc) = &module.desc {
             self.render_desc(desc);
-        }
-        for rule in &module.rules {
-            self.render_rule(rule);
         }
         if let Some(math) = &module.math {
             self.render_math_block(math);
@@ -180,6 +185,7 @@ impl Renderer {
     }
 
     fn render_type_def(&mut self, typedef: &TypeDef) {
+        self.render_attached_prelude(&typedef.rules);
         self.write_indent();
         self.push("type");
         self.push(&typedef.keyword_commitment.to_string());
@@ -214,19 +220,12 @@ impl Renderer {
                 }
             }
             TypeBody::Record { fields } => {
-                if fields.is_empty()
-                    && typedef.desc.is_none()
-                    && typedef.rules.is_empty()
-                    && typedef.math.is_none()
-                {
+                if fields.is_empty() && typedef.desc.is_none() && typedef.math.is_none() {
                     self.push(" ...");
                     self.newline();
                 } else {
                     self.newline();
                     self.set_indent(self.indent + 1);
-                    for rule in &typedef.rules {
-                        self.render_rule(rule);
-                    }
                     if let Some(desc) = &typedef.desc {
                         self.render_desc(desc);
                     }
@@ -257,21 +256,19 @@ impl Renderer {
     }
 
     fn render_flow(&mut self, flow: &FlowDef) {
+        self.render_attached_prelude(&flow.rules);
         self.write_indent();
         self.push("flow");
         self.push(&flow.keyword_commitment.to_string());
         self.push(" ");
         self.push(&render_ident(&flow.name));
         self.push(":");
-        if flow.entries.is_empty() && flow.rules.is_empty() {
+        if flow.entries.is_empty() {
             self.push(" ...");
             self.newline();
         } else {
             self.newline();
             self.set_indent(self.indent + 1);
-            for rule in &flow.rules {
-                self.render_rule(rule);
-            }
             for entry in &flow.entries {
                 self.render_flow_entry(entry);
             }
@@ -338,6 +335,7 @@ impl Renderer {
     }
 
     fn render_func(&mut self, func: &FuncDef) {
+        self.render_attached_prelude(&func.rules);
         self.write_indent();
         self.push("func");
         self.push(&func.keyword_commitment.to_string());
@@ -354,7 +352,6 @@ impl Renderer {
         }
         self.push(":");
         let is_placeholder = func.desc.is_none()
-            && func.rules.is_empty()
             && func.requires.is_none()
             && func.ensures.is_none()
             && func.math.is_none()
@@ -369,9 +366,6 @@ impl Renderer {
 
         if let Some(desc) = &func.desc {
             self.render_desc(desc);
-        }
-        for rule in &func.rules {
-            self.render_rule(rule);
         }
         if let Some(req) = &func.requires {
             self.write_indent();
@@ -577,6 +571,7 @@ impl Renderer {
     }
 
     fn render_ui(&mut self, ui: &UiDef) {
+        self.render_attached_prelude(&ui.rules);
         self.write_indent();
         self.push("ui");
         self.push(&ui.keyword_commitment.to_string());
@@ -594,15 +589,12 @@ impl Renderer {
             }
             _ => false,
         };
-        if root_is_empty && ui.rules.is_empty() {
+        if root_is_empty {
             self.push(" ...");
             self.newline();
         } else {
             self.newline();
             self.set_indent(self.indent + 1);
-            for rule in &ui.rules {
-                self.render_rule(rule);
-            }
             self.render_ui_node(&ui.root);
             self.set_indent(self.indent - 1);
         }

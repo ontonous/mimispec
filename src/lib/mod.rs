@@ -73,7 +73,8 @@ pub fn parse(source: &str) -> ParseResult {
 ///
 /// This opt-in 0.3.1 API keeps the existing semantic AST alongside comments,
 /// whitespace, exact newline kinds, paragraph breaks, explicit suffix spans,
-/// nested Field/FlowEntry/FlowArm node IDs, and line-comment attachment.
+/// nested Field/FlowEntry/FlowArm/Step node IDs, line-comment attachment, and
+/// structured Fragment moves that carry attached rule preludes.
 /// The current semantic parser remains authoritative for AST and diagnostics.
 pub fn parse_lossless(source: &str) -> lossless::LosslessParseResult {
     let source: Arc<str> = Arc::from(source);
