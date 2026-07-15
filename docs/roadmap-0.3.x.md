@@ -217,10 +217,12 @@ Make the suffix state machine enforceable rather than prompt-only convention.
 
 ## 7. v0.3.3: Intent Diagnostics
 
-> Implementation status: first wave is available via `diagnostics::analyze_document`.
-> It builds Decision/Delegation queues, a commitment-state summary, syntax and
-> attachment diagnostics, and stable codes such as `I-DECISION` / `I-DELEGATION`.
-> Intent conflict/gap analysis and versioned JSON schema remain later work.
+> Implementation status: first wave is available via `diagnostics::analyze_document`
+> and `mimispec diagnose` / `--diagnostics`. It builds Decision/Delegation queues,
+> a commitment-state summary, syntax/attachment diagnostics, rule-commitment
+> conflict heuristics, Flow/Func intent-gap hints, and stable codes such as
+> `I-DECISION` / `W-INTENT-CONFLICT` / `H-INTENT-GAP`. Versioned JSON schema and
+> deeper semantic conflict analysis remain later work.
 
 ### Goal
 

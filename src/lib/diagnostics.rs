@@ -1,6 +1,8 @@
 use serde::Serialize;
 
-use crate::ast::{Commitment, ReviewIntent, ReviewTarget};
+use std::collections::HashMap;
+
+use crate::ast::{Commitment, Fragment, ReviewIntent, ReviewTarget, Step};
 use crate::collaboration::collect_slot_snapshots;
 use crate::error::ParseError;
 use crate::lossless::{ByteSpan, LosslessDocument, RuleAttachment, SourceNodeId};
@@ -127,36 +129,40 @@ pub fn analyze_document(document: &LosslessDocument, errors: &[ParseError]) -> D
 
         match slot.state.review_intent() {
             ReviewIntent::Review => {
-                decision_queue.push(item);
-                diagnostics.push(IntentDiagnostic {
-                    code: DiagnosticCode("I-DECISION"),
-                    class: DiagnosticClass::Decision,
-                    severity: Severity::Info,
-                    message: format!(
-                        "Human decision needed for {} ({})",
-                        slot.header.trim(),
-                        slot.state
-                    ),
-                    span: Some(span),
-                    help: Some(decision_help(slot.state).into()),
-                    related_nodes: vec![slot.node],
-                });
+                if !queue_contains(&decision_queue, &item) {
+                    decision_queue.push(item.clone());
+                    diagnostics.push(IntentDiagnostic {
+                        code: DiagnosticCode("I-DECISION"),
+                        class: DiagnosticClass::Decision,
+                        severity: Severity::Info,
+                        message: format!(
+                            "Human decision needed for {} ({})",
+                            slot.header.trim(),
+                            slot.state
+                        ),
+                        span: Some(span),
+                        help: Some(decision_help(slot.state).into()),
+                        related_nodes: vec![slot.node],
+                    });
+                }
             }
             ReviewIntent::Delegate => {
-                delegation_queue.push(item);
-                diagnostics.push(IntentDiagnostic {
-                    code: DiagnosticCode("I-DELEGATION"),
-                    class: DiagnosticClass::Delegation,
-                    severity: Severity::Info,
-                    message: format!(
-                        "AI work delegated for {} ({})",
-                        slot.header.trim(),
-                        slot.state
-                    ),
-                    span: Some(span),
-                    help: Some(delegation_help(slot.state).into()),
-                    related_nodes: vec![slot.node],
-                });
+                if !queue_contains(&delegation_queue, &item) {
+                    delegation_queue.push(item.clone());
+                    diagnostics.push(IntentDiagnostic {
+                        code: DiagnosticCode("I-DELEGATION"),
+                        class: DiagnosticClass::Delegation,
+                        severity: Severity::Info,
+                        message: format!(
+                            "AI work delegated for {} ({})",
+                            slot.header.trim(),
+                            slot.state
+                        ),
+                        span: Some(span),
+                        help: Some(delegation_help(slot.state).into()),
+                        related_nodes: vec![slot.node],
+                    });
+                }
             }
             ReviewIntent::None => {}
         }
@@ -196,12 +202,221 @@ pub fn analyze_document(document: &LosslessDocument, errors: &[ParseError]) -> D
         }
     }
 
+    diagnostics.extend(detect_rule_commitment_conflicts(document));
+    diagnostics.extend(detect_intent_gaps(document));
+
     DocumentDiagnostics {
         summary,
         decision_queue,
         delegation_queue,
         diagnostics,
     }
+}
+
+fn detect_rule_commitment_conflicts(document: &LosslessDocument) -> Vec<IntentDiagnostic> {
+    let mut by_text: HashMap<String, Vec<(ByteSpan, Commitment, Option<SourceNodeId>)>> =
+        HashMap::new();
+    for rule in document.rules() {
+        let text = document
+            .text(rule.span)
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        // Extract the quoted content after `rule` + optional suffix for comparison.
+        let content = text
+            .find('"')
+            .map(|idx| text[idx..].to_string())
+            .unwrap_or(text.clone());
+        let commitment = parse_rule_commitment(&text);
+        by_text
+            .entry(content)
+            .or_default()
+            .push((rule.span, commitment, rule.target));
+    }
+
+    let mut out = Vec::new();
+    for (content, occurrences) in by_text {
+        if occurrences.len() < 2 {
+            continue;
+        }
+        let mut states: Vec<Commitment> = occurrences.iter().map(|(_, c, _)| *c).collect();
+        states.sort_by_key(|c| format!("{c:?}"));
+        states.dedup();
+        if states.len() < 2 {
+            continue;
+        }
+        let related: Vec<SourceNodeId> = occurrences.iter().filter_map(|(_, _, t)| *t).collect();
+        out.push(IntentDiagnostic {
+            code: DiagnosticCode("W-INTENT-CONFLICT"),
+            class: DiagnosticClass::IntentConflict,
+            severity: Severity::Warning,
+            message: format!(
+                "Rule content {content} appears with conflicting commitment states: {}",
+                states
+                    .iter()
+                    .map(|s| {
+                        let text = s.to_string();
+                        if text.is_empty() {
+                            "none".into()
+                        } else {
+                            text
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            span: Some(occurrences[0].0),
+            help: Some(
+                "Keep one commitment policy for the same rule content, or rewrite the texts so they are intentionally distinct."
+                    .into(),
+            ),
+            related_nodes: related,
+        });
+    }
+    out
+}
+
+fn parse_rule_commitment(rule_text: &str) -> Commitment {
+    let after_rule = rule_text
+        .trim_start()
+        .strip_prefix("rule")
+        .unwrap_or(rule_text)
+        .trim_start();
+    let token = after_rule
+        .split(|ch: char| ch.is_whitespace() || ch == '"')
+        .next()
+        .unwrap_or("");
+    if token.ends_with("$$??") {
+        Commitment::StrongLockedQuestionQuestion
+    } else if token.ends_with("$??") {
+        Commitment::LockedQuestionQuestion
+    } else if token.ends_with("$$?") {
+        Commitment::StrongLockedQuestion
+    } else if token.ends_with("$?") {
+        Commitment::LockedQuestion
+    } else if token.ends_with("$$") {
+        Commitment::StrongLocked
+    } else if token.ends_with('$') {
+        Commitment::Locked
+    } else if token.ends_with("??") {
+        Commitment::QuestionQuestion
+    } else if token.ends_with('?') {
+        Commitment::Question
+    } else {
+        Commitment::None
+    }
+}
+
+fn detect_intent_gaps(document: &LosslessDocument) -> Vec<IntentDiagnostic> {
+    let mut out = Vec::new();
+    for fragment in &document.semantic().fragments {
+        match fragment {
+            Fragment::Flow { flow } => {
+                if flow.entries.is_empty() {
+                    continue;
+                }
+                let has_failure_hint = flow.entries.iter().any(|entry| {
+                    let name = entry.state.name.to_ascii_lowercase();
+                    name.contains("fault")
+                        || name.contains("error")
+                        || name.contains("fail")
+                        || name.contains("cancel")
+                        || name.contains("reject")
+                        || entry.arms.iter().any(|arm| {
+                            let to = arm.to.name.to_ascii_lowercase();
+                            to.contains("fault")
+                                || to.contains("error")
+                                || to.contains("fail")
+                                || to.contains("cancel")
+                                || to.contains("reject")
+                        })
+                });
+                if !has_failure_hint {
+                    if let Some(node) = document.nodes().iter().find(|node| {
+                        node.kind == crate::lossless::SourceNodeKind::Flow
+                            && document
+                                .text(node.spans.header)
+                                .is_some_and(|text| text.contains(&flow.name.name))
+                    }) {
+                        out.push(IntentDiagnostic {
+                            code: DiagnosticCode("H-INTENT-GAP"),
+                            class: DiagnosticClass::IntentGap,
+                            severity: Severity::Hint,
+                            message: format!(
+                                "Flow `{}` has no obvious failure/cancel path",
+                                flow.name.name
+                            ),
+                            span: Some(node.spans.header),
+                            help: Some(
+                                "Consider describing Fault/Error/Cancel arms so recovery intent is explicit."
+                                    .into(),
+                            ),
+                            related_nodes: vec![node.id],
+                        });
+                    }
+                }
+            }
+            Fragment::Func { func } => {
+                if func.steps.is_empty() {
+                    continue;
+                }
+                let has_error_step = steps_have_error(&func.steps);
+                if !has_error_step {
+                    if let Some(node) = document.nodes().iter().find(|node| {
+                        node.kind == crate::lossless::SourceNodeKind::Func
+                            && document
+                                .text(node.spans.header)
+                                .is_some_and(|text| text.contains(&func.name.name))
+                    }) {
+                        out.push(IntentDiagnostic {
+                            code: DiagnosticCode("H-INTENT-GAP"),
+                            class: DiagnosticClass::IntentGap,
+                            severity: Severity::Hint,
+                            message: format!(
+                                "Func `{}` steps do not mention an error path",
+                                func.name.name
+                            ),
+                            span: Some(node.spans.header),
+                            help: Some(
+                                "Add an `error` step or `on` compensation block if failure recovery matters."
+                                    .into(),
+                            ),
+                            related_nodes: vec![node.id],
+                        });
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+fn steps_have_error(steps: &[Step]) -> bool {
+    steps.iter().any(|step| match step {
+        Step::Error { .. } => true,
+        Step::Action { step } => !step.on_blocks.is_empty(),
+        Step::Assign { step } => !step.on_blocks.is_empty(),
+        Step::If { step } => {
+            steps_have_error(&step.then_branch)
+                || step
+                    .else_branch
+                    .as_ref()
+                    .is_some_and(|branch| steps_have_error(branch))
+        }
+        Step::For { step } => steps_have_error(&step.body),
+        Step::While { step } => steps_have_error(&step.body),
+        Step::Parasteps { step } => steps_have_error(&step.steps),
+        Step::Desc { .. } | Step::Placeholder { .. } => false,
+    })
+}
+
+fn queue_contains(queue: &[QueueItem], item: &QueueItem) -> bool {
+    queue.iter().any(|existing| {
+        existing.state == item.state
+            && existing.header == item.header
+            && existing.span.start == item.span.start
+    })
 }
 
 fn decision_help(state: Commitment) -> &'static str {
@@ -300,6 +515,33 @@ type Good: ...
             .diagnostics
             .iter()
             .any(|d| d.class == DiagnosticClass::Syntax));
+    }
+
+    #[test]
+    fn detects_rule_commitment_conflict_and_flow_gap() {
+        let source = r#"rule$ "支付必须幂等"
+func Pay:
+    steps:
+        charge payment
+
+rule "支付必须幂等"
+func Refund:
+    steps:
+        refund payment
+
+flow Checkout:
+    Pending >>> Paid:
+"#;
+        let result = parse_lossless(source);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let report = analyze_document(&result.document, &result.errors);
+        assert!(report.diagnostics.iter().any(|d| {
+            d.class == DiagnosticClass::IntentConflict && d.code.0 == "W-INTENT-CONFLICT"
+        }));
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|d| d.class == DiagnosticClass::IntentGap && d.code.0 == "H-INTENT-GAP"));
     }
 
     impl DocumentDiagnostics {

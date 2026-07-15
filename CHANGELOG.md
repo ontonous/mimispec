@@ -35,6 +35,8 @@
   lock propagation checks for nested AI edits.
 - Added first-wave intent diagnostics with decision/delegation queues,
   commitment summaries, syntax/attachment guidance, and stable diagnostic codes.
+- Added intent-conflict and intent-gap heuristics, plus `mimispec diagnose`
+  (and `--diagnostics`) for human/JSON collaboration reports.
 
 ### Fixed
 - Preserved commitment suffixes when rendering boolean values, `not`, `and`,

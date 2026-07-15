@@ -36,6 +36,10 @@ struct Cli {
     #[arg(short, long, global = true)]
     latex: bool,
 
+    /// Include intent diagnostics (decision/delegation queues, attachment, gaps)
+    #[arg(long, global = true)]
+    diagnostics: bool,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -52,6 +56,12 @@ enum Commands {
     Build {
         /// Root directory to scan for .mms files
         dir: PathBuf,
+    },
+    /// Analyze intent diagnostics for .mms file(s)
+    Diagnose {
+        /// .mms file(s) to analyze; use - for stdin
+        #[arg(default_value = "-")]
+        files: Vec<PathBuf>,
     },
 }
 
@@ -260,6 +270,85 @@ fn run_parse(files: &[PathBuf], ast: bool, json: bool, render: bool, latex: bool
     }
 }
 
+fn run_diagnose(files: &[PathBuf], json: bool) {
+    let mut reports = Vec::new();
+    let mut any_syntax_error = false;
+
+    for path in files {
+        let source = match read_source(path) {
+            Some(s) => s,
+            None => {
+                any_syntax_error = true;
+                if !json {
+                    eprintln!("{}: failed to read source", path.display());
+                }
+                continue;
+            }
+        };
+        let result = mimispec::parse_lossless(&source);
+        if !result.errors.is_empty() {
+            any_syntax_error = true;
+        }
+        let report = mimispec::diagnostics::analyze_document(&result.document, &result.errors);
+        if json {
+            reports.push(serde_json::json!({
+                "path": path.display().to_string(),
+                "report": report,
+            }));
+        } else {
+            print_diagnose_report(path, &report);
+        }
+    }
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({ "results": reports }))
+                .unwrap_or_else(|e| format!("{{\"error\": \"JSON serialization failed: {}\"}}", e))
+        );
+    }
+
+    if any_syntax_error {
+        std::process::exit(1);
+    }
+}
+
+fn print_diagnose_report(path: &Path, report: &mimispec::diagnostics::DocumentDiagnostics) {
+    println!("== {} ==", path.display());
+    println!(
+        "summary: slots={} commit_ready={} decision={} delegation={}",
+        report.summary.total_slots,
+        report.summary.commit_ready,
+        report.decision_queue.len(),
+        report.delegation_queue.len()
+    );
+    if !report.decision_queue.is_empty() {
+        println!("decision queue:");
+        for item in &report.decision_queue {
+            println!("  - [{}] {}", item.state, item.header.trim());
+        }
+    }
+    if !report.delegation_queue.is_empty() {
+        println!("delegation queue:");
+        for item in &report.delegation_queue {
+            println!("  - [{}] {}", item.state, item.header.trim());
+        }
+    }
+    if !report.diagnostics.is_empty() {
+        println!("diagnostics:");
+        for diagnostic in &report.diagnostics {
+            println!(
+                "  - {} {:?} {}",
+                diagnostic.code.0, diagnostic.severity, diagnostic.message
+            );
+            if let Some(help) = &diagnostic.help {
+                println!("      help: {help}");
+            }
+        }
+    }
+    println!();
+}
+
 fn run_build(dir: &Path) {
     let mut total_errors = 0usize;
     let mut any_failure = false;
@@ -386,9 +475,16 @@ fn main() {
         Some(Commands::Build { dir }) => {
             run_build(dir);
         }
+        Some(Commands::Diagnose { files }) => {
+            run_diagnose(files, cli.json);
+        }
         None => {
-            // Flat args = parse behavior (backward compatible)
-            run_parse(&cli.files, cli.ast, cli.json, cli.render, cli.latex);
+            if cli.diagnostics {
+                run_diagnose(&cli.files, cli.json);
+            } else {
+                // Flat args = parse behavior (backward compatible)
+                run_parse(&cli.files, cli.ast, cli.json, cli.render, cli.latex);
+            }
         }
     }
 }
