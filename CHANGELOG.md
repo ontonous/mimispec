@@ -29,6 +29,8 @@
   assert formatter stability.
 - Added protected content/structure hashes, `LockChallenge` records, and
   challenge-fingerprint deduplication for AI lock challenges.
+- Added `validate_ai_document_patch` for before/after lossless revision checks
+  that accept suffix-only lock challenges and reject lock-bypass content edits.
 
 ### Fixed
 - Preserved commitment suffixes when rendering boolean values, `not`, `and`,

@@ -114,6 +114,43 @@ pub fn effects_from_hashes(before: &ProtectedHashes, after: &ProtectedHashes) ->
     }
 }
 
+/// Effects for patch validation: commitment suffix-only edits do not count as
+/// protected content/structure changes.
+pub fn effects_for_slot_patch(before: &SlotSnapshot, after: &SlotSnapshot) -> TransitionEffects {
+    let before_core = strip_all_commitment_suffixes(&before.core);
+    let after_core = strip_all_commitment_suffixes(&after.core);
+    let before_header = strip_all_commitment_suffixes(&before.header);
+    let after_header = strip_all_commitment_suffixes(&after.header);
+    let before_full = strip_all_commitment_suffixes(&before.full);
+    let after_full = strip_all_commitment_suffixes(&after.full);
+    TransitionEffects {
+        content_changed: before_core != after_core,
+        structure_changed: before_header != after_header,
+        attachment_changed: before_full != after_full
+            && before_core == after_core
+            && before_header == after_header,
+    }
+}
+
+fn strip_all_commitment_suffixes(text: &str) -> String {
+    text.split_inclusive(|ch: char| {
+        ch.is_whitespace() || matches!(ch, ':' | '(' | ')' | '[' | ']' | ',' | '|' | '\n' | '\r')
+    })
+    .map(|part| {
+        let (token, sep) = match part.chars().last() {
+            Some(ch)
+                if ch.is_whitespace()
+                    || matches!(ch, ':' | '(' | ')' | '[' | ']' | ',' | '|' | '\n' | '\r') =>
+            {
+                (&part[..part.len() - ch.len_utf8()], ch.to_string())
+            }
+            _ => (part, String::new()),
+        };
+        format!("{}{}", strip_commitment_suffix(token), sep)
+    })
+    .collect()
+}
+
 /// Build a lock challenge after a validated AI `$/$` challenge transition.
 pub fn build_lock_challenge(
     document: &LosslessDocument,
@@ -156,6 +193,194 @@ pub fn challenge_is_duplicate(existing: &[LockChallenge], challenge: &LockChalle
     existing
         .iter()
         .any(|prior| prior.fingerprint() == fingerprint)
+}
+
+/// One commitment slot observed on a lossless document revision.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SlotSnapshot {
+    pub node: SourceNodeId,
+    pub kind: crate::lossless::SourceNodeKind,
+    pub state: Commitment,
+    pub header: String,
+    pub core: String,
+    pub full: String,
+    pub hashes: ProtectedHashes,
+}
+
+/// Collect commitment-bearing top-level/nested nodes from a document.
+///
+/// The first revision uses keyword/header commitment text when present; for
+/// nodes without an explicit suffix the state is `None`.
+pub fn collect_slot_snapshots(document: &LosslessDocument) -> Vec<SlotSnapshot> {
+    document
+        .nodes()
+        .iter()
+        .filter_map(|node| {
+            let header = document.text(node.spans.header)?.to_string();
+            let core = document.text(node.spans.core)?.to_string();
+            let full = document.text(node.spans.full)?.to_string();
+            let state = commitment_from_header(&header);
+            let hashes = protected_hashes(document, node.id)?;
+            Some(SlotSnapshot {
+                node: node.id,
+                kind: node.kind,
+                state,
+                header,
+                core,
+                full,
+                hashes,
+            })
+        })
+        .collect()
+}
+
+fn commitment_from_header(header: &str) -> Commitment {
+    // Prefer the strongest trailing commitment found on any header token.
+    // Typical headers look like `func Pay$:` or `type Status?:`.
+    let mut found = Commitment::None;
+    for token in header.split(|ch: char| {
+        ch.is_whitespace() || matches!(ch, ':' | '(' | ')' | '[' | ']' | ',' | '|' | '>')
+    }) {
+        if token.is_empty() {
+            continue;
+        }
+        let state = parse_trailing_commitment(token);
+        if commitment_rank(state) > commitment_rank(found) {
+            found = state;
+        }
+    }
+    found
+}
+
+fn commitment_rank(state: Commitment) -> u8 {
+    match state {
+        Commitment::None => 0,
+        Commitment::Question => 1,
+        Commitment::QuestionQuestion => 2,
+        Commitment::Locked => 3,
+        Commitment::LockedQuestion => 4,
+        Commitment::LockedQuestionQuestion => 5,
+        Commitment::StrongLocked => 6,
+        Commitment::StrongLockedQuestion => 7,
+        Commitment::StrongLockedQuestionQuestion => 8,
+    }
+}
+
+fn parse_trailing_commitment(token: &str) -> Commitment {
+    if token.ends_with("$$??") {
+        Commitment::StrongLockedQuestionQuestion
+    } else if token.ends_with("$??") {
+        Commitment::LockedQuestionQuestion
+    } else if token.ends_with("$$?") {
+        Commitment::StrongLockedQuestion
+    } else if token.ends_with("$?") {
+        Commitment::LockedQuestion
+    } else if token.ends_with("$$") {
+        Commitment::StrongLocked
+    } else if token.ends_with('$') {
+        Commitment::Locked
+    } else if token.ends_with("??") {
+        Commitment::QuestionQuestion
+    } else if token.ends_with('?') {
+        Commitment::Question
+    } else {
+        Commitment::None
+    }
+}
+
+/// Structured comparison between two document revisions for one logical slot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PatchSlotDiff {
+    pub before: SlotSnapshot,
+    pub after: Option<SlotSnapshot>,
+    pub effects: TransitionEffects,
+    pub from: Commitment,
+    pub to: Commitment,
+}
+
+/// Validate an AI patch by comparing before/after lossless documents.
+///
+/// Matching is by node kind + core identity with commitment stripped from the
+/// first header token, so suffix-only challenges can be recognized.
+pub fn validate_ai_document_patch(
+    before: &LosslessDocument,
+    after: &LosslessDocument,
+    challenge_reason: Option<&str>,
+) -> Vec<Result<PatchSlotDiff, TransitionViolation>> {
+    let before_slots = collect_slot_snapshots(before);
+    let after_slots = collect_slot_snapshots(after);
+    let mut results = Vec::new();
+
+    for prior in &before_slots {
+        if !prior.state.protects_content() && prior.state == Commitment::None {
+            continue;
+        }
+        let identity = identity_key(&prior.header, prior.kind);
+        let matched = after_slots.iter().find(|candidate| {
+            candidate.kind == prior.kind
+                && identity_key(&candidate.header, candidate.kind) == identity
+        });
+        let Some(next) = matched else {
+            if prior.state.protects_content() {
+                results.push(Err(TransitionViolation::ProtectedContentChanged));
+            }
+            continue;
+        };
+
+        let effects = effects_for_slot_patch(prior, next);
+        let request = TransitionRequest {
+            actor: Actor::Ai,
+            from: prior.state,
+            to: next.state,
+            effects,
+            authorization: HumanAuthorization::default(),
+            challenge_reason,
+        };
+        match validate_transition(&request) {
+            Ok(()) => results.push(Ok(PatchSlotDiff {
+                before: prior.clone(),
+                after: Some(next.clone()),
+                effects,
+                from: prior.state,
+                to: next.state,
+            })),
+            Err(violation) => results.push(Err(violation)),
+        }
+    }
+    results
+}
+
+fn identity_key(header: &str, kind: crate::lossless::SourceNodeKind) -> String {
+    // Strip commitment suffixes from every token so `Pay$` and `Pay$?` match.
+    let stripped: String = header
+        .split_inclusive(|ch: char| {
+            ch.is_whitespace() || matches!(ch, ':' | '(' | ')' | '[' | ']' | ',' | '|')
+        })
+        .map(|part| {
+            let (token, sep) = match part.chars().last() {
+                Some(ch)
+                    if ch.is_whitespace()
+                        || matches!(ch, ':' | '(' | ')' | '[' | ']' | ',' | '|') =>
+                {
+                    (&part[..part.len() - ch.len_utf8()], ch.to_string())
+                }
+                _ => (part, String::new()),
+            };
+            format!("{}{}", strip_commitment_suffix(token), sep)
+        })
+        .collect();
+    format!("{:?}:{}", kind, stripped)
+}
+
+fn strip_commitment_suffix(token: &str) -> &str {
+    for suffix in ["$$??", "$??", "$$?", "$?", "$$", "$", "??", "?"] {
+        if let Some(stripped) = token.strip_suffix(suffix) {
+            if !stripped.is_empty() {
+                return stripped;
+            }
+        }
+    }
+    token
 }
 
 /// Human 对受保护内容和强锁解除的显式授权。
@@ -564,5 +789,83 @@ mod tests {
             .unwrap()],
             &with_new_evidence
         ));
+    }
+
+    #[test]
+    fn ai_patch_accepts_suffix_only_lock_challenge() {
+        let before = crate::parse_lossless(
+            r#"func Pay$:
+    steps:
+        charge payment
+"#,
+        )
+        .document;
+        let after = crate::parse_lossless(
+            r#"func Pay$?:
+    steps:
+        charge payment
+"#,
+        )
+        .document;
+        let results = validate_ai_document_patch(&before, &after, Some("refund path missing"));
+        assert!(results.iter().all(|result| result.is_ok()), "{results:?}");
+        assert!(results.iter().any(|result| {
+            matches!(
+                result,
+                Ok(diff)
+                    if diff.from == Commitment::Locked
+                        && diff.to == Commitment::LockedQuestion
+                        && diff.effects.is_unchanged()
+            )
+        }));
+    }
+
+    #[test]
+    fn ai_patch_rejects_lock_bypass_content_edit() {
+        let before = crate::parse_lossless(
+            r#"func Pay$:
+    steps:
+        charge payment
+"#,
+        )
+        .document;
+        let after = crate::parse_lossless(
+            r#"func Pay$:
+    steps:
+        charge twice
+"#,
+        )
+        .document;
+        let results = validate_ai_document_patch(&before, &after, None);
+        assert!(results.iter().any(|result| {
+            matches!(
+                result,
+                Err(TransitionViolation::ProtectedContentChanged)
+                    | Err(TransitionViolation::ProtectedStructureChanged)
+                    | Err(TransitionViolation::AiTransitionForbidden)
+            )
+        }));
+    }
+
+    #[test]
+    fn ai_patch_rejects_unlock_without_authorization() {
+        let before = crate::parse_lossless(
+            r#"func Pay$$:
+    steps:
+        charge payment
+"#,
+        )
+        .document;
+        let after = crate::parse_lossless(
+            r#"func Pay:
+    steps:
+        charge payment
+"#,
+        )
+        .document;
+        let results = validate_ai_document_patch(&before, &after, None);
+        assert!(results
+            .iter()
+            .any(|result| { matches!(result, Err(TransitionViolation::AiTransitionForbidden)) }));
     }
 }
