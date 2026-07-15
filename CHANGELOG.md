@@ -39,6 +39,9 @@
   (and `--diagnostics`) for human/JSON collaboration reports.
 - Added library-level IDE protocol helpers: semantic tokens, commitment hover,
   actor-aware code actions, and an `ide_snapshot` combining queues/diagnostics.
+- Added materialization core types: `CommitSelection`, provenance categories,
+  `EvidenceRecord`, materialization plans, drift detection, and
+  `mimispec materialize` for commit-ready slot planning.
 
 ### Fixed
 - Preserved commitment suffixes when rendering boolean values, `not`, `and`,

@@ -8,6 +8,7 @@ pub mod ide;
 pub mod latex;
 pub mod lexer;
 pub mod lossless;
+pub mod materialize;
 pub mod parser;
 pub mod query;
 pub mod render;

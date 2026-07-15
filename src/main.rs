@@ -63,6 +63,15 @@ enum Commands {
         #[arg(default_value = "-")]
         files: Vec<PathBuf>,
     },
+    /// Plan materialization from commit-ready locked slots
+    Materialize {
+        /// .mms file(s) to plan; use - for stdin
+        #[arg(default_value = "-")]
+        files: Vec<PathBuf>,
+        /// Release scope label stored on the plan
+        #[arg(long, default_value = "default")]
+        scope: String,
+    },
 }
 
 #[derive(Serialize)]
@@ -313,6 +322,84 @@ fn run_diagnose(files: &[PathBuf], json: bool) {
     }
 }
 
+fn run_materialize(files: &[PathBuf], scope: &str, json: bool) {
+    let mut plans = Vec::new();
+    let mut any_error = false;
+
+    for path in files {
+        let source = match read_source(path) {
+            Some(s) => s,
+            None => {
+                any_error = true;
+                if !json {
+                    eprintln!("{}: failed to read source", path.display());
+                }
+                continue;
+            }
+        };
+        let result = mimispec::parse_lossless(&source);
+        if !result.errors.is_empty() {
+            any_error = true;
+        }
+        let plan = mimispec::materialize::plan_materialization(&result.document, scope);
+        if let Err(err) = mimispec::materialize::validate_plan(&plan) {
+            any_error = true;
+            if !json {
+                eprintln!("{}: invalid plan: {err}", path.display());
+            }
+        }
+        if json {
+            plans.push(serde_json::json!({
+                "path": path.display().to_string(),
+                "plan": plan,
+            }));
+        } else {
+            print_materialize_plan(path, &plan);
+        }
+    }
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({ "results": plans }))
+                .unwrap_or_else(|e| format!("{{\"error\": \"JSON serialization failed: {}\"}}", e))
+        );
+    }
+
+    if any_error {
+        std::process::exit(1);
+    }
+}
+
+fn print_materialize_plan(path: &Path, plan: &mimispec::materialize::MaterializationPlan) {
+    println!("== {} ==", path.display());
+    println!("release scope: {}", plan.selection.release_scope);
+    println!(
+        "selected: {}  excluded unlocked: {}  evidence: {}",
+        plan.selection.slots.len(),
+        plan.excluded_unlocked.len(),
+        plan.evidence.len()
+    );
+    if !plan.selection.slots.is_empty() {
+        println!("commit-ready slots:");
+        for slot in &plan.selection.slots {
+            println!(
+                "  - [{:?}] {} ({})",
+                slot.provenance,
+                slot.header.trim(),
+                slot.state
+            );
+        }
+    }
+    if !plan.excluded_unlocked.is_empty() {
+        println!("excluded unlocked:");
+        for slot in &plan.excluded_unlocked {
+            println!("  - {} ({})", slot.header.trim(), slot.state);
+        }
+    }
+    println!();
+}
+
 fn print_diagnose_report(path: &Path, report: &mimispec::diagnostics::DocumentDiagnostics) {
     println!("== {} ==", path.display());
     println!(
@@ -477,6 +564,9 @@ fn main() {
         }
         Some(Commands::Diagnose { files }) => {
             run_diagnose(files, cli.json);
+        }
+        Some(Commands::Materialize { files, scope }) => {
+            run_materialize(files, scope, cli.json);
         }
         None => {
             if cli.diagnostics {

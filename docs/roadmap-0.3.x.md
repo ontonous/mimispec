@@ -289,6 +289,11 @@ embedding product-specific policy in the parser.
 
 ## 9. v0.3.5: Materialization Core
 
+> Implementation status: core library types and planning APIs are landing in
+> `materialize::{select_commit_ready, plan_materialization, detect_drift,
+> validate_plan, EvidenceRecord}` plus `mimispec materialize`. Target adapters
+> and profile-specific generation remain later work.
+
 ### Goal
 
 Define how confirmed intent becomes target artifacts without coupling Core to a
