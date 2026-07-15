@@ -321,12 +321,12 @@ type Status$: Active | Paid
         )
         .unwrap();
         let rejected = vec![challenge.clone()];
-        let active = filter_active_challenges(&[challenge.clone()], &rejected);
+        let active = filter_active_challenges(std::slice::from_ref(&challenge), &rejected);
         assert!(active.is_empty());
 
         let mut renewed = challenge;
         renewed.evidence.push("new counterexample".into());
-        let active = filter_active_challenges(&[renewed.clone()], &rejected);
+        let active = filter_active_challenges(std::slice::from_ref(&renewed), &rejected);
         assert_eq!(active.len(), 1);
 
         // Keep transition effects path exercised for AI challenge context.
