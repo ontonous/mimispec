@@ -180,6 +180,8 @@ mimispec/
 │   ├── specification.md         # Syntax specification
 │   ├── roadmap-0.3.x.md         # 0.3.x development roadmap
 │   ├── commitment-state-machine.md
+│   ├── migration-0.2-to-0.3.md  # Draft migration guide
+│   ├── schemas/                 # Draft collaboration JSON schemas
 │   ├── advanced-usage.md        # Advanced usage
 │   ├── version-management.md    # Version management
 │   └── stdlib-api.md            # Stdlib API reference

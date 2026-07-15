@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ontonous/mimispec/docs/schemas/collaboration-report.schema.json",
+  "title": "MimiSpec Collaboration Report",
+  "description": "Versioned JSON shape for diagnose/workflow/materialize/profile outputs under development for 0.3.x.",
+  "type": "object",
+  "required": ["schema_version", "kind"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "0.3.0-dev"
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["diagnose", "workflow", "materialize", "profile"]
+    },
+    "path": { "type": "string" },
+    "release_scope": { "type": "string" },
+    "summary": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "decision_queue": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/queueItem" }
+    },
+    "delegation_queue": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/queueItem" }
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/diagnostic" }
+    },
+    "plan": { "type": "object", "additionalProperties": true },
+    "board": { "type": "object", "additionalProperties": true },
+    "analysis": { "type": "object", "additionalProperties": true }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "queueItem": {
+      "type": "object",
+      "required": ["state", "header"],
+      "properties": {
+        "node": { "type": "integer", "minimum": 0 },
+        "state": { "type": "string" },
+        "header": { "type": "string" },
+        "review_target": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "diagnostic": {
+      "type": "object",
+      "required": ["code", "class", "severity", "message"],
+      "properties": {
+        "code": { "type": "string" },
+        "class": {
+          "type": "string",
+          "enum": [
+            "syntax",
+            "attachment",
+            "collaboration",
+            "decision",
+            "delegation",
+            "intent_conflict",
+            "intent_gap",
+            "target_gap"
+          ]
+        },
+        "severity": {
+          "type": "string",
+          "enum": ["error", "warning", "info", "hint"]
+        },
+        "message": { "type": "string" },
+        "help": { "type": ["string", "null"] }
+      },
+      "additionalProperties": true
+    }
+  }
+}

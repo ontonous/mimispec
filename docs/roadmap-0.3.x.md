@@ -415,6 +415,11 @@ all slots while retaining simple product-level milestones.
 
 ## 13. v0.3.9: Stabilization
 
+> Implementation status: draft migration guide
+> (`docs/migration-0.2-to-0.3.md`) and an initial collaboration JSON schema
+> (`docs/schemas/collaboration-report.schema.json`) are available. Golden corpus
+> packaging, performance baselines, and a formal security review remain open.
+
 ### Goal
 
 Freeze the 0.3 semantic and API surface before considering 0.4.

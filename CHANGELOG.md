@@ -50,6 +50,8 @@
   typescript profiles, conformance checks, and CLI target selection.
 - Added OSE workflow board APIs (`workflow::build_workflow_board`, semantic
   diff, rejected-challenge filtering) and `mimispec workflow`.
+- Added draft `docs/migration-0.2-to-0.3.md` and
+  `docs/schemas/collaboration-report.schema.json` for 0.3.x stabilization.
 
 ### Fixed
 - Preserved commitment suffixes when rendering boolean values, `not`, `and`,

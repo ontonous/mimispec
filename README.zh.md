@@ -179,6 +179,8 @@ mimispec/
 │   ├── specification.md         # 语法规范
 │   ├── roadmap-0.3.x.md         # 0.3.x 开发路线
 │   ├── commitment-state-machine.md
+│   ├── migration-0.2-to-0.3.md  # 迁移草案
+│   ├── schemas/                 # collaboration JSON schema 草案
 │   ├── advanced-usage.md        # 高级用法
 │   ├── version-management.md    # 版本管理
 │   └── stdlib-api.md            # 标准库参考
