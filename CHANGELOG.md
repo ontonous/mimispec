@@ -42,6 +42,8 @@
 - Added materialization core types: `CommitSelection`, provenance categories,
   `EvidenceRecord`, materialization plans, drift detection, and
   `mimispec materialize` for commit-ready slot planning.
+- Added first-party/generic target profile analysis with capability matrices,
+  unsupported-intent gap reporting, and `mimispec profile --target mimi|generic`.
 
 ### Fixed
 - Preserved commitment suffixes when rendering boolean values, `not`, `and`,

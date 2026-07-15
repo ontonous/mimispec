@@ -72,6 +72,18 @@ enum Commands {
         #[arg(long, default_value = "default")]
         scope: String,
     },
+    /// Analyze a target profile against commit-ready intent
+    Profile {
+        /// .mms file(s) to analyze; use - for stdin
+        #[arg(default_value = "-")]
+        files: Vec<PathBuf>,
+        /// Profile name: mimi (default) or generic
+        #[arg(long, default_value = "mimi")]
+        target: String,
+        /// Release scope label
+        #[arg(long, default_value = "default")]
+        scope: String,
+    },
 }
 
 #[derive(Serialize)]
@@ -371,6 +383,106 @@ fn run_materialize(files: &[PathBuf], scope: &str, json: bool) {
     }
 }
 
+fn run_profile(files: &[PathBuf], target: &str, scope: &str, json: bool) {
+    let mut results = Vec::new();
+    let mut any_error = false;
+
+    for path in files {
+        let source = match read_source(path) {
+            Some(s) => s,
+            None => {
+                any_error = true;
+                if !json {
+                    eprintln!("{}: failed to read source", path.display());
+                }
+                continue;
+            }
+        };
+        let parsed = mimispec::parse_lossless(&source);
+        if !parsed.errors.is_empty() {
+            any_error = true;
+        }
+        let analysis = match target {
+            "mimi" => mimispec::profile::analyze_mimi_profile(&parsed.document, scope),
+            "generic" => mimispec::profile::analyze_generic_profile(&parsed.document, scope),
+            other => {
+                any_error = true;
+                if !json {
+                    eprintln!(
+                        "{}: unknown profile `{other}` (use mimi|generic)",
+                        path.display()
+                    );
+                }
+                continue;
+            }
+        };
+        if analysis
+            .gaps
+            .iter()
+            .any(|gap| gap.severity == mimispec::profile::GapSeverity::Error)
+        {
+            any_error = true;
+        }
+        if json {
+            results.push(serde_json::json!({
+                "path": path.display().to_string(),
+                "analysis": analysis,
+            }));
+        } else {
+            print_profile_analysis(path, &analysis);
+        }
+    }
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({ "results": results }))
+                .unwrap_or_else(|e| format!("{{\"error\": \"JSON serialization failed: {}\"}}", e))
+        );
+    }
+
+    if any_error {
+        std::process::exit(1);
+    }
+}
+
+fn print_profile_analysis(path: &Path, analysis: &mimispec::profile::ProfileAnalysis) {
+    println!("== {} ==", path.display());
+    println!(
+        "profile: {}@{}  supported={} partial={} gaps={}",
+        analysis.profile.name,
+        analysis.profile.version,
+        analysis.supported_slots.len(),
+        analysis.partial_slots.len(),
+        analysis.gaps.len()
+    );
+    if !analysis.supported_slots.is_empty() {
+        println!("supported:");
+        for slot in &analysis.supported_slots {
+            println!("  - {} ({})", slot.header.trim(), slot.state);
+        }
+    }
+    if !analysis.partial_slots.is_empty() {
+        println!("partial:");
+        for slot in &analysis.partial_slots {
+            println!("  - {} ({})", slot.header.trim(), slot.state);
+        }
+    }
+    if !analysis.gaps.is_empty() {
+        println!("gaps:");
+        for gap in &analysis.gaps {
+            println!(
+                "  - [{:?}] {} — {}",
+                gap.severity,
+                gap.slot_header.trim(),
+                gap.reason
+            );
+            println!("      action: {}", gap.suggested_action);
+        }
+    }
+    println!();
+}
+
 fn print_materialize_plan(path: &Path, plan: &mimispec::materialize::MaterializationPlan) {
     println!("== {} ==", path.display());
     println!("release scope: {}", plan.selection.release_scope);
@@ -567,6 +679,13 @@ fn main() {
         }
         Some(Commands::Materialize { files, scope }) => {
             run_materialize(files, scope, cli.json);
+        }
+        Some(Commands::Profile {
+            files,
+            target,
+            scope,
+        }) => {
+            run_profile(files, target, scope, cli.json);
         }
         None => {
             if cli.diagnostics {

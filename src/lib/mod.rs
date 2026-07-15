@@ -10,6 +10,7 @@ pub mod lexer;
 pub mod lossless;
 pub mod materialize;
 pub mod parser;
+pub mod profile;
 pub mod query;
 pub mod render;
 mod render_util;

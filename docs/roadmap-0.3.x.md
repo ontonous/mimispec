@@ -323,6 +323,10 @@ specific programming language.
 
 ## 10. v0.3.6: Native Mimi Profile
 
+> Implementation status: capability probing and gap reporting land in
+> `profile::{analyze_mimi_profile, analyze_generic_profile}` and
+> `mimispec profile`. Actual `.mimi` generation remains an external adapter.
+
 ### Goal
 
 Make Mimi the first-party, deepest target while keeping MimiSpec Core generic.

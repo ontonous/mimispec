@@ -86,6 +86,7 @@ mimispec path/to/file.mms --latex         # 渲染数学为 LaTeX
 mimispec diagnose path/to/file.mms        # 决策/委托队列 + 意图诊断
 mimispec path/to/file.mms --diagnostics   # 同上
 mimispec materialize path/to/file.mms --scope payments-v1  # commit-ready 物化计划
+mimispec profile path/to/file.mms --target mimi --scope payments-v1
 echo "func Hello: steps:\n    say hi" | mimispec - --ast  # 标准输入
 mimispec *.mms --json                     # 多文件
 ```

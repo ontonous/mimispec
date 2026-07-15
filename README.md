@@ -86,6 +86,7 @@ mimispec path/to/file.mms --latex         # render math to LaTeX
 mimispec diagnose path/to/file.mms        # decision/delegation queues + intent diagnostics
 mimispec path/to/file.mms --diagnostics   # same as diagnose
 mimispec materialize path/to/file.mms --scope payments-v1  # commit-ready materialization plan
+mimispec profile path/to/file.mms --target mimi --scope payments-v1
 echo "func Hello: steps:\n    say hi" | mimispec - --ast  # stdin
 mimispec *.mms --json                     # multiple files
 ```
