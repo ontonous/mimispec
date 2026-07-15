@@ -27,6 +27,8 @@
 - Added structured Fragment moves that relocate a top-level node while carrying
   its attached rule prelude, plus attachment/commitment fingerprints used to
   assert formatter stability.
+- Added protected content/structure hashes, `LockChallenge` records, and
+  challenge-fingerprint deduplication for AI lock challenges.
 
 ### Fixed
 - Preserved commitment suffixes when rendering boolean values, `not`, `and`,

@@ -177,6 +177,11 @@ as an opt-in API for IDE and collaboration clients.
 
 ## 6. v0.3.2: Transition and Patch Validation
 
+> Implementation status: early foundation is landing. Protected node hashes,
+> `LockChallenge` construction, and identical-challenge deduplication are
+> available on top of the 0.3.0 transition validator. Full structured patch
+> validation and unlock tokens remain in progress.
+
 ### Goal
 
 Make the suffix state machine enforceable rather than prompt-only convention.
