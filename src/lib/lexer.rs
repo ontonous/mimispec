@@ -296,7 +296,17 @@ impl<'a> Lexer<'a> {
             let start_col = self.col;
 
             // skip blank / comment lines and compute indent of next content line
+            // S-C1: hard cap so a stuck peek cannot spin forever.
+            let mut layout_iters = 0u32;
             loop {
+                layout_iters = layout_iters.saturating_add(1);
+                if layout_iters > 1_000_000 {
+                    return Err(ParseError::indent_error(
+                        self.line,
+                        self.col,
+                        "lexer layout loop exceeded safety limit".into(),
+                    ));
+                }
                 let spaces = self.count_leading_spaces();
                 match self.peek() {
                     None => {
@@ -309,7 +319,13 @@ impl<'a> Lexer<'a> {
                         continue;
                     }
                     Some('/') if self.peek_second() == Some('/') => {
+                        let before = self.col;
+                        let before_line = self.line;
                         self.skip_comment();
+                        // Ensure progress even if skip_comment is a no-op.
+                        if self.line == before_line && self.col == before {
+                            self.bump();
+                        }
                         continue;
                     }
                     _ => {
