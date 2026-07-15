@@ -83,9 +83,14 @@ mimispec path/to/file.mms --ast           # 输出 AST
 mimispec path/to/file.mms --json          # 输出 JSON（供 IDE 使用）
 mimispec path/to/file.mms --render        # 渲染回源码
 mimispec path/to/file.mms --latex         # 渲染数学为 LaTeX
+mimispec diagnose path/to/file.mms        # 决策/委托队列 + 意图诊断
+mimispec path/to/file.mms --diagnostics   # 同上
 echo "func Hello: steps:\n    say hi" | mimispec - --ast  # 标准输入
 mimispec *.mms --json                     # 多文件
 ```
+
+> 说明：当前 crates.io 发布版本仍是 `0.2.1`。无损解析、协作校验与 `diagnose`
+> 属于 `main` 上推进中的 `0.3.x` 能力，尚不是已发布契约。
 
 ### 作为库使用
 
@@ -113,6 +118,10 @@ if result.errors.is_empty() {
         eprintln!("{}", mimispec::format::format_diagnostic(err, source));
     }
 }
+
+// 0.3.x 开发中 API（在 main 可用；不是已发布的 0.2.1 crate 契约）：
+// let lossless = mimispec::parse_lossless(source);
+// let report = mimispec::diagnostics::analyze_document(&lossless.document, &lossless.errors);
 ```
 
 ---
@@ -140,8 +149,11 @@ mimispec/
 ├── src/
 │   ├── main.rs                  # CLI 入口
 │   └── lib/
-│       ├── mod.rs               # 公共 API（parse、tokenize）
+│       ├── mod.rs               # 公共 API（parse、parse_lossless、tokenize）
 │       ├── ast.rs               # AST 类型定义
+│       ├── collaboration.rs     # Actor 转移与 patch 校验（0.3.x）
+│       ├── diagnostics.rs       # 决策/委托队列诊断（0.3.x）
+│       ├── lossless.rs          # 可选无损源码层（0.3.x）
 │       ├── error.rs             # 错误系统
 │       ├── lexer.rs             # 词法分析器（indent/dedent）
 │       ├── parser/
@@ -161,6 +173,8 @@ mimispec/
 │       └── latex.rs             # LaTeX 数学渲染器
 ├── docs/
 │   ├── specification.md         # 语法规范
+│   ├── roadmap-0.3.x.md         # 0.3.x 开发路线
+│   ├── commitment-state-machine.md
 │   ├── advanced-usage.md        # 高级用法
 │   ├── version-management.md    # 版本管理
 │   └── stdlib-api.md            # 标准库参考

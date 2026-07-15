@@ -83,9 +83,15 @@ mimispec path/to/file.mms --ast           # dump AST
 mimispec path/to/file.mms --json          # JSON output (for IDE)
 mimispec path/to/file.mms --render        # render back to source
 mimispec path/to/file.mms --latex         # render math to LaTeX
+mimispec diagnose path/to/file.mms        # decision/delegation queues + intent diagnostics
+mimispec path/to/file.mms --diagnostics   # same as diagnose
 echo "func Hello: steps:\n    say hi" | mimispec - --ast  # stdin
 mimispec *.mms --json                     # multiple files
 ```
+
+> Note: the current crates.io release is still `0.2.1`. Lossless parsing,
+> collaboration validation, and `diagnose` are under development on `main` for
+> the `0.3.x` series and are not yet a published release contract.
 
 ### Library Usage
 
@@ -113,6 +119,10 @@ if result.errors.is_empty() {
         eprintln!("{}", mimispec::format::format_diagnostic(err, source));
     }
 }
+
+// 0.3.x development APIs (available on main; not the published 0.2.1 crate):
+// let lossless = mimispec::parse_lossless(source);
+// let report = mimispec::diagnostics::analyze_document(&lossless.document, &lossless.errors);
 ```
 
 ---
@@ -140,8 +150,11 @@ mimispec/
 ├── src/
 │   ├── main.rs                  # CLI entry
 │   └── lib/
-│       ├── mod.rs               # Public API (parse, tokenize)
+│       ├── mod.rs               # Public API (parse, parse_lossless, tokenize)
 │       ├── ast.rs               # AST types
+│       ├── collaboration.rs     # Actor transitions, patch validation (0.3.x)
+│       ├── diagnostics.rs       # Decision/delegation queues (0.3.x)
+│       ├── lossless.rs          # Opt-in source map layer (0.3.x)
 │       ├── error.rs             # Error system
 │       ├── lexer.rs             # Lexer (indent/dedent)
 │       ├── parser/
@@ -161,6 +174,8 @@ mimispec/
 │       └── latex.rs             # LaTeX math renderer
 ├── docs/
 │   ├── specification.md         # Syntax specification
+│   ├── roadmap-0.3.x.md         # 0.3.x development roadmap
+│   ├── commitment-state-machine.md
 │   ├── advanced-usage.md        # Advanced usage
 │   ├── version-management.md    # Version management
 │   └── stdlib-api.md            # Stdlib API reference
