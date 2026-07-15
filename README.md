@@ -47,14 +47,14 @@ module$ Shop:
 
 | Feature | Description |
 |---------|-------------|
-| 🧩 **Fragment Architecture** | Any syntax subtree is a valid top-level Fragment — `module`, `type`, `flow`, `func`, `ui`, `steps`, expressions, UI nodes |
+| 🧩 **Fragment Architecture** | Multiple meaningful local structures are valid top-level Fragments — `module`, `type`, `flow`, `func`, `ui`, `steps`, expressions, UI nodes |
 | 📈 **Progressive Precision** | `desc` → `requires`/`ensures` → `math:` blocks, step by step |
 | 🔒 **Commitment System** | `$`/`$$` for confirmed, `?`/`??` for uncertainty — 9 combinations |
 | ⛓️ **Constraint Chains** | `rule` front-attachment from file-level to function-level |
 | ➗ **Structured Math** | `math:` blocks with tensor ops, linear algebra, calculus |
 | 🎯 **State Machine** | `flow` definitions with `>>>` transition operator |
 | 🖼️ **UI Views** | `stack`/`parallel` layouts, `on` event bindings, Saga compensation |
-| 🛡️ **Error Recovery** | Multi-level synchronization, never loses the AST |
+| 🛡️ **Error Recovery** | Multi-level synchronization preserves successfully recovered nodes; callers must check diagnostics before treating a partial AST as complete |
 | 🦀 **Pure Rust** | Zero runtime dependencies, single binary CLI |
 
 ---
@@ -91,7 +91,7 @@ mimispec *.mms --json                     # multiple files
 
 ```toml
 [dependencies]
-mimispec = "0.1"
+mimispec = "0.2.1"
 ```
 
 ```rust
@@ -180,7 +180,10 @@ mimispec/
 
 | Document | Description |
 |----------|-------------|
-| [Syntax Specification](docs/specification.md) | Full language reference (1329 lines) |
+| [Syntax Specification Draft](docs/specification.md) | Current syntax plus staged 0.3.x design; released implementation remains 0.2.1 |
+| [0.3.x Roadmap](docs/roadmap-0.3.x.md) | Version plan from collaboration semantics to the native Mimi profile |
+| [0.3.x Chinese Design Overview](docs/0.3.x-design-zh.md) | Chinese architecture baseline for states, paragraphs, materialization, evidence, and Mimi |
+| [Commitment State Machine](docs/commitment-state-machine.md) | Normative `$`/`?` transitions, actor permissions, and lock challenges |
 | [Advanced Usage](docs/advanced-usage.md) | Modular design, contracts, Saga, ML specs |
 | [Version Management](docs/version-management.md) | SemVer, branching model, CI/CD |
 | [Stdlib API](docs/stdlib-api.md) | Mimi runtime 16-module reference |
@@ -237,10 +240,10 @@ A: MimiSpec targets **human-AI collaboration**, not just API contracts. Its prog
 A: Yes. MimiSpec is a fully self-contained specification language. AI tooling is an optional layer.
 
 **Q: What is the difference between `.mms` and `.mimi`?**  
-A: `.mms` (MimiSpec) is the **intent design layer** — progressive, human-readable, fragment-friendly. `.mimi` (Mimi) is the **production compile target** — contract-verified, LLVM-compiled, with structured concurrency and linear capabilities.
+A: MimiSpec and Mimi are separate languages with independent syntax, ASTs, toolchains, and release cycles. `.mms` is a progressive, natural-language-friendly intent format; `.mimi` is an independently usable Typestate/Flow systems language. Mimi is the first-party native materialization target, not a mandatory backend for every MMS. Mimi's `mms {}` block is a historical super-comment skipped by the production compiler pipeline, not a production-grade embedded MimiSpec system.
 
-**Q: Is this ready for production?**  
-A: The parser (v0.1) is fully functional — published on [crates.io](https://crates.io/crates/mimispec) with 77 unit tests passing, error recovery, and complete AST rendering. CLI binary installable via `cargo install mimispec`. Production tooling (cross-file linking, LSP, Mimi compilation) is on the roadmap.
+**Q: What is the current released version?**
+A: The current release is `v0.2.1`. Parsing, cross-file resolution, symbol tables, incremental caching, and the CLI are available. The `0.3.x` series will implement the commitment collaboration protocol, IDE services, materialization evidence, and the native Mimi profile; forward-looking specification text is not yet released behavior.
 
 **Q: How do I contribute?**  
 A: See [CONTRIBUTING.md](CONTRIBUTING.md). All contributions — code, docs, issues — are welcome.

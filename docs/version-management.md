@@ -95,7 +95,7 @@ main ── v1.0.0 ── v1.0.1 ── v1.1.0 ── ...
 2. 更新 CHANGELOG.md
 3. 更新 Cargo.toml 中的 version 字段
 4. 运行完整测试套件：cargo test --lib && cargo clippy
-5. 运行压力测试：cargo test --release -- --ignored
+5. 运行压力测试：cargo test --release stress_tests
 6. 创建 Git Tag：git tag -a vX.Y.Z -m "vX.Y.Z"
 7. 发布到 GitHub Releases
 8. 合并回 main（如有必要）
@@ -174,7 +174,7 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - run: cargo clippy -- -D warnings
       - run: cargo test --lib
-      - run: cargo test --release -- --ignored
+      - run: cargo test --release stress_tests
 ```
 
 ### 5.2 CI 阶段
@@ -184,7 +184,7 @@ jobs:
 | Lint | `cargo clippy -- -D warnings` | 5m | 零警告策略，将警告视为错误 |
 | 单元测试 | `cargo test --lib` | 5m | 运行所有 75+ 个单元测试 |
 | 集成测试 | `cargo test` | 5m | 含 bin 测试 |
-| 压力测试 | `cargo test --release -- --ignored` | 30m | 1000 个 items 的大文件测试 |
+| 压力测试 | `cargo test --release stress_tests` | 30m | 1000 个 items 的大文件测试 |
 | 构建 | `cargo build --release` | 10m | 验证发布构建 |
 
 ### 5.3 自动发布（建议）

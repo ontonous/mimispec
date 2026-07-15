@@ -1,10 +1,11 @@
 use crate::ast::*;
 use crate::error::ParseError;
 use crate::lexer::TokenKind;
-use crate::parser::Parser;
+use crate::parser::{Parser, RecordedRuleDecision, RecordedSlotKind};
 
 impl Parser {
     pub(super) fn parse_func(&mut self) -> Result<FuncDef, ParseError> {
+        let scope_token = self.pos;
         let keyword_commitment = self.expect_kw(TokenKind::Func, "`func`")?;
         let name = self.fuzzy_ident()?;
         let params = if self.check(&TokenKind::LParen) {
@@ -77,7 +78,7 @@ impl Parser {
             }
             if self.check(&TokenKind::Ellipsis) {
                 self.advance();
-                self.commitment()?;
+                self.commitment_after_previous(RecordedSlotKind::Keyword)?;
                 continue;
             }
             if self.check(&TokenKind::Rule) {
@@ -85,7 +86,13 @@ impl Parser {
                 for e in rule_errors {
                     self.emit_error(e);
                 }
-                let collected = std::mem::take(&mut self.pending_rules);
+                let (collected, ids) = self.take_pending_rules_with_ids();
+                self.mark_rule_ids(
+                    &ids,
+                    RecordedRuleDecision::Environment {
+                        scope_token: Some(scope_token),
+                    },
+                );
                 rules.extend(collected);
                 let newline_count = self.skip_newlines_and_count();
                 if newline_count < 3 {
@@ -145,10 +152,12 @@ impl Parser {
                 steps = self.parse_block(|p| p.parse_step());
             } else {
                 let save = self.pos;
+                let source_checkpoint = self.source_checkpoint();
                 match self.parse_step() {
                     Ok(step) => steps.push(step),
                     Err(e) => {
                         self.pos = save;
+                        self.restore_source_checkpoint(source_checkpoint);
                         self.emit_error(e);
                         self.try_sync(|p| p.synchronize_to_next_item_in_block());
                         if self.check(&TokenKind::Dedent) || self.is_at_end() {
@@ -209,7 +218,7 @@ impl Parser {
         let mut caps = Vec::new();
         loop {
             let name = self.fuzzy_ident()?;
-            let commitment = self.commitment()?;
+            let commitment = name.commitment;
             caps.push(Capability { name, commitment });
             if !self.matches(&TokenKind::Comma) {
                 break;

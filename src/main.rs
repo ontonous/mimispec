@@ -9,7 +9,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 #[derive(Parser, Debug)]
-#[command(name = "mimispec", version, about = "MimiSpec parser CLI", args_conflicts_with_subcommands = true)]
+#[command(
+    name = "mimispec",
+    version,
+    about = "MimiSpec parser CLI",
+    args_conflicts_with_subcommands = true
+)]
 struct Cli {
     /// .mms file(s) to parse; use - for stdin
     #[arg(default_value = "-")]
@@ -142,9 +147,7 @@ fn print_cli_output(
     source: &str,
 ) {
     if result.errors.is_empty() {
-        if json_result.render.is_some()
-            && json_result.ast.is_none()
-            && json_result.latex.is_none()
+        if json_result.render.is_some() && json_result.ast.is_none() && json_result.latex.is_none()
         {
             if let Some(source) = &json_result.render {
                 print!("{}", source);
@@ -214,8 +217,7 @@ fn parse_one(
     };
 
     let result = parse(&source);
-    let json_result =
-        build_json_result(path, &result, ast || json, render || json, latex || json);
+    let json_result = build_json_result(path, &result, ast || json, render || json, latex || json);
 
     if !json {
         print_cli_output(path, &result, &json_result, &source);
@@ -224,20 +226,13 @@ fn parse_one(
     (json_result.success, result.errors.len(), json_result)
 }
 
-fn run_parse(
-    files: &[PathBuf],
-    ast: bool,
-    json: bool,
-    render: bool,
-    latex: bool,
-) {
+fn run_parse(files: &[PathBuf], ast: bool, json: bool, render: bool, latex: bool) {
     let mut total_errors = 0usize;
     let mut any_failure = false;
     let mut json_results = Vec::new();
 
     for path in files {
-        let (ok, errs, json_result) =
-            parse_one(path, ast, json, render, latex);
+        let (ok, errs, json_result) = parse_one(path, ast, json, render, latex);
         if !ok {
             any_failure = true;
         }

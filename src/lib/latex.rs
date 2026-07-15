@@ -113,7 +113,9 @@ fn render_expr_prec(expr: &Expr, parent_prec: u8) -> String {
             render_expr_prec(left, my_prec),
             render_expr_prec(right, my_prec)
         ),
-        Expr::Compare { left, op, right, .. } => {
+        Expr::Compare {
+            left, op, right, ..
+        } => {
             let op_s = match op {
                 CompareOp::Eq => "=",
                 CompareOp::Ne => "\\neq",

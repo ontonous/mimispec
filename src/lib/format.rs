@@ -44,7 +44,10 @@ fn source_line_at(line_starts: &[usize], source: &str, line: usize, col: usize) 
 
     let line_start = line_starts[line - 1];
     let rest = &source[line_start..];
-    let line_end = rest.find('\n').map(|n| line_start + n).unwrap_or(source.len());
+    let line_end = rest
+        .find('\n')
+        .map(|n| line_start + n)
+        .unwrap_or(source.len());
     let src_line = &source[line_start..line_end];
     let effective_col = col.min(src_line.chars().count()).max(1);
     (src_line.to_string(), effective_col)
@@ -59,7 +62,11 @@ pub fn format_diagnostics(errors: &[ParseError], source: &str) -> Vec<String> {
         .collect()
 }
 
-pub(crate) fn format_diagnostic_with_starts(err: &ParseError, source: &str, line_starts: &[usize]) -> String {
+pub(crate) fn format_diagnostic_with_starts(
+    err: &ParseError,
+    source: &str,
+    line_starts: &[usize],
+) -> String {
     let mut buf = String::new();
 
     // Error header

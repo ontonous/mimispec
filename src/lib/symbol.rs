@@ -54,10 +54,7 @@ impl SymbolTable {
     }
 
     pub fn lookup(&self, name: &str) -> &[SymbolEntry] {
-        self.entries
-            .get(name)
-            .map(|v| v.as_slice())
-            .unwrap_or(&[])
+        self.entries.get(name).map(|v| v.as_slice()).unwrap_or(&[])
     }
 
     pub fn all_names(&self) -> Vec<&str> {

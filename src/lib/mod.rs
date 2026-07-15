@@ -1,9 +1,11 @@
 pub mod ast;
 pub mod cache;
+pub mod collaboration;
 pub mod error;
 pub mod format;
 pub mod latex;
 pub mod lexer;
+pub mod lossless;
 pub mod parser;
 pub mod query;
 pub mod render;
@@ -67,6 +69,49 @@ pub fn parse(source: &str) -> ParseResult {
     }
 }
 
+/// Parse a document while preserving its exact source text and physical layout.
+///
+/// This opt-in 0.3.1 API keeps the existing semantic AST alongside comments,
+/// whitespace, exact newline kinds, paragraph breaks, explicit suffix spans,
+/// nested Field/FlowEntry/FlowArm node IDs, and line-comment attachment.
+/// The current semantic parser remains authoritative for AST and diagnostics.
+pub fn parse_lossless(source: &str) -> lossless::LosslessParseResult {
+    let source: Arc<str> = Arc::from(source);
+    match Lexer::new(&source).tokenize() {
+        Ok(tokens) => {
+            let mut parser = Parser::new_recording(tokens.clone());
+            let result = parser.parse_file();
+            let recorded = parser.take_recorded_commitments();
+            let recorded_nodes = parser.take_recorded_nodes();
+            let recorded_rules = parser.take_recorded_rules();
+            let document = lossless::build_document(
+                source,
+                result.file,
+                &tokens,
+                &recorded,
+                &recorded_nodes,
+                &recorded_rules,
+            );
+            lossless::LosslessParseResult {
+                document,
+                errors: result.errors,
+            }
+        }
+        Err(error) => {
+            let file = ast::File {
+                imports: vec![],
+                rules: vec![],
+                fragments: vec![],
+            };
+            let document = lossless::build_document(source, file, &[], &[], &[], &[]);
+            lossless::LosslessParseResult {
+                document,
+                errors: vec![error],
+            }
+        }
+    }
+}
+
 /// Parse a single MimiSpec fragment in isolation (useful for IDE snippet validation).
 ///
 /// Unlike [`parse()`], this function expects only one Fragment (e.g. a single `type`,
@@ -127,7 +172,8 @@ pub fn tokenize(source: &str) -> Result<Vec<lexer::Token>, error::ParseError> {
 }
 
 // Content hash for IncrementalCache keys.
-fn hash_source(source: &str) -> u64 {    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+fn hash_source(source: &str) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
     source.hash(&mut hasher);
     hasher.finish()
 }
@@ -143,7 +189,10 @@ fn hash_source(source: &str) -> u64 {    let mut hasher = std::collections::hash
 /// within individual files are accumulated and accessible via the returned
 /// `Vec<(PathBuf, ResolveError)>`.
 pub fn parse_file(path: &Path) -> ParseFileResult {
-    let root_dir = path.parent().map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
+    let root_dir = path
+        .parent()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
     let mut resolver = resolver::Resolver::new(root_dir);
     let file = resolver.resolve(path);
 
@@ -151,7 +200,9 @@ pub fn parse_file(path: &Path) -> ParseFileResult {
     let mut resolve_errors = Vec::new();
     for (p, err) in resolver.take_errors() {
         match err {
-            error::ResolveError::ParseFailed { errors: parse_errs, .. } => {
+            error::ResolveError::ParseFailed {
+                errors: parse_errs, ..
+            } => {
                 r_errors.extend(parse_errs);
             }
             other => {
@@ -164,7 +215,10 @@ pub fn parse_file(path: &Path) -> ParseFileResult {
         // resolve() returned None but no parse errors — the failure is
         // in resolve_errors (IoError, ImportCycle). Surface it in
         // ParseResult.errors so callers checking result.errors see it.
-        let msg = resolve_errors.first().map(|(p, e)| format!("{}: {}", p.display(), e)).unwrap_or_else(|| "unknown resolve error".into());
+        let msg = resolve_errors
+            .first()
+            .map(|(p, e)| format!("{}: {}", p.display(), e))
+            .unwrap_or_else(|| "unknown resolve error".into());
         ParseResult {
             file: ast::File {
                 imports: vec![],
@@ -175,11 +229,14 @@ pub fn parse_file(path: &Path) -> ParseFileResult {
         }
     } else {
         ParseResult {
-            file: file.as_ref().map(|f| ast::File::clone(f)).unwrap_or_else(|| ast::File {
-                imports: vec![],
-                rules: vec![],
-                fragments: vec![],
-            }),
+            file: file
+                .as_ref()
+                .map(|f| ast::File::clone(f))
+                .unwrap_or_else(|| ast::File {
+                    imports: vec![],
+                    rules: vec![],
+                    fragments: vec![],
+                }),
             errors: r_errors,
         }
     };
@@ -1035,11 +1092,19 @@ module App:
         let result = parse(src);
         assert_eq!(result.errors.len(), 1, "expected exactly one error");
         match &result.errors[0] {
-            ParseError { code: ErrorCode::E0005, line, col, .. } => {
+            ParseError {
+                code: ErrorCode::E0005,
+                line,
+                col,
+                ..
+            } => {
                 assert_eq!(*line, 1, "error should be on line 1 (opening quote)");
                 assert_eq!(*col, 6, "error should be at column 6 (opening quote)");
             }
-            _ => panic!("expected UnterminatedString (E0005), got {:?}", result.errors[0]),
+            _ => panic!(
+                "expected UnterminatedString (E0005), got {:?}",
+                result.errors[0]
+            ),
         }
     }
 
@@ -1414,6 +1479,132 @@ mod edge_case_tests {
     }
 
     #[test]
+    fn render_preserves_expression_commitment_slots() {
+        let cases = [
+            "not$ ready",
+            "-$value",
+            "~$mask",
+            "left and$ right",
+            "left or$$? right",
+            "item in$?? items",
+            "left ==$ right",
+            "true$$?",
+        ];
+
+        for src in cases {
+            let result = parse(src);
+            assert!(result.errors.is_empty(), "{src}: {:?}", result.errors);
+            let rendered = render_file(&result.file);
+            let reparsed = parse(&rendered);
+            assert!(
+                reparsed.errors.is_empty(),
+                "{src} rendered as {rendered:?}: {:?}",
+                reparsed.errors
+            );
+            assert_eq!(result.file, reparsed.file, "source: {src}");
+        }
+    }
+
+    #[test]
+    fn render_preserves_flow_commitment_slots() {
+        let src = r#"flow$ Checkout:
+    Pending >>>$? Paid$: requires$??: ready and$ verified
+"#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let rendered = render_file(&result.file);
+        assert!(rendered.contains(">>>$? Paid$"), "rendered: {rendered}");
+        assert!(
+            rendered.contains("requires$??: ready and$ verified"),
+            "rendered: {rendered}"
+        );
+        let reparsed = parse(&rendered);
+        assert!(reparsed.errors.is_empty(), "{:?}", reparsed.errors);
+        assert_eq!(result.file, reparsed.file);
+    }
+
+    #[test]
+    fn flow_rules_attach_to_entries_and_arms() {
+        let src = r#"flow Checkout:
+    rule "entry constraint"
+    Pending:
+        rule "arm constraint"
+        >>> Paid:
+"#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let Fragment::Flow { flow } = &result.file.fragments[0] else {
+            panic!("expected flow")
+        };
+        assert_eq!(flow.entries[0].rules.len(), 1);
+        assert_eq!(flow.entries[0].arms[0].rules.len(), 1);
+
+        let rendered = render_file(&result.file);
+        let reparsed = parse(&rendered);
+        assert!(reparsed.errors.is_empty(), "{:?}", reparsed.errors);
+        assert_eq!(result.file, reparsed.file);
+    }
+
+    #[test]
+    fn rules_before_unsupported_fragments_become_environment_rules() {
+        let top_level = parse(
+            r#"rule "applies to the file"
+steps:
+    do work
+"#,
+        );
+        assert!(top_level.errors.is_empty(), "{:?}", top_level.errors);
+        assert_eq!(top_level.file.rules.len(), 1);
+
+        let nested = parse(
+            r#"module App:
+    rule "applies to the module"
+    steps:
+        do work
+"#,
+        );
+        assert!(nested.errors.is_empty(), "{:?}", nested.errors);
+        let Fragment::Module { module } = &nested.file.fragments[0] else {
+            panic!("expected module")
+        };
+        assert_eq!(module.rules.len(), 1);
+    }
+
+    #[test]
+    fn render_preserves_simple_bool_commitment() {
+        let src = r#"func Configure:
+    steps:
+        enabled = true$
+"#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let rendered = render_file(&result.file);
+        assert!(rendered.contains("enabled = true$"), "rendered: {rendered}");
+        let reparsed = parse(&rendered);
+        assert!(reparsed.errors.is_empty(), "{:?}", reparsed.errors);
+        assert_eq!(result.file, reparsed.file);
+    }
+
+    #[test]
+    fn capability_uses_one_commitment_slot() {
+        let src = "func Run with Network$?: ...\n";
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let Fragment::Func { func } = &result.file.fragments[0] else {
+            panic!("expected func")
+        };
+        assert_eq!(
+            func.capabilities[0].name.commitment,
+            Commitment::LockedQuestion
+        );
+        assert_eq!(func.capabilities[0].commitment, Commitment::LockedQuestion);
+        let rendered = render_file(&result.file);
+        let reparsed = parse(&rendered);
+        assert!(reparsed.errors.is_empty(), "{:?}", reparsed.errors);
+        assert_eq!(result.file, reparsed.file);
+    }
+
+    #[test]
     fn parse_func_with_param_type_hints() {
         let src = r#"func Compute(x: Number, y: List[Number]): ..."#;
         let result = parse(src);
@@ -1607,7 +1798,11 @@ func F:
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
 
-        create_temp_mms(&dir, "types.mms", "type OrderStatus: New | Paid | Cancelled\n");
+        create_temp_mms(
+            &dir,
+            "types.mms",
+            "type OrderStatus: New | Paid | Cancelled\n",
+        );
         create_temp_mms(
             &dir,
             "main.mms",
@@ -1653,7 +1848,9 @@ module Shop:
         resolver.resolve(&dir.join("a.mms"));
         let errors = resolver.take_errors();
 
-        let has_cycle = errors.iter().any(|(_p, e)| matches!(e, ResolveError::ImportCycle { .. }));
+        let has_cycle = errors
+            .iter()
+            .any(|(_p, e)| matches!(e, ResolveError::ImportCycle { .. }));
         assert!(has_cycle, "expected ImportCycle error, got: {:?}", errors);
 
         let _ = fs::remove_dir_all(&dir);
@@ -1772,8 +1969,12 @@ pub fn edit_distance(a: &str, b: &str) -> usize {
     let bc: Vec<char> = b.chars().collect();
     let m = ac.len();
     let n = bc.len();
-    if m == 0 { return n; }
-    if n == 0 { return m; }
+    if m == 0 {
+        return n;
+    }
+    if n == 0 {
+        return m;
+    }
 
     let mut prev: Vec<usize> = (0..=n).collect();
     let mut curr: Vec<usize> = vec![0; n + 1];
@@ -1838,13 +2039,21 @@ mod fuzzy_tests {
     use super::*;
 
     #[test]
-    fn edit_distance_identical() { assert_eq!(edit_distance("foo", "foo"), 0); }
+    fn edit_distance_identical() {
+        assert_eq!(edit_distance("foo", "foo"), 0);
+    }
     #[test]
-    fn edit_distance_substitution() { assert_eq!(edit_distance("foo", "fob"), 1); }
+    fn edit_distance_substitution() {
+        assert_eq!(edit_distance("foo", "fob"), 1);
+    }
     #[test]
-    fn edit_distance_insert() { assert_eq!(edit_distance("ab", "abc"), 1); }
+    fn edit_distance_insert() {
+        assert_eq!(edit_distance("ab", "abc"), 1);
+    }
     #[test]
-    fn edit_distance_delete() { assert_eq!(edit_distance("abc", "ab"), 1); }
+    fn edit_distance_delete() {
+        assert_eq!(edit_distance("abc", "ab"), 1);
+    }
     #[test]
     fn edit_distance_empty() {
         assert_eq!(edit_distance("", "abc"), 3);

@@ -1,11 +1,12 @@
 use crate::ast::*;
 use crate::error::ParseError;
 use crate::lexer::TokenKind;
-use crate::parser::Parser;
+use crate::parser::{Parser, RecordedNodeKind, RecordedSlotKind};
 
 impl Parser {
     pub(crate) fn parse_fragment(&mut self) -> Result<Fragment, ParseError> {
-        match self.peek_kind() {
+        let start = self.pos;
+        let fragment = match self.peek_kind() {
             Some(TokenKind::Module) => Ok(Fragment::Module {
                 module: self.parse_module()?,
             }),
@@ -44,19 +45,34 @@ impl Parser {
             }
             _ => {
                 let save = self.pos;
+                let source_checkpoint = self.source_checkpoint();
                 if let Ok(expr) = self.parse_expr(0) {
                     if self.line_will_end() {
                         return Ok(Fragment::Expr { expr });
                     }
                 }
                 self.pos = save;
+                self.restore_source_checkpoint(source_checkpoint);
                 let step = self.parse_step()?;
                 Ok(Fragment::Steps {
                     keyword_commitment: Self::step_keyword_commitment(&step),
                     steps: vec![step],
                 })
             }
-        }
+        }?;
+        let kind = match &fragment {
+            Fragment::Module { .. } => RecordedNodeKind::Module,
+            Fragment::TypeDef { .. } => RecordedNodeKind::TypeDef,
+            Fragment::Flow { .. } => RecordedNodeKind::Flow,
+            Fragment::Func { .. } => RecordedNodeKind::Func,
+            Fragment::Ui { .. } => RecordedNodeKind::Ui,
+            Fragment::Steps { .. } => RecordedNodeKind::Steps,
+            Fragment::Expr { .. } => RecordedNodeKind::Expr,
+            Fragment::UiNode { .. } => RecordedNodeKind::UiNode,
+            Fragment::Placeholder { .. } => RecordedNodeKind::Placeholder,
+        };
+        self.record_source_node(start..self.pos, kind);
+        Ok(fragment)
     }
 
     fn parse_steps_fragment(&mut self) -> Result<Fragment, ParseError> {
@@ -81,7 +97,7 @@ impl Parser {
 
     pub(super) fn parse_desc_entity(&mut self) -> Result<Desc, ParseError> {
         self.expect(TokenKind::Desc, "`desc`")?;
-        let need_commitment = self.commitment()?;
+        let need_commitment = self.commitment_after_previous(RecordedSlotKind::Keyword)?;
         let content = self.fuzzy_string()?;
         Ok(Desc {
             need_commitment,

@@ -65,6 +65,85 @@ impl Commitment {
     pub fn has_question_question(&self) -> bool {
         matches!(self, Self::QuestionQuestion)
     }
+
+    /// 将后缀分解为内容保护级别。
+    pub fn lock_intent(self) -> LockIntent {
+        match self {
+            Self::None | Self::Question | Self::QuestionQuestion => LockIntent::Open,
+            Self::Locked | Self::LockedQuestion | Self::LockedQuestionQuestion => {
+                LockIntent::Locked
+            }
+            Self::StrongLocked
+            | Self::StrongLockedQuestion
+            | Self::StrongLockedQuestionQuestion => LockIntent::StrongLocked,
+        }
+    }
+
+    /// 将后缀分解为审阅或委托意图。
+    pub fn review_intent(self) -> ReviewIntent {
+        match self {
+            Self::None | Self::Locked | Self::StrongLocked => ReviewIntent::None,
+            Self::Question | Self::LockedQuestion | Self::StrongLockedQuestion => {
+                ReviewIntent::Review
+            }
+            Self::QuestionQuestion
+            | Self::LockedQuestionQuestion
+            | Self::StrongLockedQuestionQuestion => ReviewIntent::Delegate,
+        }
+    }
+
+    /// 返回 `?` / `??` 当前讨论的对象。
+    pub fn review_target(self) -> ReviewTarget {
+        match self.lock_intent() {
+            LockIntent::Open => ReviewTarget::Content,
+            LockIntent::Locked => ReviewTarget::Lock,
+            LockIntent::StrongLocked => ReviewTarget::StrongLock,
+        }
+    }
+
+    /// 所有包含 `$` 的状态都保护当前内容。
+    pub fn protects_content(self) -> bool {
+        self.lock_intent() != LockIntent::Open
+    }
+
+    /// 只有没有待审阅问题的锁定状态可进入物化选择。
+    pub fn is_commit_ready(self) -> bool {
+        matches!(self, Self::Locked | Self::StrongLocked)
+    }
+
+    /// `??` 表示委托，不论它讨论内容、普通锁还是强锁。
+    pub fn is_delegated(self) -> bool {
+        self.review_intent() == ReviewIntent::Delegate
+    }
+
+    /// 单问号状态需要 Human 作出决定。
+    pub fn requires_human_decision(self) -> bool {
+        self.review_intent() == ReviewIntent::Review
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LockIntent {
+    Open,
+    Locked,
+    StrongLocked,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewIntent {
+    None,
+    Review,
+    Delegate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewTarget {
+    Content,
+    Lock,
+    StrongLock,
 }
 
 impl std::fmt::Display for Commitment {

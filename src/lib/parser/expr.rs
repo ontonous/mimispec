@@ -1,7 +1,7 @@
 use crate::ast::*;
 use crate::error::ParseError;
 use crate::lexer::TokenKind;
-use crate::parser::{BinOp, Parser};
+use crate::parser::{BinOp, Parser, RecordedSlotKind};
 
 const EXPR_RECURSION_LIMIT: u32 = 256;
 
@@ -68,10 +68,7 @@ impl Parser {
                 BinOp::Or => self.expect_kw(TokenKind::Or, "`or`")?,
                 BinOp::And => self.expect_kw(TokenKind::And, "`and`")?,
                 BinOp::In => self.expect_kw(TokenKind::In, "`in`")?,
-                BinOp::Cmp(_) => {
-                    self.advance();
-                    Commitment::None
-                }
+                BinOp::Cmp(op) => self.expect_kw(compare_token(op), "comparison operator")?,
                 _ => {
                     self.advance();
                     Commitment::None
@@ -205,7 +202,7 @@ impl Parser {
             }
             Some(TokenKind::True) => {
                 self.advance();
-                let keyword_commitment = self.commitment()?;
+                let keyword_commitment = self.commitment_after_previous(RecordedSlotKind::Value)?;
                 Ok(Expr::Bool {
                     value: true,
                     keyword_commitment,
@@ -213,7 +210,7 @@ impl Parser {
             }
             Some(TokenKind::False) => {
                 self.advance();
-                let keyword_commitment = self.commitment()?;
+                let keyword_commitment = self.commitment_after_previous(RecordedSlotKind::Value)?;
                 Ok(Expr::Bool {
                     value: false,
                     keyword_commitment,
@@ -263,6 +260,7 @@ impl Parser {
                 };
             } else if self.check(&TokenKind::LParen) {
                 let save = self.pos;
+                let source_checkpoint = self.source_checkpoint();
                 self.advance();
                 let mut args = Vec::new();
                 if !self.check(&TokenKind::RParen) {
@@ -279,6 +277,7 @@ impl Parser {
                     };
                 } else {
                     self.pos = save;
+                    self.restore_source_checkpoint(source_checkpoint);
                     break;
                 }
             } else if self.check(&TokenKind::LBracket) {
@@ -337,5 +336,16 @@ impl Parser {
             ));
         }
         Ok(stmt)
+    }
+}
+
+fn compare_token(op: CompareOp) -> TokenKind {
+    match op {
+        CompareOp::Eq => TokenKind::EqEq,
+        CompareOp::Ne => TokenKind::NotEq,
+        CompareOp::Lt => TokenKind::Lt,
+        CompareOp::Gt => TokenKind::Gt,
+        CompareOp::Le => TokenKind::Le,
+        CompareOp::Ge => TokenKind::Ge,
     }
 }

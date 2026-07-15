@@ -4,16 +4,19 @@ use crate::lexer::TokenKind;
 use crate::parser::Parser;
 
 impl Parser {
-    pub(super) fn parse_rule_def(&mut self) -> Result<RuleDef, ParseError> {
+    pub(super) fn parse_rule_def(&mut self) -> Result<(RuleDef, Option<usize>), ParseError> {
+        let start = self.pos;
         let keyword_commitment = self.expect_kw(TokenKind::Rule, "`rule`")?;
         let content = self.fuzzy_string()?;
         let desc = Desc {
             need_commitment: Commitment::None,
             content,
         };
-        Ok(RuleDef {
+        let rule = RuleDef {
             desc,
             keyword_commitment,
-        })
+        };
+        let id = self.record_rule_occurrence(start..self.pos);
+        Ok((rule, id))
     }
 }

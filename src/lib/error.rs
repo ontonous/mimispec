@@ -149,7 +149,9 @@ impl ParseError {
             code: ErrorCode::E0010,
             line,
             col,
-            message: format!("unexpected token {found:?} at line {line}, col {col}; expected {expected}"),
+            message: format!(
+                "unexpected token {found:?} at line {line}, col {col}; expected {expected}"
+            ),
             help: None,
             suggestion: None,
         }
@@ -204,7 +206,12 @@ impl ParseError {
     }
 
     /// Creates an error for an undefined variable, with an optional "did you mean" suggestion.
-    pub fn undefined_variable(name: String, line: usize, col: usize, suggestion: Option<String>) -> Self {
+    pub fn undefined_variable(
+        name: String,
+        line: usize,
+        col: usize,
+        suggestion: Option<String>,
+    ) -> Self {
         let msg = if let Some(ref s) = suggestion {
             format!("undefined variable '{name}' — did you mean '{s}'?")
         } else {
@@ -262,7 +269,9 @@ impl ParseError {
             code: ErrorCode::E0015,
             line,
             col,
-            message: format!("index out of bounds: index {index} is not valid for list of length {len}"),
+            message: format!(
+                "index out of bounds: index {index} is not valid for list of length {len}"
+            ),
             help: None,
             suggestion: None,
         }
@@ -332,7 +341,11 @@ impl ParseError {
 
 impl std::fmt::Display for ParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "error[{}] at line {}, col {}: {}", self.code, self.line, self.col, self.message)?;
+        write!(
+            f,
+            "error[{}] at line {}, col {}: {}",
+            self.code, self.line, self.col, self.message
+        )?;
         if let Some(ref help) = self.help {
             write!(f, "\n  help: {help}")?;
         }

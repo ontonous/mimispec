@@ -27,10 +27,11 @@ rustup update stable
 
 ```bash
 cargo build              # 编译 / Build
-cargo test --lib         # 单元测试 / Unit tests (77)
+cargo test --lib         # 单元测试 / Unit tests
 cargo test               # 全量测试 / All tests (incl. bin)
-cargo clippy             # lint 检查（必须零警告）/ Lint (zero warnings required)
-cargo test --release -- --ignored  # 压力测试 / Stress tests (1000 items)
+cargo clippy -- -D warnings        # lint 检查 / Lint
+cargo fmt -- --check               # 格式检查 / Format check
+cargo test --release stress_tests  # 压力测试 / Stress tests
 ```
 
 ## 代码规范 / Code Conventions
@@ -89,19 +90,19 @@ COMMIT C: docs: 同步更新规范文档 / sync docs
 ## PR 流程 / PR Workflow
 
 1. 从 `main` 创建功能分支 / Create feature branch from `main`
-2. 确保 `cargo clippy` 和 `cargo test --lib` 通过 / Ensure both pass
+2. 确保 fmt、clippy 和全量测试通过 / Ensure format, clippy, and all tests pass
 3. 创建 PR，填写 [PR 模板](.github/PULL_REQUEST_TEMPLATE.md) / Create PR with template
 4. 等待 CI 通过后合并 / Wait for CI to pass before merge
-5. 如有文档同步义务，同步更新 `docs/` 和 `AGENTS.md`
+5. 如有文档同步义务，同步更新被 Git 跟踪的规范、README、CHANGELOG 和编辑器文档
 
 ## 文档同步义务 / Doc Sync Obligations
 
 | 修改内容 / Changed | 必须更新 / Must update |
 |---------------------|------------------------|
-| 语言特性 / Language features | `AGENTS.md`, `docs/specification.md` |
-| 公共 API / Public API | `AGENTS.md`, `README.md` |
-| 测试套件 / Test suites | `AGENTS.md` §6 |
-| CI/CD | `AGENTS.md` §1 CI 门禁 |
+| 语言特性 / Language features | `docs/specification.md`, README 双语, tests, editor grammar |
+| 公共 API / Public API | rustdoc, README 双语, `CHANGELOG.md` |
+| 测试套件 / Test suites | `CONTRIBUTING.md`, CI, related documentation |
+| CI/CD | `.github/workflows/`, `CONTRIBUTING.md` |
 
 ## 问题报告 / Issue Reporting
 

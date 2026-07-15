@@ -16,8 +16,66 @@ pub struct Parser {
     pub(super) tokens: Vec<Token>,
     pub(super) pos: usize,
     pub(super) pending_rules: Vec<RuleDef>,
+    pub(super) pending_rule_ids: Vec<usize>,
     pub(super) errors: Vec<ParseError>,
     block_depth: u32,
+    record_source: bool,
+    recorded_commitments: Vec<RecordedCommitmentSlot>,
+    recorded_nodes: Vec<RecordedSourceNode>,
+    recorded_rules: Vec<RecordedRuleOccurrence>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RecordedSlotKind {
+    Keyword,
+    Identifier,
+    String,
+    Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RecordedCommitmentSlot {
+    pub anchor_token: usize,
+    pub suffix_tokens: std::ops::Range<usize>,
+    pub value: Commitment,
+    pub kind: RecordedSlotKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RecordedNodeKind {
+    Module,
+    TypeDef,
+    Flow,
+    Func,
+    Ui,
+    Steps,
+    Expr,
+    UiNode,
+    Placeholder,
+    Field,
+    FlowEntry,
+    FlowArm,
+    Step,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RecordedSourceNode {
+    pub tokens: std::ops::Range<usize>,
+    pub kind: RecordedNodeKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RecordedRuleDecision {
+    Pending,
+    Attached { target_token: usize },
+    Environment { scope_token: Option<usize> },
+    DroppedByRecovery,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RecordedRuleOccurrence {
+    pub tokens: std::ops::Range<usize>,
+    pub decision: RecordedRuleDecision,
 }
 
 const MAX_BLOCK_DEPTH: u32 = 256;
@@ -47,9 +105,74 @@ impl Parser {
             tokens,
             pos: 0,
             pending_rules: Vec::new(),
+            pending_rule_ids: Vec::new(),
             errors: Vec::new(),
             block_depth: 0,
+            record_source: false,
+            recorded_commitments: Vec::new(),
+            recorded_nodes: Vec::new(),
+            recorded_rules: Vec::new(),
         }
+    }
+
+    pub(crate) fn new_recording(tokens: Vec<Token>) -> Self {
+        let mut parser = Self::new(tokens);
+        parser.record_source = true;
+        parser
+    }
+
+    pub(crate) fn take_recorded_commitments(&mut self) -> Vec<RecordedCommitmentSlot> {
+        std::mem::take(&mut self.recorded_commitments)
+    }
+
+    pub(crate) fn take_recorded_nodes(&mut self) -> Vec<RecordedSourceNode> {
+        std::mem::take(&mut self.recorded_nodes)
+    }
+
+    pub(crate) fn take_recorded_rules(&mut self) -> Vec<RecordedRuleOccurrence> {
+        std::mem::take(&mut self.recorded_rules)
+    }
+
+    pub(super) fn record_rule_occurrence(
+        &mut self,
+        tokens: std::ops::Range<usize>,
+    ) -> Option<usize> {
+        if !self.record_source {
+            return None;
+        }
+        let id = self.recorded_rules.len();
+        self.recorded_rules.push(RecordedRuleOccurrence {
+            tokens,
+            decision: RecordedRuleDecision::Pending,
+        });
+        Some(id)
+    }
+
+    pub(super) fn mark_rule_ids(&mut self, ids: &[usize], decision: RecordedRuleDecision) {
+        for id in ids {
+            if let Some(rule) = self.recorded_rules.get_mut(*id) {
+                rule.decision = decision;
+            }
+        }
+    }
+
+    pub(super) fn record_source_node(
+        &mut self,
+        tokens: std::ops::Range<usize>,
+        kind: RecordedNodeKind,
+    ) {
+        if self.record_source {
+            self.recorded_nodes
+                .push(RecordedSourceNode { tokens, kind });
+        }
+    }
+
+    pub(super) fn source_checkpoint(&self) -> usize {
+        self.recorded_commitments.len()
+    }
+
+    pub(super) fn restore_source_checkpoint(&mut self, checkpoint: usize) {
+        self.recorded_commitments.truncate(checkpoint);
     }
 
     pub(super) fn enter_block(&mut self) -> Result<(), ParseError> {
@@ -125,7 +248,12 @@ impl Parser {
 
             let mut newline_count = self.skip_newlines_and_count();
             if newline_count >= 3 {
-                global_rules.extend(self.take_pending_rules());
+                let (rules, ids) = self.take_pending_rules_with_ids();
+                self.mark_rule_ids(
+                    &ids,
+                    RecordedRuleDecision::Environment { scope_token: None },
+                );
+                global_rules.extend(rules);
             }
 
             while self.check(&TokenKind::Rule) {
@@ -133,7 +261,12 @@ impl Parser {
                 errors.extend(rule_errors);
                 newline_count = self.skip_newlines_and_count();
                 if newline_count >= 3 {
-                    global_rules.extend(self.take_pending_rules());
+                    let (rules, ids) = self.take_pending_rules_with_ids();
+                    self.mark_rule_ids(
+                        &ids,
+                        RecordedRuleDecision::Environment { scope_token: None },
+                    );
+                    global_rules.extend(rules);
                 }
             }
 
@@ -143,18 +276,30 @@ impl Parser {
 
             match self.parse_fragment() {
                 Ok(mut f) => {
-                    self.attach_rules_to_fragment(&mut f);
+                    let target_token = self
+                        .recorded_nodes
+                        .last()
+                        .map_or(self.pos, |node| node.tokens.start);
+                    let unattached = self.attach_rules_to_fragment(&mut f, target_token);
+                    global_rules.extend(unattached);
                     fragments.push(f);
                 }
                 Err(e) => {
                     errors.push(e);
+                    let ids = std::mem::take(&mut self.pending_rule_ids);
+                    self.mark_rule_ids(&ids, RecordedRuleDecision::DroppedByRecovery);
                     self.pending_rules.clear();
                     self.synchronize_to_fragment_start();
                 }
             }
         }
 
-        global_rules.extend(self.take_pending_rules());
+        let (rules, ids) = self.take_pending_rules_with_ids();
+        self.mark_rule_ids(
+            &ids,
+            RecordedRuleDecision::Environment { scope_token: None },
+        );
+        global_rules.extend(rules);
 
         let mut all_errors = self.take_errors();
         all_errors.extend(errors);
@@ -274,13 +419,39 @@ impl Parser {
         Ok(Commitment::None)
     }
 
+    fn commitment_after(
+        &mut self,
+        anchor_token: usize,
+        kind: RecordedSlotKind,
+    ) -> Result<Commitment, ParseError> {
+        let suffix_start = self.pos;
+        let value = self.commitment()?;
+        if self.record_source {
+            self.recorded_commitments.push(RecordedCommitmentSlot {
+                anchor_token,
+                suffix_tokens: suffix_start..self.pos,
+                value,
+                kind,
+            });
+        }
+        Ok(value)
+    }
+
+    pub(super) fn commitment_after_previous(
+        &mut self,
+        kind: RecordedSlotKind,
+    ) -> Result<Commitment, ParseError> {
+        self.commitment_after(self.pos.saturating_sub(1), kind)
+    }
+
     pub(super) fn expect_kw(
         &mut self,
         kind: TokenKind,
         what: &str,
     ) -> Result<Commitment, ParseError> {
+        let anchor = self.pos;
         self.expect(kind, what)?;
-        self.commitment()
+        self.commitment_after(anchor, RecordedSlotKind::Keyword)
     }
 
     pub(super) fn expect_string(&mut self) -> Result<&Token, ParseError> {
@@ -293,7 +464,12 @@ impl Parser {
             Some(t) => (t.kind.to_string(), t.line, t.col),
             None => ("EOF".into(), 0, 0),
         };
-        Err(ParseError::unexpected_token(found, "string literal".into(), line, col))
+        Err(ParseError::unexpected_token(
+            found,
+            "string literal".into(),
+            line,
+            col,
+        ))
     }
 
     pub(super) fn fuzzy_ident(&mut self) -> Result<Ident, ParseError> {
@@ -316,7 +492,8 @@ impl Parser {
                 tok.col,
             ));
         };
-        let commitment = self.commitment()?;
+        let commitment =
+            self.commitment_after(self.pos.saturating_sub(1), RecordedSlotKind::Identifier)?;
         Ok(Ident { name, commitment })
     }
 
@@ -334,7 +511,8 @@ impl Parser {
             unreachable!("expect_string() guaranteed String token")
         };
         let value = value.clone();
-        let commitment = self.commitment()?;
+        let commitment =
+            self.commitment_after(self.pos.saturating_sub(1), RecordedSlotKind::String)?;
         Ok(FString { value, commitment })
     }
 
@@ -566,7 +744,12 @@ impl Parser {
             }
 
             match self.parse_rule_def() {
-                Ok(rule) => self.pending_rules.push(rule),
+                Ok((rule, id)) => {
+                    self.pending_rules.push(rule);
+                    if let Some(id) = id {
+                        self.pending_rule_ids.push(id);
+                    }
+                }
                 Err(e) => {
                     errors.push(e);
                     self.synchronize_to_fragment_start();
@@ -577,18 +760,49 @@ impl Parser {
         errors
     }
 
-    pub(super) fn take_pending_rules(&mut self) -> Vec<RuleDef> {
-        std::mem::take(&mut self.pending_rules)
+    pub(super) fn take_pending_rules_with_ids(&mut self) -> (Vec<RuleDef>, Vec<usize>) {
+        (
+            std::mem::take(&mut self.pending_rules),
+            std::mem::take(&mut self.pending_rule_ids),
+        )
     }
 
-    pub(super) fn attach_rules_to_fragment(&mut self, fragment: &mut Fragment) {
-        let rules = self.take_pending_rules();
-        Self::attach_rules_to_fragment_from(rules, fragment);
+    pub(super) fn attach_rules_to_fragment(
+        &mut self,
+        fragment: &mut Fragment,
+        target_token: usize,
+    ) -> Vec<RuleDef> {
+        let (rules, ids) = self.take_pending_rules_with_ids();
+        let attached = Self::fragment_accepts_rules(fragment);
+        let unattached = Self::attach_rules_to_fragment_from(rules, fragment);
+        self.mark_rule_ids(
+            &ids,
+            if attached {
+                RecordedRuleDecision::Attached { target_token }
+            } else {
+                RecordedRuleDecision::Environment { scope_token: None }
+            },
+        );
+        unattached
     }
 
-    pub(super) fn attach_rules_to_fragment_from(rules: Vec<RuleDef>, fragment: &mut Fragment) {
+    pub(super) fn fragment_accepts_rules(fragment: &Fragment) -> bool {
+        matches!(
+            fragment,
+            Fragment::Module { .. }
+                | Fragment::TypeDef { .. }
+                | Fragment::Flow { .. }
+                | Fragment::Func { .. }
+                | Fragment::Ui { .. }
+        )
+    }
+
+    pub(super) fn attach_rules_to_fragment_from(
+        rules: Vec<RuleDef>,
+        fragment: &mut Fragment,
+    ) -> Vec<RuleDef> {
         if rules.is_empty() {
-            return;
+            return Vec::new();
         }
         match fragment {
             Fragment::Module { module } => module.rules.extend(rules),
@@ -596,14 +810,15 @@ impl Parser {
             Fragment::Flow { flow } => flow.rules.extend(rules),
             Fragment::Func { func } => func.rules.extend(rules),
             Fragment::Ui { ui } => ui.rules.extend(rules),
-            _ => { /* Steps/Expr/UiNode/Desc/Placeholder 不支持 rule 附着 */ }
+            _ => return rules,
         }
+        Vec::new()
     }
 
     // ── desc after keyword ───────────────────────────────────────────────────
 
     pub(super) fn parse_desc_after_keyword(&mut self) -> Result<Desc, ParseError> {
-        let need_commitment = self.commitment()?;
+        let need_commitment = self.commitment_after_previous(RecordedSlotKind::Keyword)?;
         let content = self.fuzzy_string()?;
         Ok(Desc {
             need_commitment,
@@ -664,11 +879,11 @@ impl Parser {
     pub(super) fn atom_from_token(&mut self) -> Result<Atom, ParseError> {
         let tok = self.advance().clone();
         if matches!(tok.kind, TokenKind::Ellipsis) {
-            let commitment = self.commitment()?;
+            let commitment = self.commitment_after_previous(RecordedSlotKind::Keyword)?;
             return Ok(Atom::Ellipsis { commitment });
         }
         if let Some(kw) = tok.kind.as_keyword_str() {
-            let commitment = self.commitment()?;
+            let commitment = self.commitment_after_previous(RecordedSlotKind::Identifier)?;
             return Ok(Atom::Ident {
                 value: Ident {
                     name: kw.into(),
@@ -678,7 +893,7 @@ impl Parser {
         }
         match &tok.kind {
             TokenKind::Ident(s) => {
-                let commitment = self.commitment()?;
+                let commitment = self.commitment_after_previous(RecordedSlotKind::Identifier)?;
                 Ok(Atom::Ident {
                     value: Ident {
                         name: s.clone(),
@@ -687,7 +902,7 @@ impl Parser {
                 })
             }
             TokenKind::String(s) => {
-                let commitment = self.commitment()?;
+                let commitment = self.commitment_after_previous(RecordedSlotKind::String)?;
                 Ok(Atom::String {
                     value: FString {
                         value: s.clone(),

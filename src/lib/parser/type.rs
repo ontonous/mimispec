@@ -1,10 +1,11 @@
 use crate::ast::*;
 use crate::error::ParseError;
 use crate::lexer::TokenKind;
-use crate::parser::Parser;
+use crate::parser::{Parser, RecordedRuleDecision};
 
 impl Parser {
     pub(super) fn parse_type_def(&mut self) -> Result<TypeDef, ParseError> {
+        let scope_token = self.pos;
         let keyword_commitment = self.expect_kw(TokenKind::Type, "`type`")?;
         let name = self.fuzzy_ident()?;
         self.expect(TokenKind::Colon, "`:`")?;
@@ -38,9 +39,11 @@ impl Parser {
         self.skip_newlines();
         if self.check(&TokenKind::Indent) {
             let save = self.pos;
+            let source_checkpoint = self.source_checkpoint();
             self.advance(); // consume Indent for scanning
             let is_block_enum = self.peek_block_is_enum();
             self.pos = save; // restore back to Indent
+            self.restore_source_checkpoint(source_checkpoint);
 
             if is_block_enum {
                 self.advance(); // consume Indent
@@ -66,6 +69,7 @@ impl Parser {
         let mut rules: Vec<RuleDef> = Vec::new();
         let mut fields = Vec::new();
         let mut pending_field_rules: Vec<RuleDef> = Vec::new();
+        let mut pending_field_ids = Vec::new();
 
         loop {
             self.skip_newlines();
@@ -77,12 +81,23 @@ impl Parser {
                 let mut had_error = false;
                 while self.check(&TokenKind::Rule) && !had_error {
                     match self.parse_rule_def() {
-                        Ok(rule) => {
+                        Ok((rule, id)) => {
                             let newline_count = self.skip_newlines_and_count();
                             if newline_count >= 3 && fields.is_empty() {
+                                if let Some(id) = id {
+                                    self.mark_rule_ids(
+                                        &[id],
+                                        RecordedRuleDecision::Environment {
+                                            scope_token: Some(scope_token),
+                                        },
+                                    );
+                                }
                                 rules.push(rule);
                             } else {
                                 pending_field_rules.push(rule);
+                                if let Some(id) = id {
+                                    pending_field_ids.push(id);
+                                }
                             }
                         }
                         Err(e) => {
@@ -110,12 +125,24 @@ impl Parser {
             } else if self.check(&TokenKind::Ellipsis) {
                 self.advance();
             } else {
+                let target_token = self.pos;
                 match self.parse_field() {
                     Ok(mut field) => {
                         field.rules = std::mem::take(&mut pending_field_rules);
+                        self.mark_rule_ids(
+                            &pending_field_ids,
+                            RecordedRuleDecision::Attached { target_token },
+                        );
+                        pending_field_ids.clear();
                         fields.push(field);
                     }
                     Err(e) => {
+                        self.mark_rule_ids(
+                            &pending_field_ids,
+                            RecordedRuleDecision::DroppedByRecovery,
+                        );
+                        pending_field_rules.clear();
+                        pending_field_ids.clear();
                         self.emit_error(e);
                         self.synchronize_to_next_item_in_block();
                         if self.check(&TokenKind::Dedent) || self.is_at_end() {
@@ -125,6 +152,14 @@ impl Parser {
                 }
             }
         }
+
+        self.mark_rule_ids(
+            &pending_field_ids,
+            RecordedRuleDecision::Environment {
+                scope_token: Some(scope_token),
+            },
+        );
+        rules.append(&mut pending_field_rules);
 
         if self.check(&TokenKind::Dedent) {
             self.advance();
@@ -239,10 +274,12 @@ impl Parser {
     }
 
     fn parse_field(&mut self) -> Result<Field, ParseError> {
+        let start = self.pos;
         let name = self.fuzzy_ident()?;
         self.expect(TokenKind::Colon, "`:`")?;
         let type_hint =
             self.parse_atoms_until(&[TokenKind::Newline, TokenKind::Dedent, TokenKind::Eof])?;
+        self.record_source_node(start..self.pos, crate::parser::RecordedNodeKind::Field);
         Ok(Field {
             name,
             rules: Vec::new(),

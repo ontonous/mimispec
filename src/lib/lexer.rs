@@ -304,7 +304,8 @@ impl<'a> Lexer<'a> {
                     }
                     Some('\n') => {
                         self.bump(); // empty line
-                        self.blank_line_count = self.blank_line_count.saturating_add(1).min(BLANK_LINE_CAP);
+                        self.blank_line_count =
+                            self.blank_line_count.saturating_add(1).min(BLANK_LINE_CAP);
                         continue;
                     }
                     Some('/') if self.peek_second() == Some('/') => {
@@ -314,8 +315,12 @@ impl<'a> Lexer<'a> {
                     _ => {
                         if !spaces.is_multiple_of(4) {
                             return Err(ParseError::indent_error(
-                                start_line, start_col,
-                                format!("indentation must be a multiple of 4 spaces, found {}", spaces),
+                                start_line,
+                                start_col,
+                                format!(
+                                    "indentation must be a multiple of 4 spaces, found {}",
+                                    spaces
+                                ),
                             ));
                         }
                         let current = *self.indent_stack.last().unwrap_or(&0);
@@ -462,11 +467,11 @@ impl<'a> Lexer<'a> {
                     Ok(Token::new(TokenKind::NotEq, line, col))
                 } else {
                     Err(ParseError::unexpected_token(
-                    "!".into(),
-                    "`!=`".into(),
-                    line,
-                    col,
-                ))
+                        "!".into(),
+                        "`!=`".into(),
+                        line,
+                        col,
+                    ))
                 }
             }
             Some('<') => {
@@ -597,7 +602,8 @@ impl<'a> Lexer<'a> {
         let current = *self.indent_stack.last().unwrap_or(&0);
         if target > current {
             return Err(ParseError::indent_error(
-                self.line, self.col,
+                self.line,
+                self.col,
                 format!("dedent to {} exceeds current indent {}", target, current),
             ));
         }
@@ -625,7 +631,9 @@ impl<'a> Lexer<'a> {
             self.pending.push(Token::new(TokenKind::Dedent, line, col));
         }
         self.pending.push(Token::new(TokenKind::Eof, line, col));
-        self.pending.pop().unwrap_or_else(|| Token::new(TokenKind::Eof, line, col))
+        self.pending
+            .pop()
+            .unwrap_or_else(|| Token::new(TokenKind::Eof, line, col))
     }
 
     fn string_token(&mut self, line: usize, col: usize) -> Result<Token, ParseError> {
@@ -655,10 +663,10 @@ impl<'a> Lexer<'a> {
                         Some('"') => value.push('"'),
                         Some(c) => {
                             return Err(ParseError::invalid_escape(
-                            self.line,
-                            self.col,
-                            format!("\\{}", c),
-                        ))
+                                self.line,
+                                self.col,
+                                format!("\\{}", c),
+                            ))
                         }
                         None => return Err(ParseError::unterminated_string(line, col)),
                     }

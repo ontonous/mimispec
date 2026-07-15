@@ -287,12 +287,15 @@ impl Renderer {
         self.push(&render_ident(&entry.state));
         if entry.arms.len() == 1 && entry.arms[0].rules.is_empty() {
             let arm = &entry.arms[0];
-            self.push(" >>> ");
-            self.push(&render_ident(&arm.to));
+            self.push(" >>>");
             self.push(&arm.to_keyword_commitment.to_string());
+            self.push(" ");
+            self.push(&render_ident(&arm.to));
             self.push(":");
             if let Some(req) = &arm.requires {
-                self.push(" requires: ");
+                self.push(" requires");
+                self.push(&arm.requires_keyword_commitment.to_string());
+                self.push(": ");
                 self.push(&render_condition(req));
             }
             if let Some(desc) = &arm.desc {
@@ -322,7 +325,9 @@ impl Renderer {
         self.push(&render_ident(&arm.to));
         self.push(":");
         if let Some(req) = &arm.requires {
-            self.push(" requires: ");
+            self.push(" requires");
+            self.push(&arm.requires_keyword_commitment.to_string());
+            self.push(": ");
             self.push(&render_condition(req));
         }
         if let Some(desc) = &arm.desc {
@@ -732,11 +737,7 @@ fn render_params(params: &[Param]) -> String {
 
 fn render_capabilities(caps: &[Capability]) -> String {
     caps.iter()
-        .map(|c| {
-            let mut s = render_ident(&c.name);
-            s.push_str(&c.commitment.to_string());
-            s
-        })
+        .map(|capability| render_ident(&capability.name))
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -822,7 +823,10 @@ fn render_simple_value(value: &SimpleValue) -> String {
         SimpleValue::Ident { value } => render_ident(value),
         SimpleValue::String { value } => render_fstring(value),
         SimpleValue::Number { value } => value.clone(),
-        SimpleValue::Bool { value, .. } => value.to_string(),
+        SimpleValue::Bool {
+            value,
+            keyword_commitment,
+        } => format!("{}{}", value, keyword_commitment),
         SimpleValue::List { items } => {
             let inner = items
                 .iter()
@@ -880,7 +884,10 @@ fn render_expr_prec(expr: &Expr, parent_prec: u8) -> String {
         Expr::Ident { value } => render_ident(value),
         Expr::String { value } => render_fstring(value),
         Expr::Number { value } => value.clone(),
-        Expr::Bool { value, .. } => value.to_string(),
+        Expr::Bool {
+            value,
+            keyword_commitment,
+        } => format!("{}{}", value, keyword_commitment),
         Expr::List { items } => {
             let inner = items.iter().map(render_expr).collect::<Vec<_>>().join(", ");
             format!("[{}]", inner)
@@ -890,40 +897,54 @@ fn render_expr_prec(expr: &Expr, parent_prec: u8) -> String {
             s.push_str(&keyword_commitment.to_string());
             s
         }
-        Expr::Not { expr, .. } => format!("not {}", render_expr_prec(expr, my_prec)),
+        Expr::Not {
+            expr,
+            keyword_commitment,
+        } => format!(
+            "not{} {}",
+            keyword_commitment,
+            render_expr_prec(expr, my_prec)
+        ),
         Expr::Neg {
             expr,
             keyword_commitment,
-        } => format!(
-            "-{}{}",
-            render_expr_prec(expr, my_prec),
-            keyword_commitment
-        ),
+        } => format!("-{}{}", keyword_commitment, render_expr_prec(expr, my_prec)),
         Expr::BitNot {
             expr,
             keyword_commitment,
+        } => format!("~{}{}", keyword_commitment, render_expr_prec(expr, my_prec)),
+        Expr::And {
+            left,
+            right,
+            keyword_commitment,
+        } => {
+            format!(
+                "{} and{} {}",
+                render_expr_prec(left, my_prec),
+                keyword_commitment,
+                render_expr_prec(right, my_prec)
+            )
+        }
+        Expr::Or {
+            left,
+            right,
+            keyword_commitment,
+        } => {
+            format!(
+                "{} or{} {}",
+                render_expr_prec(left, my_prec),
+                keyword_commitment,
+                render_expr_prec(right, my_prec)
+            )
+        }
+        Expr::In {
+            left,
+            right,
+            keyword_commitment,
         } => format!(
-            "~{}{}",
-            render_expr_prec(expr, my_prec),
-            keyword_commitment
-        ),
-        Expr::And { left, right, .. } => {
-            format!(
-                "{} and {}",
-                render_expr_prec(left, my_prec),
-                render_expr_prec(right, my_prec)
-            )
-        }
-        Expr::Or { left, right, .. } => {
-            format!(
-                "{} or {}",
-                render_expr_prec(left, my_prec),
-                render_expr_prec(right, my_prec)
-            )
-        }
-        Expr::In { left, right, .. } => format!(
-            "{} in {}",
+            "{} in{} {}",
             render_expr_prec(left, my_prec),
+            keyword_commitment,
             render_expr_prec(right, my_prec)
         ),
         Expr::Compare {

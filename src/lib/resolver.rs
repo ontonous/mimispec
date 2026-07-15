@@ -57,7 +57,9 @@ impl Resolver {
             return None;
         }
 
-        let current_mtime = fs::metadata(&canonical).ok().and_then(|m| m.modified().ok());
+        let current_mtime = fs::metadata(&canonical)
+            .ok()
+            .and_then(|m| m.modified().ok());
 
         if let Some(cached) = self.cache.get(&canonical, current_mtime.as_ref()) {
             self.files.insert(canonical, cached.clone());
@@ -131,9 +133,7 @@ impl Resolver {
         let canonical = candidate.canonicalize().ok().or_else(|| {
             self.errors.push((
                 path.to_path_buf(),
-                ResolveError::FileNotFound {
-                    path: candidate,
-                },
+                ResolveError::FileNotFound { path: candidate },
             ));
             None
         })?;

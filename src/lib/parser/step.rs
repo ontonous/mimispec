@@ -1,11 +1,12 @@
 use crate::ast::*;
 use crate::error::ParseError;
 use crate::lexer::TokenKind;
-use crate::parser::Parser;
+use crate::parser::{Parser, RecordedNodeKind};
 
 impl Parser {
     pub(super) fn parse_step(&mut self) -> Result<Step, ParseError> {
-        match self.peek_kind() {
+        let start = self.pos;
+        let step = match self.peek_kind() {
             Some(TokenKind::If) => self.parse_if_step(),
             Some(TokenKind::For) => self.parse_for_step(),
             Some(TokenKind::While) => self.parse_while_step(),
@@ -14,7 +15,9 @@ impl Parser {
             Some(TokenKind::Ellipsis) => self.parse_placeholder_step(),
             Some(TokenKind::Desc) => self.parse_desc_step(),
             _ => self.parse_action_step(),
-        }
+        }?;
+        self.record_source_node(start..self.pos, RecordedNodeKind::Step);
+        Ok(step)
     }
 
     fn parse_desc_step(&mut self) -> Result<Step, ParseError> {
