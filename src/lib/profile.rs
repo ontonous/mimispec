@@ -392,7 +392,9 @@ fn func_has_contracts(document: &LosslessDocument, header: &str) -> bool {
     document.semantic().fragments.iter().any(|fragment| {
         if let Fragment::Func { func } = fragment {
             header.contains(&func.name.name)
-                && (func.requires.is_some() || func.ensures.is_some() || !func.rules.is_empty())
+                && (!func.requires().is_empty()
+                    || !func.ensures().is_empty()
+                    || !func.rules().is_empty())
         } else {
             false
         }
@@ -408,7 +410,10 @@ fn document_level_gaps(
         match fragment {
             Fragment::Flow { flow } if !capabilities.flows => {
                 gaps.push(CapabilityGap {
-                    slot_header: format!("flow {}", flow.name.name),
+                    slot_header: flow.name.as_ref().map_or_else(
+                        || "flow <anonymous>".into(),
+                        |name| format!("flow {}", name.name),
+                    ),
                     reason: "Document contains Flow intent unsupported by the selected profile."
                         .into(),
                     severity: GapSeverity::Error,
@@ -416,7 +421,7 @@ fn document_level_gaps(
                         "Choose a Flow-capable profile such as Mimi, or rewrite as steps.".into(),
                 });
             }
-            Fragment::Func { func } if !capabilities.formal_verification && func.math.is_some() => {
+            Fragment::Func { func } if !capabilities.formal_verification && func.has_math() => {
                 gaps.push(CapabilityGap {
                     slot_header: format!("func {}", func.name.name),
                     reason: "Math/contract blocks cannot be formally verified by this profile."
@@ -427,7 +432,11 @@ fn document_level_gaps(
                 });
             }
             Fragment::Func { func }
-                if capabilities.concurrency && steps_need_concurrency(&func.steps) => {}
+                if capabilities.concurrency
+                    && func
+                        .step_refs()
+                        .iter()
+                        .any(|step| matches!(step, Step::Parasteps { .. })) => {}
             Fragment::Ui { ui } if !capabilities.ui => {
                 gaps.push(CapabilityGap {
                     slot_header: format!("ui {}", ui.name.name),
@@ -441,12 +450,6 @@ fn document_level_gaps(
         }
     }
     gaps
-}
-
-fn steps_need_concurrency(steps: &[Step]) -> bool {
-    steps
-        .iter()
-        .any(|step| matches!(step, Step::Parasteps { .. }))
 }
 
 /// Ensure unsupported intent is reported rather than dropped from a selection.

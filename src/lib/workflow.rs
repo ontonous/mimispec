@@ -258,7 +258,9 @@ fn strip_all_suffixes(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::collaboration::{build_lock_challenge, Actor, TransitionEffects};
+    use crate::collaboration::{
+        build_lock_challenge, collect_semantic_slot_snapshots, Actor, TransitionEffects,
+    };
     use crate::parse_lossless;
 
     #[test]
@@ -310,9 +312,14 @@ type Status$: Active | Paid
             .find(|node| node.kind == crate::lossless::SourceNodeKind::Func)
             .unwrap()
             .id;
+        let slot = collect_semantic_slot_snapshots(&doc)
+            .into_iter()
+            .find(|slot| slot.node == func && slot.state == Commitment::Locked)
+            .unwrap()
+            .slot;
         let challenge = build_lock_challenge(
             &doc,
-            func,
+            slot,
             Commitment::Locked,
             Commitment::LockedQuestion,
             "missing refund",

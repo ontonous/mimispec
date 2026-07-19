@@ -13,6 +13,18 @@ use crate::lossless::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SemanticTokenKind {
+    ContextDesc,
+    ContextClause,
+    ContextModule,
+    ContextType,
+    ContextFlow,
+    ContextFunc,
+    ContextUi,
+    ContextSteps,
+    ContextField,
+    ContextFlowEntry,
+    ContextFlowArm,
+    ContextStep,
     CommitmentOpen,
     CommitmentContentReview,
     CommitmentContentDelegated,
@@ -61,6 +73,7 @@ pub struct CodeAction {
     pub kind: CodeActionKind,
     pub title: String,
     pub target: SourceNodeId,
+    pub slot: Option<crate::lossless::CommitmentSlotId>,
     pub from: Commitment,
     pub to: Option<Commitment>,
     pub actor: Actor,
@@ -76,6 +89,27 @@ pub struct IdeSnapshot {
     pub diagnostics: DocumentDiagnostics,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NavigationKind {
+    RuleAttachmentTarget,
+    AttachedRule,
+    FlowSource,
+    FlowEvent,
+    FlowTransition,
+    FlowTarget,
+    FlowGuard,
+    FlowTargetDefinition,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct NavigationTarget {
+    pub kind: NavigationKind,
+    pub span: ByteSpan,
+    pub node: Option<SourceNodeId>,
+    pub label: String,
+}
+
 /// Build a library-level IDE snapshot from a lossless document.
 pub fn ide_snapshot(document: &LosslessDocument, errors: &[ParseError]) -> IdeSnapshot {
     let diagnostics = analyze_document(document, errors);
@@ -89,6 +123,46 @@ pub fn ide_snapshot(document: &LosslessDocument, errors: &[ParseError]) -> IdeSn
 
 pub fn semantic_tokens(document: &LosslessDocument) -> Vec<SemanticToken> {
     let mut tokens = Vec::new();
+    for node in document.nodes() {
+        let kind = match node.kind {
+            crate::lossless::SourceNodeKind::Desc => SemanticTokenKind::ContextDesc,
+            crate::lossless::SourceNodeKind::Clause => SemanticTokenKind::ContextClause,
+            crate::lossless::SourceNodeKind::Module => SemanticTokenKind::ContextModule,
+            crate::lossless::SourceNodeKind::TypeDef => SemanticTokenKind::ContextType,
+            crate::lossless::SourceNodeKind::Flow => SemanticTokenKind::ContextFlow,
+            crate::lossless::SourceNodeKind::Func => SemanticTokenKind::ContextFunc,
+            crate::lossless::SourceNodeKind::Ui => SemanticTokenKind::ContextUi,
+            crate::lossless::SourceNodeKind::Steps => SemanticTokenKind::ContextSteps,
+            crate::lossless::SourceNodeKind::Field => SemanticTokenKind::ContextField,
+            crate::lossless::SourceNodeKind::FlowEntry => SemanticTokenKind::ContextFlowEntry,
+            crate::lossless::SourceNodeKind::FlowArm => SemanticTokenKind::ContextFlowArm,
+            crate::lossless::SourceNodeKind::Step => SemanticTokenKind::ContextStep,
+            crate::lossless::SourceNodeKind::Rule
+            | crate::lossless::SourceNodeKind::Expr
+            | crate::lossless::SourceNodeKind::UiNode
+            | crate::lossless::SourceNodeKind::Placeholder
+            | crate::lossless::SourceNodeKind::Math => continue,
+        };
+        let header = document.text(node.spans.header).unwrap_or("");
+        let raw = header
+            .split(|character: char| character.is_whitespace() || character == ':')
+            .next()
+            .unwrap_or("");
+        let base = raw.trim_end_matches('?').trim_end_matches('$');
+        let token_span = if base.is_empty() {
+            node.spans.header
+        } else {
+            ByteSpan::new(
+                node.spans.header.start as usize,
+                node.spans.header.start as usize + base.len(),
+            )
+        };
+        tokens.push(SemanticToken {
+            span: token_span,
+            kind,
+            label: base.to_string(),
+        });
+    }
     for slot in document.commitment_slots() {
         if !slot.semantic_slot {
             continue;
@@ -123,6 +197,143 @@ pub fn semantic_tokens(document: &LosslessDocument) -> Vec<SemanticToken> {
     }
     tokens.sort_by_key(|token| token.span.start);
     tokens
+}
+
+/// Return target-neutral navigation edges at one byte offset.
+pub fn navigation_at(document: &LosslessDocument, offset: u32) -> Vec<NavigationTarget> {
+    let mut targets = Vec::new();
+
+    if let Some(rule) = document
+        .rules()
+        .iter()
+        .find(|rule| contains(rule.span, offset))
+    {
+        if let Some(target) = rule.target.and_then(|id| document.node(id)) {
+            targets.push(NavigationTarget {
+                kind: NavigationKind::RuleAttachmentTarget,
+                span: target.spans.header,
+                node: Some(target.id),
+                label: document.text(target.spans.header).unwrap_or("").to_string(),
+            });
+        }
+        return targets;
+    }
+
+    if let Some(node) = most_specific_node(document, offset) {
+        for rule in document
+            .rules()
+            .iter()
+            .filter(|rule| rule.target == Some(node.id))
+        {
+            targets.push(NavigationTarget {
+                kind: NavigationKind::AttachedRule,
+                span: rule.span,
+                node: Some(node.id),
+                label: document.text(rule.span).unwrap_or("rule").to_string(),
+            });
+        }
+    }
+
+    let Some(arm) = document
+        .nodes()
+        .iter()
+        .filter(|node| node.kind == crate::lossless::SourceNodeKind::FlowArm)
+        .filter(|node| contains_or_end(node.spans.core, offset))
+        .min_by_key(|node| node.spans.core.len())
+    else {
+        return targets;
+    };
+
+    if let Some(source) = document
+        .nodes()
+        .iter()
+        .filter(|node| node.kind == crate::lossless::SourceNodeKind::FlowEntry)
+        .filter(|node| {
+            node.spans.core.start <= arm.spans.core.start
+                && node.spans.core.end >= arm.spans.core.end
+        })
+        .min_by_key(|node| node.spans.core.len())
+    {
+        targets.push(NavigationTarget {
+            kind: NavigationKind::FlowSource,
+            span: source.spans.header,
+            node: Some(source.id),
+            label: document.text(source.spans.header).unwrap_or("").to_string(),
+        });
+    }
+
+    for slot in document
+        .commitment_slots()
+        .iter()
+        .filter(|slot| slot.owner == Some(arm.id) && slot.semantic_slot)
+    {
+        let kind = match slot.footprint {
+            crate::lossless::CommitmentFootprintKind::Event => NavigationKind::FlowEvent,
+            crate::lossless::CommitmentFootprintKind::Transition => NavigationKind::FlowTransition,
+            crate::lossless::CommitmentFootprintKind::NameOrReference
+                if is_flow_target_slot(document, arm, slot.anchor_span) =>
+            {
+                NavigationKind::FlowTarget
+            }
+            _ => continue,
+        };
+        targets.push(NavigationTarget {
+            kind,
+            span: slot.full_span,
+            node: Some(arm.id),
+            label: format!(
+                "{}{}",
+                document.text(slot.anchor_span).unwrap_or(""),
+                document.text(slot.suffix_span).unwrap_or("")
+            ),
+        });
+        if kind == NavigationKind::FlowTarget {
+            let name = document.text(slot.anchor_span).unwrap_or("");
+            if let Some(definition) = find_flow_state_definition(document, arm, name) {
+                targets.push(NavigationTarget {
+                    kind: NavigationKind::FlowTargetDefinition,
+                    span: definition.spans.header,
+                    node: Some(definition.id),
+                    label: document
+                        .text(definition.spans.header)
+                        .unwrap_or("")
+                        .to_string(),
+                });
+            }
+        }
+    }
+
+    for clause in document
+        .nodes()
+        .iter()
+        .filter(|node| node.kind == crate::lossless::SourceNodeKind::Clause)
+        .filter(|node| {
+            node.spans.core.start >= arm.spans.core.start
+                && node.spans.core.end <= arm.spans.core.end
+        })
+    {
+        targets.push(NavigationTarget {
+            kind: NavigationKind::FlowGuard,
+            span: clause.spans.core,
+            node: Some(clause.id),
+            label: document.text(clause.spans.core).unwrap_or("").to_string(),
+        });
+    }
+
+    targets.sort_by_key(|target| (target.span.start, target.span.end));
+    targets.dedup_by_key(|target| (target.kind, target.span.start, target.span.end));
+    targets
+}
+
+pub fn navigation_at_position(
+    document: &LosslessDocument,
+    position: SourcePosition,
+    encoding: ColumnEncoding,
+) -> Vec<NavigationTarget> {
+    document
+        .line_index()
+        .offset(document.source(), position, encoding)
+        .map_or_else(Vec::new, |offset| navigation_at(document, offset))
 }
 
 pub fn hover_at(document: &LosslessDocument, offset: u32) -> Option<HoverInfo> {
@@ -172,18 +383,39 @@ pub fn hover_at_position(
     hover_at(document, offset)
 }
 
-/// Suggest actor-aware code actions for a node based on its header commitment.
+/// Suggest actor-aware code actions for the node's entity-kind slot.
 pub fn code_actions_for_node(document: &LosslessDocument, node: SourceNodeId) -> Vec<CodeAction> {
-    let Some(source_node) = document.node(node) else {
+    if document.node(node).is_none() {
+        return Vec::new();
+    }
+    let semantic_slots = crate::collaboration::collect_semantic_slot_snapshots(document);
+    let entity_slot = semantic_slots.into_iter().find(|slot| {
+        slot.node == node && slot.footprint == crate::lossless::CommitmentFootprintKind::EntityKind
+    });
+    let slot = entity_slot.as_ref().map(|slot| slot.slot);
+    let from = entity_slot.map_or(Commitment::None, |slot| slot.state);
+    code_actions_for_state(node, slot, from)
+}
+
+/// Suggest actor-aware actions for one exact parser-proven suffix slot.
+pub fn code_actions_for_slot(
+    document: &LosslessDocument,
+    slot: crate::lossless::CommitmentSlotId,
+) -> Vec<CodeAction> {
+    let Some(snapshot) = crate::collaboration::collect_semantic_slot_snapshots(document)
+        .into_iter()
+        .find(|snapshot| snapshot.slot == slot)
+    else {
         return Vec::new();
     };
-    let header = document.text(source_node.spans.header).unwrap_or("");
-    let from = crate::collaboration::collect_slot_snapshots(document)
-        .into_iter()
-        .find(|slot| slot.node == node)
-        .map(|slot| slot.state)
-        .unwrap_or_else(|| header_commitment(header));
+    code_actions_for_state(snapshot.node, Some(slot), snapshot.state)
+}
 
+fn code_actions_for_state(
+    node: SourceNodeId,
+    slot: Option<crate::lossless::CommitmentSlotId>,
+    from: Commitment,
+) -> Vec<CodeAction> {
     let candidates = [
         (
             CodeActionKind::MarkContentReview,
@@ -298,6 +530,7 @@ pub fn code_actions_for_node(document: &LosslessDocument, node: SourceNodeId) ->
             kind,
             title: title.into(),
             target: node,
+            slot,
             from,
             to: Some(to),
             actor,
@@ -310,6 +543,7 @@ pub fn code_actions_for_node(document: &LosslessDocument, node: SourceNodeId) ->
         kind: CodeActionKind::ShowRuleScope,
         title: "Show attached/environment rule scope".into(),
         target: node,
+        slot,
         from,
         to: None,
         actor: Actor::Human,
@@ -328,19 +562,116 @@ fn hover_for_slot(document: &LosslessDocument, slot: &CommitmentSlotSyntax) -> H
         CommitmentAnchorKind::String => "string",
         CommitmentAnchorKind::Value => "value",
     };
+    let (effective, inherited_from) = effective_protection(document, slot);
     HoverInfo {
         span: slot.full_span,
         title: format!("Commitment {suffix}"),
         body: format!(
-            "anchor=`{anchor}`\nslot={slot_kind}\nstate={}\nlock={:?}\nreview={:?}\ntarget={:?}\ncommit_ready={}",
+            "anchor=`{anchor}`\nslot={slot_kind}\nfootprint={:?}\nowner={:?}\nstate={}\nlock={:?}\neffective_lock={:?}\ninherited_from={}\nreview={:?}\ntarget={:?}\nconfirmed={}\ncommit_ready={}",
+            slot.footprint,
+            slot.owner,
             slot.value,
             slot.value.lock_intent(),
+            effective,
+            inherited_from,
             slot.value.review_intent(),
             slot.value.review_target(),
+            slot.value.is_confirmed(),
             slot.value.is_commit_ready()
         ),
         commitment: Some(slot.value),
     }
+}
+
+fn effective_protection(
+    document: &LosslessDocument,
+    slot: &CommitmentSlotSyntax,
+) -> (crate::ast::LockIntent, String) {
+    let own = slot.value.lock_intent();
+    let Some(owner) = slot.owner.and_then(|id| document.node(id)) else {
+        return (own, "none".into());
+    };
+    let mut effective = own;
+    let mut inherited = "none".to_string();
+    for candidate in document.commitment_slots().iter().filter(|candidate| {
+        candidate.semantic_slot
+            && candidate.id != slot.id
+            && candidate.value.protects_content()
+            && candidate
+                .owner
+                .and_then(|id| document.node(id))
+                .is_some_and(|node| {
+                    node.spans.core.start <= owner.spans.core.start
+                        && node.spans.core.end >= owner.spans.core.end
+                        && node.spans.core != owner.spans.core
+                })
+    }) {
+        let lock = candidate.value.lock_intent();
+        if lock == crate::ast::LockIntent::StrongLocked
+            || (lock == crate::ast::LockIntent::Locked && effective == crate::ast::LockIntent::Open)
+        {
+            effective = lock;
+            inherited = candidate
+                .owner
+                .and_then(|id| document.node(id))
+                .and_then(|node| document.text(node.spans.header))
+                .unwrap_or("ancestor")
+                .trim()
+                .to_string();
+        }
+    }
+    (effective, inherited)
+}
+
+fn most_specific_node(
+    document: &LosslessDocument,
+    offset: u32,
+) -> Option<&crate::lossless::SourceNode> {
+    document
+        .nodes()
+        .iter()
+        .filter(|node| contains_or_end(node.spans.core, offset))
+        .min_by_key(|node| node.spans.core.len())
+}
+
+fn contains_or_end(span: ByteSpan, offset: u32) -> bool {
+    span.start <= offset && offset <= span.end
+}
+
+fn is_flow_target_slot(
+    document: &LosslessDocument,
+    arm: &crate::lossless::SourceNode,
+    anchor: ByteSpan,
+) -> bool {
+    let header = document.text(arm.spans.header).unwrap_or("");
+    header
+        .find(">>>")
+        .is_some_and(|index| anchor.start as usize >= arm.spans.header.start as usize + index + 3)
+}
+
+fn find_flow_state_definition<'a>(
+    document: &'a LosslessDocument,
+    arm: &crate::lossless::SourceNode,
+    name: &str,
+) -> Option<&'a crate::lossless::SourceNode> {
+    let flow = document
+        .nodes()
+        .iter()
+        .filter(|node| node.kind == crate::lossless::SourceNodeKind::Flow)
+        .filter(|node| {
+            node.spans.core.start <= arm.spans.core.start
+                && node.spans.core.end >= arm.spans.core.end
+        })
+        .min_by_key(|node| node.spans.core.len())?;
+    document.nodes().iter().find(|node| {
+        node.kind == crate::lossless::SourceNodeKind::FlowEntry
+            && node.spans.core.start >= flow.spans.core.start
+            && node.spans.core.end <= flow.spans.core.end
+            && document
+                .text(node.spans.header)
+                .and_then(|header| header.split_whitespace().next())
+                .is_some_and(|token| token.trim_end_matches(':') == name)
+    })
 }
 
 fn commitment_token_kind(state: Commitment) -> SemanticTokenKind {
@@ -364,55 +695,6 @@ fn contains(span: ByteSpan, offset: u32) -> bool {
         span.start == offset
     } else {
         span.start <= offset && offset < span.end
-    }
-}
-
-fn header_commitment(header: &str) -> Commitment {
-    let mut found = Commitment::None;
-    for token in header.split(|ch: char| {
-        ch.is_whitespace() || matches!(ch, ':' | '(' | ')' | '[' | ']' | ',' | '|')
-    }) {
-        let state = trailing_commitment(token);
-        if rank(state) > rank(found) {
-            found = state;
-        }
-    }
-    found
-}
-
-fn trailing_commitment(token: &str) -> Commitment {
-    if token.ends_with("$$??") {
-        Commitment::StrongLockedQuestionQuestion
-    } else if token.ends_with("$??") {
-        Commitment::LockedQuestionQuestion
-    } else if token.ends_with("$$?") {
-        Commitment::StrongLockedQuestion
-    } else if token.ends_with("$?") {
-        Commitment::LockedQuestion
-    } else if token.ends_with("$$") {
-        Commitment::StrongLocked
-    } else if token.ends_with('$') {
-        Commitment::Locked
-    } else if token.ends_with("??") {
-        Commitment::QuestionQuestion
-    } else if token.ends_with('?') {
-        Commitment::Question
-    } else {
-        Commitment::None
-    }
-}
-
-fn rank(state: Commitment) -> u8 {
-    match state {
-        Commitment::None => 0,
-        Commitment::Question => 1,
-        Commitment::QuestionQuestion => 2,
-        Commitment::Locked => 3,
-        Commitment::LockedQuestion => 4,
-        Commitment::LockedQuestionQuestion => 5,
-        Commitment::StrongLocked => 6,
-        Commitment::StrongLockedQuestion => 7,
-        Commitment::StrongLockedQuestionQuestion => 8,
     }
 }
 
@@ -449,8 +731,49 @@ func Pay$:
     }
 
     #[test]
+    fn hover_reports_inherited_strong_protection() {
+        let source = "module$$ App:\n    func Build?: ...\n";
+        let result = parse_lossless(source);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let offset = source.find("Build?").unwrap() as u32;
+        let hover = hover_at(&result.document, offset).expect("hover");
+        assert!(hover.body.contains("effective_lock=StrongLocked"));
+        assert!(hover.body.contains("inherited_from=module$$ App:"));
+    }
+
+    #[test]
+    fn navigation_links_rules_and_flow_slots() {
+        let source = r#"rule "audit"
+flow Checkout:
+    Pending:
+        on Capture >>> Paid: requires: payment.ready
+    Paid:
+        on Refund >>> Refunded:
+"#;
+        let result = parse_lossless(source);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+
+        let rule_offset = source.find("rule").unwrap() as u32;
+        assert!(navigation_at(&result.document, rule_offset)
+            .iter()
+            .any(|target| target.kind == NavigationKind::RuleAttachmentTarget));
+
+        let arm_offset = source.find("Capture").unwrap() as u32;
+        let navigation = navigation_at(&result.document, arm_offset);
+        assert!(navigation
+            .iter()
+            .any(|target| target.kind == NavigationKind::FlowEvent));
+        assert!(navigation
+            .iter()
+            .any(|target| target.kind == NavigationKind::FlowTargetDefinition));
+        assert!(navigation
+            .iter()
+            .any(|target| target.kind == NavigationKind::FlowGuard));
+    }
+
+    #[test]
     fn code_actions_use_transition_validator() {
-        let source = "func Pay$:\n    steps:\n        charge payment\n";
+        let source = "func$ Pay:\n    steps:\n        charge payment\n";
         let result = parse_lossless(source);
         let func = result
             .document
@@ -470,6 +793,28 @@ func Pay$:
         assert!(!actions
             .iter()
             .any(|action| { action.kind == CodeActionKind::MarkContentReview && action.allowed }));
+    }
+
+    #[test]
+    fn code_actions_target_independent_slots_on_the_same_header() {
+        let result = parse_lossless("func?? Pay$: ...\n");
+        let slots = crate::collaboration::collect_semantic_slot_snapshots(&result.document);
+        let keyword = slots.iter().find(|slot| slot.anchor == "func").unwrap();
+        let name = slots.iter().find(|slot| slot.anchor == "Pay").unwrap();
+        assert_eq!(keyword.state, Commitment::QuestionQuestion);
+        assert_eq!(name.state, Commitment::Locked);
+
+        let keyword_actions = code_actions_for_slot(&result.document, keyword.slot);
+        assert!(keyword_actions
+            .iter()
+            .any(|action| { action.kind == CodeActionKind::MarkContentReview && action.allowed }));
+        let name_actions = code_actions_for_slot(&result.document, name.slot);
+        assert!(name_actions.iter().any(|action| {
+            action.kind == CodeActionKind::ChallengeOrdinaryLock && action.allowed
+        }));
+        assert!(name_actions
+            .iter()
+            .all(|action| action.slot == Some(name.slot)));
     }
 
     #[test]

@@ -1,10 +1,14 @@
-use std::collections::hash_map::DefaultHasher;
+use std::cmp::Reverse;
+use std::collections::{hash_map::DefaultHasher, HashMap};
 use std::hash::{Hash, Hasher};
 
 use serde::Serialize;
 
 use crate::ast::{Commitment, LockIntent};
-use crate::lossless::{ByteSpan, LosslessDocument, SourceNodeId};
+use crate::lossless::{
+    ByteSpan, CommitmentAnchorKind, CommitmentFootprintKind, CommitmentSlotId,
+    CommitmentSlotSyntax, LosslessDocument, SourceNode, SourceNodeId, SourceNodeKind,
+};
 
 /// 请求实际代表的授权主体。Tooling 必须代理其中一个主体，不能自行获得权限。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -42,7 +46,8 @@ pub struct ProtectedHashes {
 /// AI lock challenge record produced when `$ -> $?` or `$$ -> $$?`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct LockChallenge {
-    pub slot_id: SourceNodeId,
+    pub slot_id: CommitmentSlotId,
+    pub owner_node: SourceNodeId,
     pub original_state: Commitment,
     pub challenged_state: Commitment,
     pub content_hash: ContentHash,
@@ -154,7 +159,7 @@ fn strip_all_commitment_suffixes(text: &str) -> String {
 /// Build a lock challenge after a validated AI `$/$` challenge transition.
 pub fn build_lock_challenge(
     document: &LosslessDocument,
-    slot_id: SourceNodeId,
+    slot_id: CommitmentSlotId,
     original_state: Commitment,
     challenged_state: Commitment,
     reason: &str,
@@ -172,17 +177,30 @@ pub fn build_lock_challenge(
     if reason.trim().is_empty() {
         return Err(TransitionViolation::ChallengeReasonRequired);
     }
-    let hashes =
-        protected_hashes(document, slot_id).ok_or(TransitionViolation::ProtectedContentChanged)?;
+    let snapshot = collect_semantic_slot_snapshots(document)
+        .into_iter()
+        .find(|slot| slot.slot == slot_id)
+        .ok_or(TransitionViolation::ProtectedContentChanged)?;
+    if snapshot.state != original_state {
+        return Err(TransitionViolation::AiTransitionForbidden);
+    }
+    let structure_hash = ContentHash::from_bytes(
+        format!(
+            "{}|{}|{}",
+            snapshot.topology, snapshot.attachment, snapshot.position
+        )
+        .as_bytes(),
+    );
     Ok(LockChallenge {
         slot_id,
+        owner_node: snapshot.node,
         original_state,
         challenged_state,
-        content_hash: hashes.content,
-        structure_hash: hashes.structure,
+        content_hash: snapshot.protected_hash,
+        structure_hash,
         reason: reason.trim().to_string(),
         evidence,
-        affected_targets: vec![slot_id],
+        affected_targets: vec![snapshot.node],
         suggested_actions,
     })
 }
@@ -207,11 +225,370 @@ pub struct SlotSnapshot {
     pub hashes: ProtectedHashes,
 }
 
-/// Collect commitment-bearing top-level/nested nodes from a document.
+/// One parser-proven semantic commitment slot.
 ///
-/// The first revision uses keyword/header commitment text when present; for
-/// nodes without an explicit suffix the state is `None`.
+/// Unlike [`SlotSnapshot`], this never folds several suffix anchors into one
+/// node-level state and never discovers state by scanning header text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SemanticSlotSnapshot {
+    pub slot: CommitmentSlotId,
+    pub node: SourceNodeId,
+    pub kind: SourceNodeKind,
+    pub anchor_kind: CommitmentAnchorKind,
+    pub footprint: CommitmentFootprintKind,
+    pub owner_slot_index: u32,
+    pub state: Commitment,
+    pub anchor: String,
+    pub header: String,
+    pub protected_text: String,
+    pub topology: String,
+    pub attachment: String,
+    pub position: String,
+    pub anchor_span: ByteSpan,
+    pub suffix_span: ByteSpan,
+    pub protected_hash: ContentHash,
+}
+
+/// Collect each semantic suffix slot independently from parser-proven lossless
+/// metadata. Zero-width slots are retained so IDEs can address insertion
+/// positions without inventing a node-wide state.
+pub fn collect_semantic_slot_snapshots(document: &LosslessDocument) -> Vec<SemanticSlotSnapshot> {
+    let structure = DocumentStructureIndex::new(document);
+    let mut owner_counts = HashMap::<SourceNodeId, u32>::new();
+    let mut snapshots = Vec::new();
+    for slot in document
+        .commitment_slots()
+        .iter()
+        .filter(|slot| slot.semantic_slot)
+    {
+        let Some(node_id) = slot.owner else {
+            continue;
+        };
+        let Some(node) = document.node(node_id) else {
+            continue;
+        };
+        let owner_slot_index = owner_counts.entry(node_id).or_default();
+        let index = *owner_slot_index;
+        *owner_slot_index += 1;
+        let anchor = document
+            .text(slot.anchor_span)
+            .unwrap_or_default()
+            .to_string();
+        let header = document
+            .text(node.spans.header)
+            .unwrap_or_default()
+            .to_string();
+        let protected_text = protected_text_for_slot(document, slot, node, &structure);
+        let topology = structure.topology(node_id).to_string();
+        let attachment = structure.attachment(node_id).to_string();
+        let position = structure.position(node_id).to_string();
+        snapshots.push(SemanticSlotSnapshot {
+            slot: slot.id,
+            node: node_id,
+            kind: node.kind,
+            anchor_kind: slot.anchor_kind,
+            footprint: slot.footprint,
+            owner_slot_index: index,
+            state: slot.value,
+            anchor,
+            header,
+            protected_hash: ContentHash::from_bytes(protected_text.as_bytes()),
+            protected_text,
+            topology,
+            attachment,
+            position,
+            anchor_span: slot.anchor_span,
+            suffix_span: slot.suffix_span,
+        });
+    }
+    snapshots
+}
+
+fn protected_text_for_slot(
+    document: &LosslessDocument,
+    slot: &CommitmentSlotSyntax,
+    node: &SourceNode,
+    structure: &DocumentStructureIndex,
+) -> String {
+    if slot.state_is_strong_lock() {
+        return masked_strong_subtree(document, slot, node);
+    }
+
+    let span = match slot.footprint {
+        CommitmentFootprintKind::Clause => node.spans.core,
+        CommitmentFootprintKind::Event => event_footprint_span(document, slot, node),
+        CommitmentFootprintKind::Transition => transition_footprint_span(document, node),
+        CommitmentFootprintKind::EntityKind if structure.is_container(node) => node.spans.header,
+        CommitmentFootprintKind::EntityKind => node.spans.core,
+        CommitmentFootprintKind::Placeholder => node.spans.core,
+        CommitmentFootprintKind::NameOrReference
+        | CommitmentFootprintKind::Value
+        | CommitmentFootprintKind::ExpressionOperator
+        | CommitmentFootprintKind::Unknown => slot.anchor_span,
+    };
+    strip_all_commitment_suffixes(document.text(span).unwrap_or_default())
+}
+
+trait CommitmentSlotExt {
+    fn state_is_strong_lock(&self) -> bool;
+}
+
+impl CommitmentSlotExt for CommitmentSlotSyntax {
+    fn state_is_strong_lock(&self) -> bool {
+        self.value.lock_intent() == LockIntent::StrongLocked
+    }
+}
+
+fn event_footprint_span(
+    document: &LosslessDocument,
+    slot: &CommitmentSlotSyntax,
+    node: &SourceNode,
+) -> ByteSpan {
+    let header = document.text(node.spans.header).unwrap_or_default();
+    let arrow = header
+        .find(">>>")
+        .map(|offset| node.spans.header.start as usize + offset)
+        .unwrap_or(slot.anchor_span.end as usize);
+    ByteSpan::new(
+        slot.anchor_span.start as usize,
+        arrow.max(slot.anchor_span.end as usize),
+    )
+}
+
+fn transition_footprint_span(document: &LosslessDocument, node: &SourceNode) -> ByteSpan {
+    let header = document.text(node.spans.header).unwrap_or_default();
+    let start = header
+        .find(">>>")
+        .map(|offset| node.spans.header.start as usize + offset)
+        .unwrap_or(node.spans.header.start as usize);
+    let tail = &document.source()[start..node.spans.header.end as usize];
+    let end = tail
+        .find(':')
+        .map(|offset| start + offset)
+        .unwrap_or(node.spans.header.end as usize);
+    ByteSpan::new(start, end)
+}
+
+fn masked_strong_subtree(
+    document: &LosslessDocument,
+    strong_slot: &CommitmentSlotSyntax,
+    node: &SourceNode,
+) -> String {
+    let base = node.spans.core;
+    let mut masks = document
+        .commitment_slots()
+        .iter()
+        .filter(|candidate| {
+            candidate.id != strong_slot.id
+                && candidate.semantic_slot
+                && matches!(
+                    candidate.value,
+                    Commitment::Question | Commitment::QuestionQuestion
+                )
+        })
+        .filter_map(|candidate| footprint_span(document, candidate))
+        .filter(|span| span.start >= base.start && span.end <= base.end)
+        .collect::<Vec<_>>();
+    masks.sort_by_key(|span| (span.start, std::cmp::Reverse(span.end)));
+    let mut merged: Vec<ByteSpan> = Vec::new();
+    for span in masks {
+        if let Some(last) = merged.last_mut() {
+            if span.start <= last.end {
+                last.end = last.end.max(span.end);
+                continue;
+            }
+        }
+        merged.push(span);
+    }
+
+    let mut normalized = String::new();
+    let mut cursor = base.start as usize;
+    for (index, span) in merged.iter().enumerate() {
+        normalized.push_str(&strip_all_commitment_suffixes(
+            &document.source()[cursor..span.start as usize],
+        ));
+        normalized.push_str(&format!("<explicit-open:{index}>"));
+        cursor = span.end as usize;
+    }
+    normalized.push_str(&strip_all_commitment_suffixes(
+        &document.source()[cursor..base.end as usize],
+    ));
+    normalized
+}
+
+fn footprint_span(document: &LosslessDocument, slot: &CommitmentSlotSyntax) -> Option<ByteSpan> {
+    let node = document.node(slot.owner?)?;
+    Some(match slot.footprint {
+        CommitmentFootprintKind::EntityKind
+        | CommitmentFootprintKind::Clause
+        | CommitmentFootprintKind::Placeholder => node.spans.core,
+        CommitmentFootprintKind::Event => event_footprint_span(document, slot, node),
+        CommitmentFootprintKind::Transition => transition_footprint_span(document, node),
+        CommitmentFootprintKind::NameOrReference
+        | CommitmentFootprintKind::Value
+        | CommitmentFootprintKind::ExpressionOperator
+        | CommitmentFootprintKind::Unknown => slot.anchor_span,
+    })
+}
+
+/// Revision-local structural facts shared by all semantic slots.
+///
+/// Parent discovery is deliberately performed once per document. The prior
+/// implementation rediscovered every node's parent while building every
+/// slot's topology and position, which made snapshot collection effectively
+/// cubic on large Context documents.
+struct DocumentStructureIndex {
+    children: HashMap<SourceNodeId, Vec<SourceNodeId>>,
+    topology: HashMap<SourceNodeId, String>,
+    attachment: HashMap<SourceNodeId, String>,
+    position: HashMap<SourceNodeId, String>,
+}
+
+impl DocumentStructureIndex {
+    fn new(document: &LosslessDocument) -> Self {
+        let parents = index_node_parents(document);
+
+        let mut sibling_groups = HashMap::<Option<SourceNodeId>, Vec<SourceNodeId>>::new();
+        for node in document.nodes() {
+            sibling_groups
+                .entry(parents.get(&node.id).copied().flatten())
+                .or_default()
+                .push(node.id);
+        }
+        for siblings in sibling_groups.values_mut() {
+            siblings.sort_by_key(|id| {
+                let node = document
+                    .node(*id)
+                    .expect("structure index only contains parser-recorded nodes");
+                (node.spans.core.start, node.spans.core.end, node.id.0)
+            });
+        }
+
+        let mut children = HashMap::<SourceNodeId, Vec<SourceNodeId>>::new();
+        for (parent, siblings) in &sibling_groups {
+            if let Some(parent) = parent {
+                children.insert(*parent, siblings.clone());
+            }
+        }
+
+        let mut topology = HashMap::new();
+        for node in document.nodes() {
+            let signature = children
+                .get(&node.id)
+                .into_iter()
+                .flatten()
+                .filter_map(|id| document.node(*id))
+                .map(|child| format!("{:?}", child.kind))
+                .collect::<Vec<_>>()
+                .join("|");
+            topology.insert(node.id, signature);
+        }
+
+        let mut position = HashMap::new();
+        for (parent, siblings) in &sibling_groups {
+            let parent_label = parent
+                .and_then(|id| document.node(id))
+                .map(|node| format!("{:?}", node.kind))
+                .unwrap_or_else(|| "document".into());
+            for (ordinal, id) in siblings.iter().enumerate() {
+                position.insert(*id, format!("{parent_label}/{ordinal}"));
+            }
+        }
+
+        let mut attachment_parts = HashMap::<SourceNodeId, Vec<String>>::new();
+        for rule in document.rules() {
+            if let Some(target) = rule.target {
+                attachment_parts
+                    .entry(target)
+                    .or_default()
+                    .push(strip_all_commitment_suffixes(
+                        document.text(rule.span).unwrap_or_default(),
+                    ));
+            }
+        }
+        let attachment = attachment_parts
+            .into_iter()
+            .map(|(node, parts)| (node, parts.join("|")))
+            .collect();
+
+        Self {
+            children,
+            topology,
+            attachment,
+            position,
+        }
+    }
+
+    fn is_container(&self, node: &SourceNode) -> bool {
+        matches!(
+            node.kind,
+            SourceNodeKind::Module
+                | SourceNodeKind::TypeDef
+                | SourceNodeKind::Flow
+                | SourceNodeKind::Func
+                | SourceNodeKind::Ui
+                | SourceNodeKind::Steps
+                | SourceNodeKind::UiNode
+        ) || self.children.contains_key(&node.id)
+    }
+
+    fn topology(&self, node: SourceNodeId) -> &str {
+        self.topology.get(&node).map(String::as_str).unwrap_or("")
+    }
+
+    fn attachment(&self, node: SourceNodeId) -> &str {
+        self.attachment.get(&node).map(String::as_str).unwrap_or("")
+    }
+
+    fn position(&self, node: SourceNodeId) -> &str {
+        self.position
+            .get(&node)
+            .map(String::as_str)
+            .expect("every parser-recorded node has a structural position")
+    }
+}
+
+fn index_node_parents(document: &LosslessDocument) -> HashMap<SourceNodeId, Option<SourceNodeId>> {
+    let mut ordered = document.nodes().iter().collect::<Vec<_>>();
+    ordered.sort_by_key(|node| {
+        (
+            node.spans.core.start,
+            Reverse(node.spans.core.end),
+            node.id.0,
+        )
+    });
+
+    let mut active = Vec::<&SourceNode>::new();
+    let mut parents = HashMap::with_capacity(ordered.len());
+    for node in ordered {
+        // Half-open intervals ending at this node's start cannot contain it.
+        // Keeping all other overlapping candidates makes this robust even if
+        // recovery produces equal or partially overlapping source nodes.
+        active.retain(|candidate| candidate.spans.core.end > node.spans.core.start);
+        let parent = active
+            .iter()
+            .copied()
+            .filter(|candidate| {
+                candidate.spans.core.start <= node.spans.core.start
+                    && candidate.spans.core.end >= node.spans.core.end
+                    && (candidate.spans.core.start < node.spans.core.start
+                        || candidate.spans.core.end > node.spans.core.end)
+            })
+            .min_by_key(|candidate| (candidate.spans.core.len(), candidate.id.0))
+            .map(|candidate| candidate.id);
+        parents.insert(node.id, parent);
+        active.push(node);
+    }
+    parents
+}
+
+/// Compatibility node summary derived from parser-proven semantic slots.
+///
+/// New collaboration code must use [`collect_semantic_slot_snapshots`]. This
+/// view intentionally folds a node's independent slots only for older
+/// node-oriented consumers; it never scans source text to discover state.
 pub fn collect_slot_snapshots(document: &LosslessDocument) -> Vec<SlotSnapshot> {
+    let semantic_slots = collect_semantic_slot_snapshots(document);
     document
         .nodes()
         .iter()
@@ -219,7 +596,12 @@ pub fn collect_slot_snapshots(document: &LosslessDocument) -> Vec<SlotSnapshot> 
             let header = document.text(node.spans.header)?.to_string();
             let core = document.text(node.spans.core)?.to_string();
             let full = document.text(node.spans.full)?.to_string();
-            let state = commitment_from_header(&header);
+            let state = semantic_slots
+                .iter()
+                .filter(|slot| slot.node == node.id)
+                .map(|slot| slot.state)
+                .max_by_key(|state| commitment_rank(*state))
+                .unwrap_or(Commitment::None);
             let hashes = protected_hashes(document, node.id)?;
             Some(SlotSnapshot {
                 node: node.id,
@@ -232,24 +614,6 @@ pub fn collect_slot_snapshots(document: &LosslessDocument) -> Vec<SlotSnapshot> 
             })
         })
         .collect()
-}
-
-fn commitment_from_header(header: &str) -> Commitment {
-    // Prefer the strongest trailing commitment found on any header token.
-    // Typical headers look like `func Pay$:` or `type Status?:`.
-    let mut found = Commitment::None;
-    for token in header.split(|ch: char| {
-        ch.is_whitespace() || matches!(ch, ':' | '(' | ')' | '[' | ']' | ',' | '|' | '>')
-    }) {
-        if token.is_empty() {
-            continue;
-        }
-        let state = parse_trailing_commitment(token);
-        if commitment_rank(state) > commitment_rank(found) {
-            found = state;
-        }
-    }
-    found
 }
 
 fn commitment_rank(state: Commitment) -> u8 {
@@ -266,68 +630,167 @@ fn commitment_rank(state: Commitment) -> u8 {
     }
 }
 
-fn parse_trailing_commitment(token: &str) -> Commitment {
-    if token.ends_with("$$??") {
-        Commitment::StrongLockedQuestionQuestion
-    } else if token.ends_with("$??") {
-        Commitment::LockedQuestionQuestion
-    } else if token.ends_with("$$?") {
-        Commitment::StrongLockedQuestion
-    } else if token.ends_with("$?") {
-        Commitment::LockedQuestion
-    } else if token.ends_with("$$") {
-        Commitment::StrongLocked
-    } else if token.ends_with('$') {
-        Commitment::Locked
-    } else if token.ends_with("??") {
-        Commitment::QuestionQuestion
-    } else if token.ends_with('?') {
-        Commitment::Question
-    } else {
-        Commitment::None
-    }
-}
-
 /// Structured comparison between two document revisions for one logical slot.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PatchSlotDiff {
-    pub before: SlotSnapshot,
-    pub after: Option<SlotSnapshot>,
+    pub before: SemanticSlotSnapshot,
+    pub after: Option<SemanticSlotSnapshot>,
     pub effects: TransitionEffects,
     pub from: Commitment,
     pub to: Commitment,
 }
 
+/// Authority and authorization attached to a whole-document edit request.
+///
+/// `actor == None` is used only for observed editor changes in advisory mode;
+/// it can never authorize a protected transition.
+#[derive(Debug, Clone, Copy)]
+pub struct DocumentPatchRequest<'a> {
+    pub actor: Option<Actor>,
+    pub authorization: HumanAuthorization,
+    pub challenge_reason: Option<&'a str>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DocumentPatchViolation {
+    ActorDeclarationRequired,
+    Transition(TransitionViolation),
+}
+
+/// Validate a document revision for Human, AI, or an undeclared observer.
+///
+/// The comparison is slot-precise and uses the same parser-proven identity as
+/// the AI compatibility validator. Callers must validate any session-scoped
+/// unlock token before setting `authorization.unlock_strong_lock`.
+pub fn validate_document_patch(
+    before: &LosslessDocument,
+    after: &LosslessDocument,
+    request: &DocumentPatchRequest<'_>,
+) -> Vec<Result<PatchSlotDiff, DocumentPatchViolation>> {
+    let before_slots = collect_semantic_slot_snapshots(before);
+    let after_slots = collect_semantic_slot_snapshots(after);
+    let mut results = Vec::new();
+    let mut matched_after = std::collections::HashSet::new();
+
+    for prior in &before_slots {
+        let identity = semantic_slot_identity(prior);
+        let matched = after_slots
+            .iter()
+            .enumerate()
+            .find(|(_, candidate)| semantic_slot_identity(candidate) == identity);
+        let Some((after_index, next)) = matched else {
+            if prior.state.protects_content() {
+                let violation = match request.actor {
+                    None => DocumentPatchViolation::ActorDeclarationRequired,
+                    Some(Actor::Human) if !request.authorization.modify_protected => {
+                        DocumentPatchViolation::Transition(
+                            TransitionViolation::HumanAuthorizationRequired,
+                        )
+                    }
+                    Some(Actor::Ai) => DocumentPatchViolation::Transition(
+                        TransitionViolation::ProtectedContentChanged,
+                    ),
+                    Some(Actor::Human) => continue,
+                };
+                results.push(Err(violation));
+            }
+            continue;
+        };
+        matched_after.insert(after_index);
+
+        let effects = effects_for_semantic_slot_patch(prior, next);
+        if prior.state == next.state && effects.is_unchanged() {
+            continue;
+        }
+        // An explicitly open slot has no commitment transition to validate.
+        // Container protection, when present, is enforced by the protected
+        // parent slot's footprint in the same document comparison.
+        if prior.state == Commitment::None
+            && next.state == Commitment::None
+            && request.actor.is_some()
+        {
+            continue;
+        }
+        let Some(actor) = request.actor else {
+            results.push(Err(DocumentPatchViolation::ActorDeclarationRequired));
+            continue;
+        };
+        let transition = TransitionRequest {
+            actor,
+            from: prior.state,
+            to: next.state,
+            effects,
+            authorization: request.authorization,
+            challenge_reason: request.challenge_reason,
+        };
+        match validate_transition(&transition) {
+            Ok(()) => results.push(Ok(PatchSlotDiff {
+                before: prior.clone(),
+                after: Some(next.clone()),
+                effects,
+                from: prior.state,
+                to: next.state,
+            })),
+            Err(violation) => results.push(Err(DocumentPatchViolation::Transition(violation))),
+        }
+    }
+
+    for (index, slot) in after_slots.iter().enumerate() {
+        if matched_after.contains(&index) || !slot.state.protects_content() {
+            continue;
+        }
+        match request.actor {
+            None => results.push(Err(DocumentPatchViolation::ActorDeclarationRequired)),
+            Some(Actor::Ai) => results.push(Err(DocumentPatchViolation::Transition(
+                TransitionViolation::AiTransitionForbidden,
+            ))),
+            Some(Actor::Human) => {}
+        }
+    }
+
+    if results.is_empty() && before.source() != after.source() && request.actor.is_none() {
+        results.push(Err(DocumentPatchViolation::ActorDeclarationRequired));
+    }
+    results
+}
+
 /// Validate an AI patch by comparing before/after lossless documents.
 ///
-/// Matching is by node kind + core identity with commitment stripped from the
-/// first header token, so suffix-only challenges can be recognized.
+/// Matching uses parser-proven owner position, footprint and slot ordinal.
+/// Independent suffixes on one header are validated independently; no
+/// "strongest header suffix" folding is permitted.
 pub fn validate_ai_document_patch(
     before: &LosslessDocument,
     after: &LosslessDocument,
     challenge_reason: Option<&str>,
 ) -> Vec<Result<PatchSlotDiff, TransitionViolation>> {
-    let before_slots = collect_slot_snapshots(before);
-    let after_slots = collect_slot_snapshots(after);
+    let before_slots = collect_semantic_slot_snapshots(before);
+    let after_slots = collect_semantic_slot_snapshots(after);
     let mut results = Vec::new();
+    let mut matched_after = std::collections::HashSet::new();
 
     for prior in &before_slots {
-        if !prior.state.protects_content() && prior.state == Commitment::None {
+        if prior.state == Commitment::None {
             continue;
         }
-        let identity = identity_key(&prior.header, prior.kind);
-        let matched = after_slots.iter().find(|candidate| {
-            candidate.kind == prior.kind
-                && identity_key(&candidate.header, candidate.kind) == identity
-        });
-        let Some(next) = matched else {
+        let identity = semantic_slot_identity(prior);
+        let matched = after_slots
+            .iter()
+            .enumerate()
+            .find(|(_, candidate)| semantic_slot_identity(candidate) == identity);
+        let Some((after_index, next)) = matched else {
             if prior.state.protects_content() {
                 results.push(Err(TransitionViolation::ProtectedContentChanged));
             }
             continue;
         };
+        matched_after.insert(after_index);
 
-        let effects = effects_for_slot_patch(prior, next);
+        let effects = effects_for_semantic_slot_patch(prior, next);
+        if prior.state == next.state && effects.is_unchanged() {
+            continue;
+        }
         let request = TransitionRequest {
             actor: Actor::Ai,
             from: prior.state,
@@ -347,29 +810,39 @@ pub fn validate_ai_document_patch(
             Err(violation) => results.push(Err(violation)),
         }
     }
+
+    // AI cannot create a fresh protected/confirmed slot and thereby bypass the
+    // transition matrix simply because no matching slot existed before.
+    for (index, slot) in after_slots.iter().enumerate() {
+        if !matched_after.contains(&index) && slot.state.protects_content() {
+            results.push(Err(TransitionViolation::AiTransitionForbidden));
+        }
+    }
     results
 }
 
-fn identity_key(header: &str, kind: crate::lossless::SourceNodeKind) -> String {
-    // Strip commitment suffixes from every token so `Pay$` and `Pay$?` match.
-    let stripped: String = header
-        .split_inclusive(|ch: char| {
-            ch.is_whitespace() || matches!(ch, ':' | '(' | ')' | '[' | ']' | ',' | '|')
-        })
-        .map(|part| {
-            let (token, sep) = match part.chars().last() {
-                Some(ch)
-                    if ch.is_whitespace()
-                        || matches!(ch, ':' | '(' | ')' | '[' | ']' | ',' | '|') =>
-                {
-                    (&part[..part.len() - ch.len_utf8()], ch.to_string())
-                }
-                _ => (part, String::new()),
-            };
-            format!("{}{}", strip_commitment_suffix(token), sep)
-        })
-        .collect();
-    format!("{:?}:{}", kind, stripped)
+fn semantic_slot_identity(slot: &SemanticSlotSnapshot) -> String {
+    format!(
+        "{}:{:?}:{:?}:{:?}:{}",
+        slot.position, slot.kind, slot.anchor_kind, slot.footprint, slot.owner_slot_index
+    )
+}
+
+fn effects_for_semantic_slot_patch(
+    before: &SemanticSlotSnapshot,
+    after: &SemanticSlotSnapshot,
+) -> TransitionEffects {
+    let protects_structure = before.state.is_strong_locked()
+        || matches!(
+            before.footprint,
+            CommitmentFootprintKind::EntityKind | CommitmentFootprintKind::Clause
+        );
+    TransitionEffects {
+        content_changed: before.protected_text != after.protected_text,
+        structure_changed: before.position != after.position
+            || (protects_structure && before.topology != after.topology),
+        attachment_changed: protects_structure && before.attachment != after.attachment,
+    }
 }
 
 fn strip_commitment_suffix(token: &str) -> &str {
@@ -395,25 +868,25 @@ pub struct HumanAuthorization {
 /// Tooling must obtain this from a Human actor session; AI cannot mint it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct UnlockToken {
-    pub node: SourceNodeId,
+    pub slot: CommitmentSlotId,
     pub from: Commitment,
     pub nonce: u64,
 }
 
 impl UnlockToken {
     pub fn issue(
-        node: SourceNodeId,
+        slot: CommitmentSlotId,
         from: Commitment,
         nonce: u64,
     ) -> Result<Self, TransitionViolation> {
         if from.lock_intent() != LockIntent::StrongLocked {
             return Err(TransitionViolation::StrongUnlockAuthorizationRequired);
         }
-        Ok(Self { node, from, nonce })
+        Ok(Self { slot, from, nonce })
     }
 
-    pub fn authorizes(&self, node: SourceNodeId, from: Commitment) -> bool {
-        self.node == node && self.from == from && from.lock_intent() == LockIntent::StrongLocked
+    pub fn authorizes(&self, slot: CommitmentSlotId, from: Commitment) -> bool {
+        self.slot == slot && self.from == from && from.lock_intent() == LockIntent::StrongLocked
     }
 }
 
@@ -504,7 +977,7 @@ pub fn validate_child_under_parent(
 /// Validate a human unlock of a strong-locked slot using an unlock token.
 pub fn validate_strong_unlock(
     token: &UnlockToken,
-    node: SourceNodeId,
+    slot: CommitmentSlotId,
     from: Commitment,
     to: Commitment,
 ) -> TransitionDecision {
@@ -516,7 +989,7 @@ pub fn validate_strong_unlock(
         // review transitions performed by Human.
         return Ok(());
     }
-    if !token.authorizes(node, from) {
+    if !token.authorizes(slot, from) {
         return Err(TransitionViolation::StrongUnlockAuthorizationRequired);
     }
     Ok(())
@@ -875,11 +1348,16 @@ mod tests {
             .find(|node| node.kind == crate::lossless::SourceNodeKind::Func)
             .unwrap()
             .id;
+        let slot = collect_semantic_slot_snapshots(&doc)
+            .into_iter()
+            .find(|slot| slot.node == func && slot.state == Commitment::Locked)
+            .unwrap()
+            .slot;
 
         assert_eq!(
             build_lock_challenge(
                 &doc,
-                func,
+                slot,
                 Commitment::Locked,
                 Commitment::LockedQuestion,
                 "   ",
@@ -891,7 +1369,7 @@ mod tests {
 
         let challenge = build_lock_challenge(
             &doc,
-            func,
+            slot,
             Commitment::Locked,
             Commitment::LockedQuestion,
             "missing refund path",
@@ -911,7 +1389,7 @@ mod tests {
         assert!(!challenge_is_duplicate(
             &[build_lock_challenge(
                 &doc,
-                func,
+                slot,
                 Commitment::Locked,
                 Commitment::LockedQuestion,
                 "missing refund path",
@@ -955,14 +1433,14 @@ mod tests {
     #[test]
     fn ai_patch_rejects_lock_bypass_content_edit() {
         let before = crate::parse_lossless(
-            r#"func Pay$:
+            r#"func$$ Pay:
     steps:
         charge payment
 "#,
         )
         .document;
         let after = crate::parse_lossless(
-            r#"func Pay$:
+            r#"func$$ Pay:
     steps:
         charge twice
 "#,
@@ -1002,6 +1480,121 @@ mod tests {
     }
 
     #[test]
+    fn semantic_slots_do_not_fold_keyword_name_and_value_states() {
+        let document =
+            crate::parse_lossless("func?? Pay$:\n    desc \"payment intent\"?\n").document;
+        let slots = collect_semantic_slot_snapshots(&document);
+        let func = document
+            .nodes()
+            .iter()
+            .find(|node| node.kind == SourceNodeKind::Func)
+            .unwrap();
+        let func_slots = slots
+            .iter()
+            .filter(|slot| slot.node == func.id)
+            .collect::<Vec<_>>();
+        assert!(func_slots.iter().any(|slot| {
+            slot.anchor == "func"
+                && slot.footprint == CommitmentFootprintKind::EntityKind
+                && slot.state == Commitment::QuestionQuestion
+        }));
+        assert!(func_slots.iter().any(|slot| {
+            slot.anchor == "Pay"
+                && slot.footprint == CommitmentFootprintKind::NameOrReference
+                && slot.state == Commitment::Locked
+        }));
+        assert!(slots.iter().any(|slot| {
+            slot.anchor == "\"payment intent\""
+                && slot.footprint == CommitmentFootprintKind::Value
+                && slot.state == Commitment::Question
+        }));
+    }
+
+    #[test]
+    fn structure_index_matches_exhaustive_parent_selection() {
+        let result = crate::parse_lossless(
+            r#"module App:
+    rule "audit every attempt"
+    func Pay(order):
+        requires: order.ready
+        steps:
+            if order.ready:
+                charge payment
+            else:
+                reject payment
+    flow:
+        Pending:
+            on Approved >>> Paid: desc "settled"
+"#,
+        );
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+
+        let indexed = index_node_parents(&result.document);
+        for node in result.document.nodes() {
+            let exhaustive = result
+                .document
+                .nodes()
+                .iter()
+                .filter(|candidate| {
+                    candidate.id != node.id
+                        && candidate.spans.core.start <= node.spans.core.start
+                        && candidate.spans.core.end >= node.spans.core.end
+                        && (candidate.spans.core.start < node.spans.core.start
+                            || candidate.spans.core.end > node.spans.core.end)
+                })
+                .min_by_key(|candidate| candidate.spans.core.len())
+                .map(|candidate| candidate.id);
+            assert_eq!(indexed.get(&node.id).copied().flatten(), exhaustive);
+        }
+    }
+
+    #[test]
+    fn ai_patch_respects_ordinary_and_strong_container_footprints() {
+        let ordinary_before =
+            crate::parse_lossless("module$ App:\n    desc \"draft one\"\n").document;
+        let ordinary_after =
+            crate::parse_lossless("module$ App:\n    desc \"draft two\"\n").document;
+        let ordinary = validate_ai_document_patch(&ordinary_before, &ordinary_after, None);
+        assert!(ordinary.iter().all(Result::is_ok), "{ordinary:?}");
+
+        let strong_before =
+            crate::parse_lossless("module$$ App:\n    desc \"locked one\"\n").document;
+        let strong_after =
+            crate::parse_lossless("module$$ App:\n    desc \"locked two\"\n").document;
+        let strong = validate_ai_document_patch(&strong_before, &strong_after, None);
+        assert!(strong.iter().any(|result| result.is_err()), "{strong:?}");
+
+        let open_before =
+            crate::parse_lossless("module$$ App:\n    desc?? \"delegated one\"\n").document;
+        let open_after =
+            crate::parse_lossless("module$$ App:\n    desc? \"delegated two\"\n").document;
+        let explicit_open = validate_ai_document_patch(&open_before, &open_after, None);
+        assert!(explicit_open.iter().all(Result::is_ok), "{explicit_open:?}");
+    }
+
+    #[test]
+    fn ai_patch_cannot_bypass_independent_name_or_rule_value_locks() {
+        let before = crate::parse_lossless("func?? Pay$: ...\nrule \"must audit\"$\n").document;
+        let after =
+            crate::parse_lossless("func? Refund$: ...\nrule \"audit optional\"$\n").document;
+        let results = validate_ai_document_patch(&before, &after, None);
+        assert!(
+            results.iter().filter(|result| result.is_err()).count() >= 2,
+            "{results:?}"
+        );
+    }
+
+    #[test]
+    fn ai_patch_cannot_create_a_fresh_strong_lock() {
+        let before = crate::parse_lossless("desc \"draft\"\n").document;
+        let after = crate::parse_lossless("desc$$ \"draft\"\n").document;
+        let results = validate_ai_document_patch(&before, &after, None);
+        assert!(results
+            .iter()
+            .any(|result| matches!(result, Err(TransitionViolation::AiTransitionForbidden))));
+    }
+
+    #[test]
     fn unlock_token_is_required_to_weaken_strong_lock() {
         let source = r#"func Pay$$:
     steps:
@@ -1014,17 +1607,22 @@ mod tests {
             .find(|node| node.kind == crate::lossless::SourceNodeKind::Func)
             .unwrap()
             .id;
+        let slot = collect_semantic_slot_snapshots(&doc)
+            .into_iter()
+            .find(|slot| slot.node == func && slot.state == Commitment::StrongLocked)
+            .unwrap()
+            .slot;
 
-        assert!(UnlockToken::issue(func, Commitment::Locked, 1).is_err());
-        let token = UnlockToken::issue(func, Commitment::StrongLocked, 7).unwrap();
+        assert!(UnlockToken::issue(slot, Commitment::Locked, 1).is_err());
+        let token = UnlockToken::issue(slot, Commitment::StrongLocked, 7).unwrap();
         assert!(
-            validate_strong_unlock(&token, func, Commitment::StrongLocked, Commitment::Locked)
+            validate_strong_unlock(&token, slot, Commitment::StrongLocked, Commitment::Locked)
                 .is_ok()
         );
         assert_eq!(
             validate_strong_unlock(
                 &token,
-                func,
+                slot,
                 Commitment::StrongLockedQuestion,
                 Commitment::Locked
             ),
@@ -1033,11 +1631,11 @@ mod tests {
         assert_eq!(
             validate_strong_unlock(
                 &UnlockToken {
-                    node: SourceNodeId(999),
+                    slot: CommitmentSlotId(999),
                     from: Commitment::StrongLocked,
                     nonce: 1
                 },
-                func,
+                slot,
                 Commitment::StrongLocked,
                 Commitment::None
             ),
@@ -1110,5 +1708,62 @@ mod tests {
             Actor::Ai,
         )
         .is_ok());
+    }
+
+    #[test]
+    fn generalized_document_patch_requires_actor_for_observed_changes() {
+        let before = crate::parse_lossless("desc \"draft\"\n");
+        let after = crate::parse_lossless("desc \"changed\"\n");
+        let results = validate_document_patch(
+            &before.document,
+            &after.document,
+            &DocumentPatchRequest {
+                actor: None,
+                authorization: HumanAuthorization::default(),
+                challenge_reason: None,
+            },
+        );
+        assert!(results.iter().any(|result| {
+            matches!(
+                result,
+                Err(DocumentPatchViolation::ActorDeclarationRequired)
+            )
+        }));
+    }
+
+    #[test]
+    fn generalized_human_patch_requires_explicit_protected_authorization() {
+        let before = crate::parse_lossless("func$ Pay:\n    steps:\n        charge payment\n");
+        let after = crate::parse_lossless("func$ Refund:\n    steps:\n        charge payment\n");
+        let denied = validate_document_patch(
+            &before.document,
+            &after.document,
+            &DocumentPatchRequest {
+                actor: Some(Actor::Human),
+                authorization: HumanAuthorization::default(),
+                challenge_reason: None,
+            },
+        );
+        assert!(denied.iter().any(|result| {
+            matches!(
+                result,
+                Err(DocumentPatchViolation::Transition(
+                    TransitionViolation::HumanAuthorizationRequired
+                ))
+            )
+        }));
+        let allowed = validate_document_patch(
+            &before.document,
+            &after.document,
+            &DocumentPatchRequest {
+                actor: Some(Actor::Human),
+                authorization: HumanAuthorization {
+                    modify_protected: true,
+                    unlock_strong_lock: false,
+                },
+                challenge_reason: None,
+            },
+        );
+        assert!(allowed.iter().all(Result::is_ok), "{allowed:?}");
     }
 }

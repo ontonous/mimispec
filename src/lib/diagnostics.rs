@@ -2,10 +2,13 @@ use serde::Serialize;
 
 use std::collections::HashMap;
 
-use crate::ast::{Commitment, Fragment, ReviewIntent, ReviewTarget, Step};
-use crate::collaboration::collect_slot_snapshots;
+use crate::ast::{Commitment, EventName, Fragment, ReviewIntent, ReviewTarget, Step};
+use crate::collaboration::collect_semantic_slot_snapshots;
 use crate::error::ParseError;
-use crate::lossless::{ByteSpan, LosslessDocument, RuleAttachment, SourceNodeId};
+use crate::lossless::{
+    ByteSpan, CommitmentFootprintKind, CommitmentSlotId, LosslessDocument, RuleAttachment,
+    SourceNodeId,
+};
 
 /// Stable diagnostic class for intent-oriented guidance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -46,8 +49,11 @@ pub struct IntentDiagnostic {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct QueueItem {
+    pub slot: CommitmentSlotId,
     pub node: SourceNodeId,
     pub state: Commitment,
+    pub anchor: String,
+    pub footprint: CommitmentFootprintKind,
     pub header: String,
     pub span: ByteSpan,
     pub review_target: ReviewTarget,
@@ -78,7 +84,7 @@ pub struct DocumentDiagnostics {
 
 /// Build decision/delegation queues and first-wave intent diagnostics.
 pub fn analyze_document(document: &LosslessDocument, errors: &[ParseError]) -> DocumentDiagnostics {
-    let slots = collect_slot_snapshots(document);
+    let slots = collect_semantic_slot_snapshots(document);
     let mut summary = CommitmentSummary {
         total_slots: slots.len(),
         ..CommitmentSummary::default()
@@ -117,11 +123,20 @@ pub fn analyze_document(document: &LosslessDocument, errors: &[ParseError]) -> D
             summary.commit_ready += 1;
         }
 
-        let node = document.node(slot.node);
-        let span = node.map(|n| n.spans.header).unwrap_or(ByteSpan::new(0, 0));
+        let span = if slot.suffix_span.is_empty() {
+            slot.anchor_span
+        } else {
+            ByteSpan {
+                start: slot.anchor_span.start,
+                end: slot.suffix_span.end,
+            }
+        };
         let item = QueueItem {
+            slot: slot.slot,
             node: slot.node,
             state: slot.state,
+            anchor: slot.anchor.clone(),
+            footprint: slot.footprint,
             header: slot.header.clone(),
             span,
             review_target: slot.state.review_target(),
@@ -136,9 +151,8 @@ pub fn analyze_document(document: &LosslessDocument, errors: &[ParseError]) -> D
                         class: DiagnosticClass::Decision,
                         severity: Severity::Info,
                         message: format!(
-                            "Human decision needed for {} ({})",
-                            slot.header.trim(),
-                            slot.state
+                            "Human decision needed for {:?} slot `{}` ({})",
+                            slot.footprint, slot.anchor, slot.state
                         ),
                         span: Some(span),
                         help: Some(decision_help(slot.state).into()),
@@ -154,9 +168,8 @@ pub fn analyze_document(document: &LosslessDocument, errors: &[ParseError]) -> D
                         class: DiagnosticClass::Delegation,
                         severity: Severity::Info,
                         message: format!(
-                            "AI work delegated for {} ({})",
-                            slot.header.trim(),
-                            slot.state
+                            "AI work delegated for {:?} slot `{}` ({})",
+                            slot.footprint, slot.anchor, slot.state
                         ),
                         span: Some(span),
                         help: Some(delegation_help(slot.state).into()),
@@ -312,31 +325,31 @@ fn detect_intent_gaps(document: &LosslessDocument) -> Vec<IntentDiagnostic> {
     for fragment in &document.semantic().fragments {
         match fragment {
             Fragment::Flow { flow } => {
-                if flow.entries.is_empty() {
+                let entries = flow.entries();
+                if entries.is_empty() {
                     continue;
                 }
-                let has_failure_hint = flow.entries.iter().any(|entry| {
-                    let name = entry.state.name.to_ascii_lowercase();
-                    name.contains("fault")
-                        || name.contains("error")
-                        || name.contains("fail")
-                        || name.contains("cancel")
-                        || name.contains("reject")
-                        || entry.arms.iter().any(|arm| {
-                            let to = arm.to.name.to_ascii_lowercase();
-                            to.contains("fault")
-                                || to.contains("error")
-                                || to.contains("fail")
-                                || to.contains("cancel")
-                                || to.contains("reject")
+                let has_failure_hint = entries.iter().any(|entry| {
+                    text_has_failure_hint(&entry.state.name)
+                        || entry.arms().into_iter().any(|arm| {
+                            text_has_failure_hint(&arm.to.name)
+                                || arm.event.as_ref().is_some_and(|event| match &event.name {
+                                    EventName::Ident { value } => {
+                                        text_has_failure_hint(&value.name)
+                                    }
+                                    EventName::Natural { text } => {
+                                        text_has_failure_hint(&text.value)
+                                    }
+                                })
                         })
                 });
                 if !has_failure_hint {
+                    let flow_name = flow.name.as_ref().map_or("<anonymous>", |name| &name.name);
                     if let Some(node) = document.nodes().iter().find(|node| {
                         node.kind == crate::lossless::SourceNodeKind::Flow
                             && document
                                 .text(node.spans.header)
-                                .is_some_and(|text| text.contains(&flow.name.name))
+                                .is_some_and(|text| text.contains(flow_name))
                     }) {
                         out.push(IntentDiagnostic {
                             code: DiagnosticCode("H-INTENT-GAP"),
@@ -344,7 +357,7 @@ fn detect_intent_gaps(document: &LosslessDocument) -> Vec<IntentDiagnostic> {
                             severity: Severity::Hint,
                             message: format!(
                                 "Flow `{}` has no obvious failure/cancel path",
-                                flow.name.name
+                                flow_name
                             ),
                             span: Some(node.spans.header),
                             help: Some(
@@ -357,10 +370,11 @@ fn detect_intent_gaps(document: &LosslessDocument) -> Vec<IntentDiagnostic> {
                 }
             }
             Fragment::Func { func } => {
-                if func.steps.is_empty() {
+                let steps = func.step_refs();
+                if steps.is_empty() {
                     continue;
                 }
-                let has_error_step = steps_have_error(&func.steps);
+                let has_error_step = steps.iter().any(|step| step_has_error(step));
                 if !has_error_step {
                     if let Some(node) = document.nodes().iter().find(|node| {
                         node.kind == crate::lossless::SourceNodeKind::Func
@@ -392,31 +406,47 @@ fn detect_intent_gaps(document: &LosslessDocument) -> Vec<IntentDiagnostic> {
     out
 }
 
-fn steps_have_error(steps: &[Step]) -> bool {
-    steps.iter().any(|step| match step {
+fn text_has_failure_hint(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    [
+        "fault", "error", "fail", "cancel", "reject", "abort", "timeout",
+    ]
+    .iter()
+    .any(|keyword| lower.contains(keyword))
+        || ["失败", "错误", "取消", "拒绝", "终止", "超时"]
+            .iter()
+            .any(|keyword| text.contains(keyword))
+}
+
+fn step_items_have_error(items: &[Fragment]) -> bool {
+    items.iter().any(|item| match item {
+        Fragment::Step { step } => step_has_error(step),
+        Fragment::Steps { items, .. } => step_items_have_error(items),
+        _ => false,
+    })
+}
+
+fn step_has_error(step: &Step) -> bool {
+    match step {
         Step::Error { .. } => true,
         Step::Action { step } => !step.on_blocks.is_empty(),
         Step::Assign { step } => !step.on_blocks.is_empty(),
         Step::If { step } => {
-            steps_have_error(&step.then_branch)
+            step_items_have_error(&step.then_branch)
                 || step
                     .else_branch
                     .as_ref()
-                    .is_some_and(|branch| steps_have_error(branch))
+                    .is_some_and(|branch| step_items_have_error(branch))
         }
-        Step::For { step } => steps_have_error(&step.body),
-        Step::While { step } => steps_have_error(&step.body),
-        Step::Parasteps { step } => steps_have_error(&step.steps),
+        Step::For { step } => step_items_have_error(&step.body),
+        Step::While { step } => step_items_have_error(&step.body),
+        Step::Parasteps { step } => step_items_have_error(&step.steps),
         Step::Desc { .. } | Step::Placeholder { .. } => false,
-    })
+    }
 }
 
 fn queue_contains(queue: &[QueueItem], item: &QueueItem) -> bool {
-    queue.iter().any(|existing| {
-        existing.state == item.state
-            && existing.header == item.header
-            && existing.span.start == item.span.start
-    })
+    queue.iter().any(|existing| existing.slot == item.slot)
 }
 
 fn decision_help(state: Commitment) -> &'static str {
@@ -542,6 +572,27 @@ flow Checkout:
             .diagnostics
             .iter()
             .any(|d| d.class == DiagnosticClass::IntentGap && d.code.0 == "H-INTENT-GAP"));
+    }
+
+    #[test]
+    fn flow_failure_event_suppresses_missing_failure_hint() {
+        let source = r#"flow Sync:
+    Uploading:
+        on UploadFailed >>> RetryPending:
+    RetryPending:
+        on RetryDue >>> Uploading:
+"#;
+        let result = parse_lossless(source);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let report = analyze_document(&result.document, &result.errors);
+        assert!(
+            !report.diagnostics.iter().any(|diagnostic| {
+                diagnostic.class == DiagnosticClass::IntentGap
+                    && diagnostic.message.contains("failure/cancel path")
+            }),
+            "failure-labelled event must count as an explicit failure path: {:?}",
+            report.diagnostics
+        );
     }
 
     impl DocumentDiagnostics {
