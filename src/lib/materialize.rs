@@ -20,7 +20,9 @@ pub enum Provenance {
 /// One locked (or intentionally open) slot considered for materialization.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MaterializationSlot {
+    #[serde(skip_serializing)]
     pub slot: CommitmentSlotId,
+    #[serde(skip_serializing)]
     pub node: SourceNodeId,
     pub locator: SlotLocator,
     pub kind: SourceNodeKind,
@@ -36,6 +38,7 @@ pub struct MaterializationSlot {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CommitSelection {
     pub release_scope: String,
+    pub revision_sha256: String,
     pub slots: Vec<MaterializationSlot>,
 }
 
@@ -44,6 +47,7 @@ pub struct CommitSelection {
 /// Evidence never changes commitment. `$`/`$$` remain human intent only.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct EvidenceRecord {
+    #[serde(skip_serializing)]
     pub slot: CommitmentSlotId,
     pub locator: SlotLocator,
     pub kind: EvidenceKind,
@@ -83,6 +87,7 @@ pub struct MaterializationPlan {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DriftFinding {
+    #[serde(skip_serializing)]
     pub slot: CommitmentSlotId,
     pub locator: SlotLocator,
     pub expected_state: Commitment,
@@ -136,6 +141,7 @@ pub fn select_commit_ready(
     }
     CommitSelection {
         release_scope: release_scope.into(),
+        revision_sha256: crate::provenance::sha256_bytes(document.source().as_bytes()),
         slots,
     }
 }

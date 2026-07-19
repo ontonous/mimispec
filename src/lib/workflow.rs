@@ -2,11 +2,12 @@ use serde::Serialize;
 
 use crate::ast::Commitment;
 use crate::collaboration::{
-    challenge_is_duplicate, collect_slot_snapshots, ContentHash, LockChallenge,
+    challenge_is_duplicate, collect_semantic_slot_snapshots, ContentHash, LockChallenge,
 };
 use crate::diagnostics::{analyze_document, QueueItem};
 use crate::lossless::LosslessDocument;
-use crate::materialize::{plan_materialization, MaterializationPlan};
+use crate::materialize::{plan_materialization, EvidenceRecord, MaterializationPlan};
+use crate::provenance::{resolve_locator_identity, slot_locator};
 
 /// Work item kinds OSE can schedule from slot states.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -52,7 +53,10 @@ pub struct ReleaseReadiness {
     pub excluded_unlocked: usize,
     pub open_decisions: usize,
     pub open_delegations: usize,
+    pub open_challenges: usize,
+    pub evidence_ready: bool,
     pub ready: bool,
+    pub blockers: Vec<String>,
     pub summary: String,
 }
 
@@ -73,8 +77,22 @@ pub fn build_workflow_board(
     release_scope: &str,
     challenges: &[LockChallenge],
 ) -> WorkflowBoard {
+    build_workflow_board_with_evidence(document, release_scope, challenges, &[])
+}
+
+/// Build a workflow board with externally produced, slot-exact evidence.
+///
+/// Evidence is observational: it does not alter commitment. Readiness only
+/// consumes records bound to the selected slot locator and protected hash.
+pub fn build_workflow_board_with_evidence(
+    document: &LosslessDocument,
+    release_scope: &str,
+    challenges: &[LockChallenge],
+    evidence: &[EvidenceRecord],
+) -> WorkflowBoard {
     let diagnostics = analyze_document(document, &[]);
-    let plan = plan_materialization(document, release_scope);
+    let mut plan = plan_materialization(document, release_scope);
+    plan.evidence.extend_from_slice(evidence);
 
     let decision = diagnostics
         .decision_queue
@@ -123,7 +141,12 @@ pub fn build_workflow_board(
         })
         .collect::<Vec<_>>();
 
-    let readiness = release_readiness(&plan, decision.len(), delegation.len());
+    let readiness = release_readiness(
+        &plan,
+        decision.len(),
+        delegation.len(),
+        lock_challenges.len(),
+    );
 
     WorkflowBoard {
         release_scope: release_scope.into(),
@@ -155,19 +178,51 @@ fn release_readiness(
     plan: &MaterializationPlan,
     open_decisions: usize,
     open_delegations: usize,
+    open_challenges: usize,
 ) -> ReleaseReadiness {
     let selected = plan.selection.slots.len();
     let excluded = plan.excluded_unlocked.len();
-    let ready = selected > 0 && open_decisions == 0;
+    let evidence_ready = selected > 0
+        && plan.selection.slots.iter().all(|slot| {
+            let has_test = plan.evidence.iter().any(|evidence| {
+                evidence.slot == slot.slot
+                    && evidence.locator == slot.locator
+                    && evidence.content_hash == slot.content_hash
+                    && evidence.kind == crate::materialize::EvidenceKind::Tested
+                    && evidence.status == crate::materialize::EvidenceStatus::Passed
+            });
+            let has_build = plan.evidence.iter().any(|evidence| {
+                evidence.slot == slot.slot
+                    && evidence.locator == slot.locator
+                    && evidence.content_hash == slot.content_hash
+                    && evidence.kind == crate::materialize::EvidenceKind::Built
+                    && evidence.status == crate::materialize::EvidenceStatus::Passed
+            });
+            has_test && has_build
+        });
+    let mut blockers = Vec::new();
+    if selected == 0 {
+        blockers.push("no confirmed slots are selected".into());
+    }
+    if open_decisions > 0 {
+        blockers.push(format!("{open_decisions} Human decision(s) remain open"));
+    }
+    if open_delegations > 0 {
+        blockers.push(format!("{open_delegations} AI delegation(s) remain open"));
+    }
+    if open_challenges > 0 {
+        blockers.push(format!("{open_challenges} lock challenge(s) remain open"));
+    }
+    if !evidence_ready {
+        blockers.push("every selected slot requires passed Tested and Built evidence".into());
+    }
+    let ready = blockers.is_empty();
     let summary = if ready {
-        format!(
-            "Release scope has {selected} commit-ready slot(s); {excluded} unlocked slot(s) remain outside scope."
-        )
-    } else if selected == 0 {
-        "No commit-ready slots selected for this release scope.".into()
+        format!("Release evidence is complete for {selected} selected slot(s).")
     } else {
         format!(
-            "Release blocked by {open_decisions} decision(s); {open_delegations} delegation(s) may still proceed in parallel."
+            "Not release-ready: {}. {excluded} unlocked slot(s) remain outside scope.",
+            blockers.join("; ")
         )
     };
     ReleaseReadiness {
@@ -175,7 +230,10 @@ fn release_readiness(
         excluded_unlocked: excluded,
         open_decisions,
         open_delegations,
+        open_challenges,
+        evidence_ready,
         ready,
+        blockers,
         summary,
     }
 }
@@ -185,22 +243,16 @@ pub fn semantic_diff(
     before: &LosslessDocument,
     after: &LosslessDocument,
 ) -> Vec<SemanticDiffEntry> {
-    let before_slots = collect_slot_snapshots(before);
-    let after_slots = collect_slot_snapshots(after);
+    let before_slots = collect_semantic_slot_snapshots(before);
     let mut entries = Vec::new();
 
     for prior in &before_slots {
-        if !prior.kind.is_top_level_fragment() {
-            continue;
-        }
-        let identity = strip_header(&prior.header);
-        let matched = after_slots.iter().find(|candidate| {
-            candidate.kind == prior.kind && strip_header(&candidate.header) == identity
-        });
-        let Some(next) = matched else {
+        let locator = slot_locator(before, prior);
+        let matches = resolve_locator_identity(after, &locator);
+        let [next] = matches.as_slice() else {
             continue;
         };
-        let content_changed = strip_all_suffixes(&prior.core) != strip_all_suffixes(&next.core);
+        let content_changed = prior.protected_text != next.protected_text;
         let state_changed = prior.state != next.state;
         if content_changed || state_changed {
             entries.push(SemanticDiffEntry {
@@ -226,33 +278,6 @@ pub fn filter_active_challenges(
         .filter(|challenge| !challenge_is_duplicate(rejected, challenge))
         .cloned()
         .collect()
-}
-
-fn strip_header(header: &str) -> String {
-    strip_all_suffixes(header)
-}
-
-fn strip_all_suffixes(text: &str) -> String {
-    text.split_inclusive(|ch: char| {
-        ch.is_whitespace() || matches!(ch, ':' | '(' | ')' | '[' | ']' | ',' | '|' | '\n' | '\r')
-    })
-    .map(|part| {
-        let (token, sep) = match part.chars().last() {
-            Some(ch)
-                if ch.is_whitespace()
-                    || matches!(ch, ':' | '(' | ')' | '[' | ']' | ',' | '|' | '\n' | '\r') =>
-            {
-                (&part[..part.len() - ch.len_utf8()], ch.to_string())
-            }
-            _ => (part, String::new()),
-        };
-        let stripped = ["$$??", "$??", "$$?", "$?", "$$", "$", "??", "?"]
-            .into_iter()
-            .find_map(|suffix| token.strip_suffix(suffix))
-            .unwrap_or(token);
-        format!("{stripped}{sep}")
-    })
-    .collect()
 }
 
 #[cfg(test)]
@@ -301,6 +326,64 @@ type Status$: Active | Paid
         assert!(content_diff
             .iter()
             .any(|entry| entry.content_changed && !entry.state_changed));
+
+        let independent_before = parse_lossless("func?? Pay$: ...\n").document;
+        let independent_after = parse_lossless("func? Pay$: ...\n").document;
+        let independent = semantic_diff(&independent_before, &independent_after);
+        assert!(independent.iter().any(|entry| {
+            entry.from == Commitment::QuestionQuestion
+                && entry.to == Commitment::Question
+                && entry.state_changed
+        }));
+    }
+
+    #[test]
+    fn commitment_without_external_evidence_is_never_release_ready() {
+        let doc = parse_lossless("func$ Pay: ...\ndesc?? \"implement later\"\n").document;
+        let board = build_workflow_board(&doc, "payments", &[]);
+        assert!(!board.readiness.ready);
+        assert!(!board.readiness.evidence_ready);
+        assert_eq!(board.readiness.open_delegations, 1);
+        assert!(board
+            .readiness
+            .blockers
+            .iter()
+            .any(|blocker| blocker.contains("Tested and Built")));
+    }
+
+    #[test]
+    fn external_evidence_must_match_the_exact_selected_slot_and_hash() {
+        let doc = parse_lossless("func$ Pay: ...\n").document;
+        let plan = plan_materialization(&doc, "payments");
+        let selected = plan.selection.slots.first().unwrap();
+        let evidence = [
+            EvidenceRecord {
+                slot: selected.slot,
+                locator: selected.locator.clone(),
+                kind: crate::materialize::EvidenceKind::Tested,
+                status: crate::materialize::EvidenceStatus::Passed,
+                summary: "integration tests passed".into(),
+                artifact: Some("test-report.json".into()),
+                content_hash: selected.content_hash,
+            },
+            EvidenceRecord {
+                slot: selected.slot,
+                locator: selected.locator.clone(),
+                kind: crate::materialize::EvidenceKind::Built,
+                status: crate::materialize::EvidenceStatus::Passed,
+                summary: "release artifact built".into(),
+                artifact: Some("artifact.tar".into()),
+                content_hash: selected.content_hash,
+            },
+        ];
+        let ready = build_workflow_board_with_evidence(&doc, "payments", &[], &evidence);
+        assert!(ready.readiness.ready, "{:?}", ready.readiness.blockers);
+
+        let mut stale = evidence;
+        stale[0].content_hash = ContentHash(0);
+        let rejected = build_workflow_board_with_evidence(&doc, "payments", &[], &stale);
+        assert!(!rejected.readiness.ready);
+        assert!(!rejected.readiness.evidence_ready);
     }
 
     #[test]

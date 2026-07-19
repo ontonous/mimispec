@@ -10,6 +10,7 @@ use crate::collaboration::{collect_semantic_slot_snapshots, Actor, HumanAuthoriz
 use crate::diagnostics::{syntax_quick_fixes, Severity};
 use crate::ide::{navigation_at_position, NavigationKind, SemanticTokenKind};
 use crate::lossless::{ByteSpan, ColumnEncoding, SourcePosition};
+use crate::protocol;
 use crate::session::{
     CollaborationMode, DocumentEditRequest, DocumentSession, SessionTextEdit, SessionViolation,
     TextPosition, TextRange, LANGUAGE_SERVICE_SCHEMA_VERSION,
@@ -188,30 +189,32 @@ impl LanguageServer {
             return Vec::new();
         };
 
-        let (edits, violations): (Vec<SessionTextEdit>, Vec<SessionViolation>) = params
-            .get("contentChanges")
-            .and_then(Value::as_array)
-            .map(|changes| {
-                changes
-                    .iter()
-                    .map(|value| match parse_text_edit(value) {
-                        Ok(edit) => (Some(edit), None),
-                        Err(msg) => (None, Some(SessionViolation::new("C-INVALID-EDIT", msg))),
-                    })
-                    .fold(
-                        (Vec::new(), Vec::new()),
-                        |(mut edits, mut violations), (edit, violation)| {
-                            if let Some(edit) = edit {
-                                edits.push(edit);
-                            }
-                            if let Some(violation) = violation {
-                                violations.push(violation);
-                            }
-                            (edits, violations)
-                        },
-                    )
+        let Some(changes) = params.get("contentChanges").and_then(Value::as_array) else {
+            session.record_invalid_edit("contentChanges is required and must be an array");
+            return self.publish_diagnostics(uri);
+        };
+        if changes.is_empty() {
+            session.record_invalid_edit("contentChanges must not be empty");
+            return self.publish_diagnostics(uri);
+        }
+        let (edits, violations): (Vec<SessionTextEdit>, Vec<SessionViolation>) = changes
+            .iter()
+            .map(|value| match parse_text_edit(value) {
+                Ok(edit) => (Some(edit), None),
+                Err(msg) => (None, Some(SessionViolation::new("C-INVALID-EDIT", msg))),
             })
-            .unwrap_or_default();
+            .fold(
+                (Vec::new(), Vec::new()),
+                |(mut edits, mut violations), (edit, violation)| {
+                    if let Some(edit) = edit {
+                        edits.push(edit);
+                    }
+                    if let Some(violation) = violation {
+                        violations.push(violation);
+                    }
+                    (edits, violations)
+                },
+            );
 
         if violations.is_empty() {
             let _ = session.observe_edits(&edits);
@@ -576,10 +579,13 @@ impl LanguageServer {
     }
 
     fn document_snapshot(&self, id: Option<Value>, params: Value) -> Value {
-        let Some(uri) = document_uri(&params) else {
-            return rpc_error(id, -32602, "missing document URI");
+        let uri = match protocol::decode::<protocol::SnapshotRequest>(&params)
+            .and_then(|request| request.into_uri().map_err(str::to_string))
+        {
+            Ok(uri) => uri,
+            Err(message) => return rpc_error(id, -32602, &message),
         };
-        let Some(session) = self.sessions.get(uri) else {
+        let Some(session) = self.sessions.get(&uri) else {
             return rpc_error(id, -32002, "document is not open");
         };
         let slots = collect_semantic_slot_snapshots(session.document());
@@ -642,17 +648,27 @@ impl LanguageServer {
                 ),
             );
         }
-        let Some(target_text) = params.get("target").and_then(Value::as_str) else {
+        let decoded = match protocol::decode::<protocol::QueueBatchRequest>(&params) {
+            Ok(decoded) => decoded,
+            Err(message) => {
+                return success(
+                    id,
+                    wire_rejection(authoritative_version, "C-INVALID-EDIT", &message),
+                );
+            }
+        };
+        if decoded.actor != Actor::Human {
             return success(
                 id,
                 wire_rejection(
                     authoritative_version,
-                    "C-INVALID-EDIT",
-                    "target is required and must be none, ?, or $",
+                    "C-ACTOR-REQUIRED",
+                    "queue batches may only be prepared by actor: human",
                 ),
             );
-        };
-        let replacement = match target_text {
+        }
+        let target_text = decoded.target;
+        let replacement = match target_text.as_str() {
             "none" => "",
             "?" => "?",
             "$" => "$",
@@ -667,17 +683,7 @@ impl LanguageServer {
                 );
             }
         };
-        let Some(raw_slots) = params.get("slot_ids").and_then(Value::as_array) else {
-            return success(
-                id,
-                wire_rejection(
-                    authoritative_version,
-                    "C-INVALID-EDIT",
-                    "slot_ids is required and must be a non-empty array",
-                ),
-            );
-        };
-        if raw_slots.is_empty() {
+        if decoded.slot_ids.is_empty() {
             return success(
                 id,
                 wire_rejection(
@@ -687,19 +693,9 @@ impl LanguageServer {
                 ),
             );
         }
-        let mut slot_ids = Vec::with_capacity(raw_slots.len());
+        let mut slot_ids = Vec::with_capacity(decoded.slot_ids.len());
         let mut unique = std::collections::HashSet::new();
-        for raw in raw_slots {
-            let Some(slot) = raw.as_u64().and_then(|slot| u32::try_from(slot).ok()) else {
-                return success(
-                    id,
-                    wire_rejection(
-                        authoritative_version,
-                        "C-INVALID-EDIT",
-                        "slot_ids must contain only unsigned 32-bit integers",
-                    ),
-                );
-            };
+        for slot in decoded.slot_ids {
             if !unique.insert(slot) {
                 return success(
                     id,
@@ -822,68 +818,29 @@ impl LanguageServer {
                 ),
             );
         };
-        let (edits, edit_errors): (Vec<SessionTextEdit>, Vec<&'static str>) = params
-            .get("edits")
-            .and_then(Value::as_array)
-            .map(|edits| {
-                edits.iter().fold(
-                    (Vec::new(), Vec::new()),
-                    |(mut edits, mut errors), value| {
-                        match parse_text_edit(value) {
-                            Ok(edit) => edits.push(edit),
-                            Err(msg) => errors.push(msg),
-                        }
-                        (edits, errors)
-                    },
-                )
-            })
-            .unwrap_or_default();
-        let authorization = match parse_authorization(&params) {
-            Ok(authorization) => authorization,
+        let decoded = match protocol::decode::<protocol::DocumentEditRequest>(&params) {
+            Ok(decoded) => decoded,
             Err(message) => {
                 return success(
                     id,
-                    wire_rejection(authoritative_version, "C-INVALID-EDIT", message),
+                    wire_rejection(authoritative_version, "C-INVALID-EDIT", &message),
                 );
             }
         };
-        let unlock_tokens = match parse_string_array(&params, "unlock_tokens") {
-            Ok(tokens) => tokens,
-            Err(message) => {
-                return success(
-                    id,
-                    wire_rejection(authoritative_version, "C-INVALID-EDIT", message),
-                );
-            }
-        };
-        let challenge_reason = match parse_optional_string(&params, "challenge_reason") {
-            Ok(reason) => reason,
-            Err(message) => {
-                return success(
-                    id,
-                    wire_rejection(authoritative_version, "C-INVALID-EDIT", message),
-                );
-            }
-        };
+        let edits = decoded.edits;
+        let authorization = decoded.authorization.into();
+        let unlock_tokens = decoded.unlock_tokens;
+        let challenge_reason = decoded.challenge_reason;
         let Some(session) = self.sessions.get_mut(uri) else {
             return rpc_error(id, -32002, "document is not open");
         };
-        if !params.get("edits").is_some_and(Value::is_array)
-            || params
-                .get("edits")
-                .and_then(Value::as_array)
-                .is_some_and(|values| values.iter().any(|value| value.get("range").is_none()))
-            || !edit_errors.is_empty()
-        {
+        if edits.iter().any(|edit| edit.range.is_none()) {
             return success(
                 id,
                 wire_rejection(
                     session.authoritative_version(),
                     "C-INVALID-EDIT",
-                    edit_errors
-                        .first()
-                        .copied()
-                        .unwrap_or("edits must contain valid range and text fields"),
+                    "edits must contain valid range and text fields",
                 ),
             );
         }
@@ -948,6 +905,15 @@ impl LanguageServer {
                 ),
             );
         };
+        let _decoded = match protocol::decode::<protocol::UnlockTokenRequest>(&params) {
+            Ok(decoded) => decoded,
+            Err(message) => {
+                return success(
+                    id,
+                    wire_rejection(session.authoritative_version(), "C-INVALID-EDIT", &message),
+                );
+            }
+        };
         match session.issue_unlock_token(
             base_version,
             actor,
@@ -995,55 +961,46 @@ impl LanguageServer {
                 ),
             );
         };
-        let authorization = match parse_authorization(&params) {
-            Ok(authorization) => authorization,
-            Err(message) => {
-                return success(
-                    id,
-                    wire_rejection(session.authoritative_version(), "C-INVALID-EDIT", message),
-                );
-            }
-        };
-        let tokens = match parse_string_array(&params, "unlock_tokens") {
-            Ok(tokens) => tokens,
-            Err(message) => {
-                return success(
-                    id,
-                    wire_rejection(session.authoritative_version(), "C-INVALID-EDIT", message),
-                );
-            }
-        };
-        match actor {
-            Some(actor) => {
-                match session.adopt_observed(base_version, actor, authorization, &tokens) {
-                    Ok(()) => success(
-                        id,
-                        json!({
-                            "schema_version": LANGUAGE_SERVICE_SCHEMA_VERSION,
-                            "accepted": true,
-                            "authoritative_version": session.authoritative_version(),
-                            "session": session.snapshot(),
-                            "violations": []
-                        }),
-                    ),
-                    Err(violations) => success(
-                        id,
-                        json!({
-                            "schema_version": LANGUAGE_SERVICE_SCHEMA_VERSION,
-                            "accepted": false,
-                            "authoritative_version": session.authoritative_version(),
-                            "violations": violations
-                        }),
-                    ),
-                }
-            }
-            None => success(
+        let Some(actor) = actor else {
+            return success(
                 id,
                 wire_rejection(
                     session.authoritative_version(),
                     "C-ACTOR-REQUIRED",
                     "actor must be human",
                 ),
+            );
+        };
+        let decoded = match protocol::decode::<protocol::AdoptObservedRequest>(&params) {
+            Ok(decoded) => decoded,
+            Err(message) => {
+                return success(
+                    id,
+                    wire_rejection(session.authoritative_version(), "C-INVALID-EDIT", &message),
+                );
+            }
+        };
+        let authorization = decoded.authorization.into();
+        let tokens = decoded.unlock_tokens;
+        match session.adopt_observed(base_version, actor, authorization, &tokens) {
+            Ok(()) => success(
+                id,
+                json!({
+                    "schema_version": LANGUAGE_SERVICE_SCHEMA_VERSION,
+                    "accepted": true,
+                    "authoritative_version": session.authoritative_version(),
+                    "session": session.snapshot(),
+                    "violations": []
+                }),
+            ),
+            Err(violations) => success(
+                id,
+                json!({
+                    "schema_version": LANGUAGE_SERVICE_SCHEMA_VERSION,
+                    "accepted": false,
+                    "authoritative_version": session.authoritative_version(),
+                    "violations": violations
+                }),
             ),
         }
     }
@@ -1079,6 +1036,15 @@ impl LanguageServer {
                 ),
             );
         };
+        let _decoded = match protocol::decode::<protocol::RestoreAuthoritativeRequest>(&params) {
+            Ok(decoded) => decoded,
+            Err(message) => {
+                return success(
+                    id,
+                    wire_rejection(session.authoritative_version(), "C-INVALID-EDIT", &message),
+                );
+            }
+        };
         let restore_text = session.authoritative_source().to_string();
         let response = session.prepare_restore(base_version, actor);
         let mut value = serde_json::to_value(&response).unwrap_or(Value::Null);
@@ -1096,17 +1062,18 @@ impl LanguageServer {
     }
 
     fn slot_navigation(&self, id: Option<Value>, params: Value) -> Value {
-        let Some((uri, position)) = text_document_position(&params) else {
-            return rpc_error(id, -32602, "URI and position are required");
+        let decoded = match protocol::decode::<protocol::SlotNavigationRequest>(&params) {
+            Ok(decoded) => decoded,
+            Err(message) => return rpc_error(id, -32602, &message),
         };
-        let Some(session) = self.sessions.get(uri) else {
+        let Some(session) = self.sessions.get(&decoded.uri) else {
             return rpc_error(id, -32002, "document is not open");
         };
         success(
             id,
             json!({
                 "schema_version": LANGUAGE_SERVICE_SCHEMA_VERSION,
-                "targets": navigation_at_position(session.document(), source_position(position), ColumnEncoding::Utf16)
+                "targets": navigation_at_position(session.document(), source_position(decoded.position), ColumnEncoding::Utf16)
             }),
         )
     }
@@ -1274,55 +1241,11 @@ fn parse_text_edit(value: &Value) -> Result<SessionTextEdit, &'static str> {
     Ok(SessionTextEdit { range, text })
 }
 
-fn parse_authorization(params: &Value) -> Result<HumanAuthorization, &'static str> {
-    let authorization = params
-        .get("authorization")
-        .and_then(Value::as_object)
-        .ok_or("authorization is required and must be an object")?;
-    let modify_protected = authorization
-        .get("modify_protected")
-        .and_then(Value::as_bool)
-        .ok_or("authorization.modify_protected is required and must be boolean")?;
-    if authorization.keys().any(|key| key != "modify_protected") {
-        return Err("authorization contains an unsupported field");
-    }
-    Ok(HumanAuthorization {
-        modify_protected,
-        unlock_strong_lock: false,
-    })
-}
-
 fn parse_base_version(params: &Value) -> Option<u64> {
     params
         .get("base_version")
         .and_then(Value::as_u64)
         .filter(|version| *version > 0)
-}
-
-fn parse_string_array(params: &Value, field: &'static str) -> Result<Vec<String>, &'static str> {
-    let values = params
-        .get(field)
-        .and_then(Value::as_array)
-        .ok_or("unlock_tokens is required and must be an array")?;
-    if !values.iter().all(Value::is_string) {
-        return Err("unlock_tokens must contain only strings");
-    }
-    Ok(values
-        .iter()
-        .filter_map(Value::as_str)
-        .map(str::to_string)
-        .collect())
-}
-
-fn parse_optional_string(
-    params: &Value,
-    field: &'static str,
-) -> Result<Option<String>, &'static str> {
-    match params.get(field) {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::String(value)) => Ok(Some(value.clone())),
-        Some(_) => Err("challenge_reason must be a string or null"),
-    }
 }
 
 fn parse_actor(actor: &str) -> Option<Actor> {
@@ -1602,7 +1525,8 @@ mod tests {
             json!({ "jsonrpc": "2.0", "id": 2, "method": "mimispec/applyDocumentEdit", "params": { "uri": uri, "base_version": 1, "actor": "human", "edits": [{ "text": "desc \"bad\"\n" }], "authorization": { "modify_protected": false }, "unlock_tokens": [] } }),
             json!({ "jsonrpc": "2.0", "id": 3, "method": "mimispec/restoreAuthoritativeRevision", "params": { "uri": uri, "base_version": 1 } }),
             json!({ "jsonrpc": "2.0", "id": 4, "method": "mimispec/restoreAuthoritativeRevision", "params": { "uri": uri, "base_version": 1, "actor": "human" } }),
-            json!({ "jsonrpc": "2.0", "id": 5, "method": "shutdown", "params": null }),
+            json!({ "jsonrpc": "2.0", "id": 5, "method": "mimispec/adoptObservedRevision", "params": { "uri": uri, "base_version": 1, "authorization": { "modify_protected": false }, "unlock_tokens": [] } }),
+            json!({ "jsonrpc": "2.0", "id": 6, "method": "shutdown", "params": null }),
             json!({ "jsonrpc": "2.0", "method": "exit", "params": null }),
         ])
         .unwrap();
@@ -1623,6 +1547,10 @@ mod tests {
         );
         assert_eq!(response(4)["result"]["accepted"], true);
         assert!(response(4)["result"]["workspace_edit"].is_object());
+        assert_eq!(
+            response(5)["result"]["violations"][0]["code"],
+            "C-ACTOR-REQUIRED"
+        );
     }
 
     #[test]
@@ -1639,12 +1567,13 @@ mod tests {
             json!({ "jsonrpc": "2.0", "id": 6, "method": "mimispec/adoptObservedRevision", "params": { "uri": uri, "base_version": 1, "actor": "human", "authorization": { "modify_protected": false } } }),
             json!({ "jsonrpc": "2.0", "id": 7, "method": "mimispec/restoreAuthoritativeRevision", "params": { "uri": uri, "actor": "human" } }),
             json!({ "jsonrpc": "2.0", "id": 8, "method": "mimispec/issueUnlockToken", "params": { "uri": uri, "actor": "human", "slot": 0 } }),
-            json!({ "jsonrpc": "2.0", "id": 9, "method": "shutdown", "params": null }),
+            json!({ "jsonrpc": "2.0", "id": 9, "method": "mimispec/applyDocumentEdit", "params": { "uri": uri, "base_version": 1, "actor": "human", "edits": [{ "range": null, "text": "desc \"updated\"\n" }], "authorization": { "modify_protected": false }, "unlock_tokens": [], "admin": true } }),
+            json!({ "jsonrpc": "2.0", "id": 10, "method": "shutdown", "params": null }),
             json!({ "jsonrpc": "2.0", "method": "exit", "params": null }),
         ])
         .unwrap();
 
-        for id in 2..=8 {
+        for id in 2..=9 {
             let response = responses
                 .iter()
                 .find(|message| message["id"] == id)
@@ -1756,6 +1685,54 @@ mod tests {
         let session = server.sessions.get(uri).unwrap();
         assert_eq!(session.authoritative_source(), "desc? \"delegated\"\n");
         assert!(session.pending_transaction_id().is_none());
+    }
+
+    #[test]
+    fn malformed_or_empty_did_change_preserves_pending_transaction() {
+        let uri = "file:///malformed-change.mms";
+        let mut server = LanguageServer::default();
+        server.handle(json!({
+            "jsonrpc": "2.0", "method": "textDocument/didOpen",
+            "params": { "textDocument": {
+                "uri": uri, "version": 1, "languageId": "mimispec",
+                "text": "desc?? \"delegated\"\n"
+            }}
+        }));
+        let pending = {
+            let session = server.sessions.get_mut(uri).unwrap();
+            let response = session.prepare_edit(DocumentEditRequest {
+                base_version: 1,
+                actor: Actor::Ai,
+                edits: vec![SessionTextEdit {
+                    range: None,
+                    text: "desc? \"delegated\"\n".into(),
+                }],
+                authorization: HumanAuthorization::default(),
+                unlock_tokens: Vec::new(),
+                challenge_reason: None,
+            });
+            assert!(response.accepted, "{:?}", response.violations);
+            response.transaction_id.unwrap()
+        };
+
+        for params in [
+            json!({ "textDocument": { "uri": uri, "version": 2 } }),
+            json!({
+                "textDocument": { "uri": uri, "version": 2 },
+                "contentChanges": []
+            }),
+        ] {
+            server.handle(json!({
+                "jsonrpc": "2.0", "method": "textDocument/didChange", "params": params
+            }));
+            let session = server.sessions.get(uri).unwrap();
+            assert_eq!(session.version(), 1);
+            assert_eq!(session.pending_transaction_id(), Some(pending.as_str()));
+            assert!(session
+                .violations()
+                .iter()
+                .any(|violation| violation.code == "C-INVALID-EDIT"));
+        }
     }
 
     #[test]

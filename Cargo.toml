@@ -13,6 +13,11 @@ documentation = "https://docs.rs/mimispec"
 readme = "README.md"
 exclude = ["AGENTS.md", "mimispec-parser-mms/"]
 
+[features]
+default = []
+experimental-provenance = []
+experimental-targets = ["experimental-provenance"]
+
 [lib]
 name = "mimispec"
 path = "src/lib/mod.rs"

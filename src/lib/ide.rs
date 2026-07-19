@@ -1,8 +1,9 @@
-use serde::Serialize;
+use serde::ser::SerializeStruct;
+use serde::{Serialize, Serializer};
 
 use crate::ast::Commitment;
 use crate::collaboration::{validate_transition, Actor, TransitionEffects, TransitionRequest};
-use crate::diagnostics::{analyze_document, DocumentDiagnostics, QueueItem, QueueTree};
+use crate::diagnostics::{analyze_document, DocumentDiagnostics};
 use crate::error::ParseError;
 use crate::lossless::{
     ByteSpan, ColumnEncoding, CommitmentAnchorKind, CommitmentSlotSyntax, LosslessDocument,
@@ -81,14 +82,25 @@ pub struct CodeAction {
     pub reason: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IdeSnapshot {
     pub semantic_tokens: Vec<SemanticToken>,
-    pub decision_queue: Vec<QueueItem>,
-    pub delegation_queue: Vec<QueueItem>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub queue_tree: Option<QueueTree>,
     pub diagnostics: DocumentDiagnostics,
+}
+
+impl Serialize for IdeSnapshot {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut state = serializer.serialize_struct("IdeSnapshot", 5)?;
+        state.serialize_field("semantic_tokens", &self.semantic_tokens)?;
+        state.serialize_field("decision_queue", &self.diagnostics.decision_queue)?;
+        state.serialize_field("delegation_queue", &self.diagnostics.delegation_queue)?;
+        state.serialize_field("queue_tree", &self.diagnostics.queue_tree)?;
+        state.serialize_field("diagnostics", &self.diagnostics)?;
+        state.end()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -115,12 +127,20 @@ pub struct NavigationTarget {
 /// Build a library-level IDE snapshot from a lossless document.
 pub fn ide_snapshot(document: &LosslessDocument, errors: &[ParseError]) -> IdeSnapshot {
     let diagnostics = analyze_document(document, errors);
+    ide_snapshot_from_diagnostics(document, &diagnostics)
+}
+
+/// Build an IDE projection from revision-cached diagnostics.
+///
+/// Sessions use this path so a snapshot does not repeat the complete queue and
+/// intent analysis already performed when the revision was parsed.
+pub fn ide_snapshot_from_diagnostics(
+    document: &LosslessDocument,
+    diagnostics: &DocumentDiagnostics,
+) -> IdeSnapshot {
     IdeSnapshot {
         semantic_tokens: semantic_tokens(document),
-        decision_queue: diagnostics.decision_queue.clone(),
-        delegation_queue: diagnostics.delegation_queue.clone(),
-        queue_tree: Some(diagnostics.queue_tree.clone()),
-        diagnostics,
+        diagnostics: diagnostics.clone(),
     }
 }
 
@@ -825,7 +845,10 @@ flow Checkout:
         let source = "desc?? \"app\"\nfunc Pay$?: ...\n";
         let result = parse_lossless(source);
         let snapshot = ide_snapshot(&result.document, &result.errors);
-        assert!(!snapshot.delegation_queue.is_empty() || !snapshot.decision_queue.is_empty());
+        assert!(
+            !snapshot.diagnostics.delegation_queue.is_empty()
+                || !snapshot.diagnostics.decision_queue.is_empty()
+        );
         assert!(!snapshot.semantic_tokens.is_empty());
     }
 }

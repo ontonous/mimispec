@@ -548,10 +548,15 @@ impl DocumentStructureIndex {
         for (ordinal, id) in roots.iter().enumerate() {
             positions[id.0 as usize] = format!("document/{ordinal}");
         }
-        for parent in nodes {
-            for (ordinal, child) in children[parent.id.0 as usize].iter().enumerate() {
-                positions[child.0 as usize] = format!("{:?}/{ordinal}", parent.kind);
+        let mut position_traversal = roots.iter().rev().copied().collect::<Vec<_>>();
+        while let Some(parent_id) = position_traversal.pop() {
+            let parent = &nodes[parent_id.0 as usize];
+            let parent_position = positions[parent_id.0 as usize].clone();
+            for (ordinal, child) in children[parent_id.0 as usize].iter().enumerate() {
+                positions[child.0 as usize] =
+                    format!("{parent_position}/{:?}/{ordinal}", parent.kind);
             }
+            position_traversal.extend(children[parent_id.0 as usize].iter().rev().copied());
         }
 
         let mut scope_paths = vec![Vec::new(); nodes.len()];
@@ -2636,7 +2641,16 @@ type Status?: Active | Paid
             .is_some_and(|topology| topology.contains("Func:Load")));
         assert!(document
             .structural_position(func)
-            .is_some_and(|position| position.starts_with("Module/")));
+            .is_some_and(|position| position.starts_with("document/0/Module/")));
+
+        let repeated =
+            parse_lossless("module A:\n    func Same: ...\nmodule B:\n    func Same: ...\n");
+        let positions = repeated
+            .document
+            .nodes_of_kind(SourceNodeKind::Func)
+            .filter_map(|node| repeated.document.structural_position(node.id))
+            .collect::<Vec<_>>();
+        assert_eq!(positions, ["document/0/Module/0", "document/1/Module/0"]);
 
         let func_slots = document
             .commitment_slots_for_owner(func)

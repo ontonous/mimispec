@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::ast::{Commitment, LockIntent};
@@ -12,13 +13,15 @@ use crate::collaboration::{
 use crate::diagnostics::{analyze_document, DocumentDiagnostics};
 use crate::error::ParseError;
 use crate::ide::{
-    code_actions_for_node, hover_at, ide_snapshot, semantic_tokens, CodeAction, HoverInfo,
-    IdeSnapshot, SemanticToken,
+    code_actions_for_node, hover_at, semantic_tokens, CodeAction, HoverInfo, IdeSnapshot,
+    SemanticToken,
 };
 use crate::lossless::{
     ColumnEncoding, CommitmentSlotId, LineIndex, LosslessDocument, SourceNodeId, SourcePosition,
 };
+#[cfg(feature = "experimental-targets")]
 use crate::materialize::{plan_materialization, MaterializationPlan};
+#[cfg(feature = "experimental-targets")]
 use crate::profile::{analyze_generic_profile, analyze_mimi_profile, ProfileAnalysis};
 
 pub const LANGUAGE_SERVICE_SCHEMA_VERSION: &str = "mimispec.ls/0.3";
@@ -41,48 +44,88 @@ impl RevisionHash {
     }
 }
 
-#[derive(Debug, Clone)]
-struct DocumentRevision {
-    version: u64,
+#[derive(Debug)]
+struct RevisionPayload {
     hash: RevisionHash,
-    source: String,
     document: LosslessDocument,
     errors: Vec<ParseError>,
     diagnostics: DocumentDiagnostics,
 }
 
+#[derive(Debug, Clone)]
+struct DocumentRevision {
+    version: u64,
+    payload: Arc<RevisionPayload>,
+}
+
 impl DocumentRevision {
     fn parse(version: u64, source: String) -> Self {
+        let hash = RevisionHash::from_source(&source);
+        Self::parse_hashed(version, source, hash)
+    }
+
+    fn parse_hashed(version: u64, source: String, hash: RevisionHash) -> Self {
         let parsed = crate::parse_lossless(&source);
         let diagnostics = analyze_document(&parsed.document, &parsed.errors);
         Self {
             version,
-            hash: RevisionHash::from_source(&source),
-            source,
-            document: parsed.document,
-            errors: parsed.errors,
-            diagnostics,
+            payload: Arc::new(RevisionPayload {
+                hash,
+                document: parsed.document,
+                errors: parsed.errors,
+                diagnostics,
+            }),
         }
     }
 
     fn is_complete(&self) -> bool {
-        self.errors.is_empty()
+        self.payload.errors.is_empty()
+    }
+
+    fn with_version(&self, version: u64) -> Self {
+        Self {
+            version,
+            payload: Arc::clone(&self.payload),
+        }
+    }
+
+    fn hash(&self) -> &RevisionHash {
+        &self.payload.hash
+    }
+
+    fn source(&self) -> &str {
+        self.payload.document.source()
+    }
+
+    fn document(&self) -> &LosslessDocument {
+        &self.payload.document
+    }
+
+    fn errors(&self) -> &[ParseError] {
+        &self.payload.errors
+    }
+
+    fn diagnostics(&self) -> &DocumentDiagnostics {
+        &self.payload.diagnostics
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TextPosition {
     pub line: u32,
     pub character: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TextRange {
     pub start: TextPosition,
     pub end: TextPosition,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SessionTextEdit {
     pub range: Option<TextRange>,
     pub text: String,
@@ -213,7 +256,7 @@ impl DocumentSession {
     pub fn set_mode(&mut self, mode: CollaborationMode) {
         self.mode = mode;
         if mode == CollaborationMode::Strict && !self.authoritative_trusted {
-            if self.observed.hash != self.authoritative.hash {
+            if self.observed.hash() != self.authoritative.hash() {
                 self.push_violation(
                     "C-DOCUMENT-DIVERGED",
                     "strict mode requires a Human to adopt or restore the current observed revision",
@@ -236,27 +279,27 @@ impl DocumentSession {
     }
 
     pub fn source(&self) -> &str {
-        &self.observed.source
+        self.observed.source()
     }
 
     pub fn authoritative_source(&self) -> &str {
-        &self.authoritative.source
+        self.authoritative.source()
     }
 
     pub fn document(&self) -> &LosslessDocument {
-        &self.observed.document
+        self.observed.document()
     }
 
     pub fn authoritative_document(&self) -> &LosslessDocument {
-        &self.authoritative.document
+        self.authoritative.document()
     }
 
     pub fn errors(&self) -> &[ParseError] {
-        &self.observed.errors
+        self.observed.errors()
     }
 
     pub fn diagnostics(&self) -> &DocumentDiagnostics {
-        &self.observed.diagnostics
+        self.observed.diagnostics()
     }
 
     pub fn violations(&self) -> &[SessionViolation] {
@@ -268,7 +311,7 @@ impl DocumentSession {
     }
 
     pub fn is_divergent(&self) -> bool {
-        self.observed.hash != self.authoritative.hash || !self.authoritative_trusted
+        self.observed.hash() != self.authoritative.hash() || !self.authoritative_trusted
     }
 
     /// Compatibility full-text observation. It is deliberately undeclared and
@@ -279,21 +322,16 @@ impl DocumentSession {
 
     pub fn observe_full(&mut self, source: String) {
         let next_version = self.observed.version.saturating_add(1);
-        #[cfg(test)]
-        {
-            self.observed_parse_count += 1;
-        }
-        let candidate = DocumentRevision::parse(next_version, source);
+        let observed_hash = RevisionHash::from_source(&source);
 
         if let Some(pending) = self.pending.take() {
-            if pending.candidate.hash == candidate.hash {
+            if pending.candidate.hash() == &observed_hash {
                 for token_id in &pending.reserved_unlock_tokens {
                     if let Some(token) = self.unlock_tokens.get_mut(token_id) {
                         token.used = true;
                     }
                 }
-                let mut accepted = pending.candidate;
-                accepted.version = next_version;
+                let accepted = pending.candidate.with_version(next_version);
                 self.observed = accepted.clone();
                 self.authoritative = accepted;
                 self.authoritative_trusted = true;
@@ -309,14 +347,19 @@ impl DocumentSession {
             // Drop it atomically; reserved unlock tokens remain unused.
         }
 
-        if self.mode == CollaborationMode::Strict && candidate.hash == self.authoritative.hash {
-            self.observed = candidate;
+        if self.mode == CollaborationMode::Strict && &observed_hash == self.authoritative.hash() {
+            self.observed = self.authoritative.with_version(next_version);
             self.authoritative_trusted = true;
             self.violations.clear();
             return;
         }
 
-        self.violations = advisory_patch_violations(&self.observed.document, &candidate.document);
+        #[cfg(test)]
+        {
+            self.observed_parse_count += 1;
+        }
+        let candidate = DocumentRevision::parse_hashed(next_version, source, observed_hash);
+        self.violations = advisory_patch_violations(self.observed.document(), candidate.document());
         self.observed = candidate.clone();
         if self.mode == CollaborationMode::Advisory {
             self.authoritative = candidate;
@@ -330,8 +373,8 @@ impl DocumentSession {
     }
 
     pub fn observe_edits(&mut self, edits: &[SessionTextEdit]) -> Result<(), SessionViolation> {
-        let mut source = self.observed.source.clone();
-        let mut line_index = self.observed.document.line_index().clone();
+        let mut source = self.observed.source().to_string();
+        let mut line_index = self.observed.document().line_index().clone();
         for edit in edits {
             if let Err(violation) = apply_sequential_text_edit(&mut source, &mut line_index, edit) {
                 self.push_violation(&violation.code, &violation.message);
@@ -367,7 +410,7 @@ impl DocumentSession {
                 ),
             ));
         }
-        let Some(snapshot) = collect_semantic_slot_snapshots(&self.authoritative.document)
+        let Some(snapshot) = collect_semantic_slot_snapshots(self.authoritative.document())
             .into_iter()
             .find(|snapshot| snapshot.slot == slot)
         else {
@@ -450,7 +493,8 @@ impl DocumentSession {
             )]);
         }
 
-        let strong_unlocks = strong_unlock_slots(&self.authoritative.document, &candidate.document);
+        let strong_unlocks =
+            strong_unlock_slots(self.authoritative.document(), candidate.document());
         let supplied: HashSet<&str> = request.unlock_tokens.iter().map(String::as_str).collect();
         let unlock_authorized = strong_unlocks.iter().all(|(slot, from)| {
             self.unlock_tokens.values().any(|token| {
@@ -473,8 +517,8 @@ impl DocumentSession {
         authorization.unlock_strong_lock = unlock_authorized && !strong_unlocks.is_empty();
         let mut new_challenges = Vec::new();
         for result in validate_document_patch(
-            &self.authoritative.document,
-            &candidate.document,
+            self.authoritative.document(),
+            candidate.document(),
             &DocumentPatchRequest {
                 actor: Some(request.actor),
                 authorization,
@@ -492,7 +536,7 @@ impl DocumentSession {
                         ) =>
                 {
                     if let Ok(challenge) = build_lock_challenge(
-                        &self.authoritative.document,
+                        self.authoritative.document(),
                         diff.before.slot,
                         diff.from,
                         diff.to,
@@ -528,7 +572,10 @@ impl DocumentSession {
 
         let transaction_id = RevisionHash::from_source(&format!(
             "{}|{}|{}|edit|{}",
-            self.uri, self.authoritative.version, candidate.hash.0, self.next_nonce
+            self.uri,
+            self.authoritative.version,
+            candidate.hash().0,
+            self.next_nonce
         ))
         .0;
         self.next_nonce = self.next_nonce.saturating_add(1);
@@ -542,7 +589,7 @@ impl DocumentSession {
             schema_version: LANGUAGE_SERVICE_SCHEMA_VERSION,
             accepted: true,
             authoritative_version: self.authoritative.version,
-            candidate_hash: Some(candidate.hash),
+            candidate_hash: Some(candidate.hash().clone()),
             transaction_id: Some(transaction_id),
             violations: Vec::new(),
         }
@@ -570,7 +617,7 @@ impl DocumentSession {
             actor,
             edits: vec![SessionTextEdit {
                 range: None,
-                text: self.observed.source.clone(),
+                text: self.observed.source().to_string(),
             }],
             authorization,
             unlock_tokens: unlock_tokens.to_vec(),
@@ -582,7 +629,7 @@ impl DocumentSession {
         if !response.accepted {
             return Err(response.violations);
         }
-        let observed_source = self.observed.source.clone();
+        let observed_source = self.observed.source().to_string();
         self.observe_full(observed_source);
         Ok(())
     }
@@ -610,13 +657,15 @@ impl DocumentSession {
             )]);
         }
 
-        let candidate = DocumentRevision::parse(
-            self.authoritative.version.saturating_add(1),
-            self.authoritative.source.clone(),
-        );
+        let candidate = self
+            .authoritative
+            .with_version(self.authoritative.version.saturating_add(1));
         let transaction_id = RevisionHash::from_source(&format!(
             "{}|{}|{}|restore|{}",
-            self.uri, self.authoritative.version, candidate.hash.0, self.next_nonce
+            self.uri,
+            self.authoritative.version,
+            candidate.hash().0,
+            self.next_nonce
         ))
         .0;
         self.next_nonce = self.next_nonce.saturating_add(1);
@@ -630,7 +679,7 @@ impl DocumentSession {
             schema_version: LANGUAGE_SERVICE_SCHEMA_VERSION,
             accepted: true,
             authoritative_version: self.authoritative.version,
-            candidate_hash: Some(candidate.hash),
+            candidate_hash: Some(candidate.hash().clone()),
             transaction_id: Some(transaction_id),
             violations: Vec::new(),
         }
@@ -659,45 +708,50 @@ impl DocumentSession {
             version: self.observed.version,
             observed_version: self.observed.version,
             authoritative_version: self.authoritative.version,
-            observed_hash: self.observed.hash.clone(),
-            authoritative_hash: self.authoritative.hash.clone(),
+            observed_hash: self.observed.hash().clone(),
+            authoritative_hash: self.authoritative.hash().clone(),
             authoritative_trusted: self.authoritative_trusted,
             divergent: self.is_divergent(),
             mode: self.mode,
-            error_count: self.observed.errors.len(),
+            error_count: self.observed.errors().len(),
             violations: self.violations.clone(),
             lock_challenges: self.lock_challenges.clone(),
-            ide: ide_snapshot(&self.observed.document, &self.observed.errors),
+            ide: crate::ide::ide_snapshot_from_diagnostics(
+                self.observed.document(),
+                self.observed.diagnostics(),
+            ),
         }
     }
 
     pub fn semantic_tokens(&self) -> Vec<SemanticToken> {
-        semantic_tokens(&self.observed.document)
+        semantic_tokens(self.observed.document())
     }
 
     pub fn hover(&self, offset: u32) -> Option<HoverInfo> {
-        hover_at(&self.observed.document, offset)
+        hover_at(self.observed.document(), offset)
     }
 
     pub fn code_actions(&self, node: SourceNodeId) -> Vec<CodeAction> {
         if self.mode == CollaborationMode::Strict && self.is_divergent() {
             return Vec::new();
         }
-        code_actions_for_node(&self.authoritative.document, node)
+        code_actions_for_node(self.authoritative.document(), node)
     }
 
+    #[cfg(feature = "experimental-targets")]
     pub fn materialize(&self, release_scope: &str) -> MaterializationPlan {
-        plan_materialization(&self.authoritative.document, release_scope)
+        plan_materialization(self.authoritative.document(), release_scope)
     }
 
+    #[cfg(feature = "experimental-targets")]
     pub fn profile(&self, target: &str, release_scope: &str) -> Option<ProfileAnalysis> {
         match target {
             "mimi" => Some(analyze_mimi_profile(
-                &self.authoritative.document,
+                self.authoritative.document(),
                 release_scope,
             )),
             "generic" => Some(analyze_generic_profile(
-                &self.authoritative.document,
+                self.authoritative.document(),
                 release_scope,
             )),
             _ => None,
@@ -841,7 +895,7 @@ fn apply_text_edits(
     edits: &[SessionTextEdit],
 ) -> Result<String, SessionViolation> {
     if edits.is_empty() {
-        return Ok(revision.source.clone());
+        return Ok(revision.source().to_string());
     }
     if edits.len() == 1 && edits[0].range.is_none() {
         return Ok(edits[0].text.clone());
@@ -857,10 +911,10 @@ fn apply_text_edits(
     for edit in edits {
         let range = edit.range.expect("checked above");
         let start = revision
-            .document
+            .document()
             .line_index()
             .offset(
-                &revision.source,
+                revision.source(),
                 SourcePosition {
                     line: range.start.line,
                     column: range.start.character,
@@ -871,10 +925,10 @@ fn apply_text_edits(
                 SessionViolation::new("C-INVALID-EDIT", "invalid UTF-16 start position")
             })?;
         let end = revision
-            .document
+            .document()
             .line_index()
             .offset(
-                &revision.source,
+                revision.source(),
                 SourcePosition {
                     line: range.end.line,
                     column: range.end.character,
@@ -900,7 +954,7 @@ fn apply_text_edits(
         ));
     }
 
-    let mut source = revision.source.clone();
+    let mut source = revision.source().to_string();
     for (start, end, text) in byte_edits.into_iter().rev() {
         source.replace_range(start..end, text);
     }
@@ -912,17 +966,23 @@ fn strong_unlock_slots(
     after: &LosslessDocument,
 ) -> Vec<(CommitmentSlotId, Commitment)> {
     let after_slots = collect_semantic_slot_snapshots(after);
+    let mut matched_after = HashSet::new();
     collect_semantic_slot_snapshots(before)
         .into_iter()
         .filter(|before| before.state.lock_intent() == LockIntent::StrongLocked)
         .filter_map(|before| {
-            let after = after_slots.iter().find(|after| {
-                after.position == before.position
+            let after = after_slots.iter().enumerate().find(|(index, after)| {
+                !matched_after.contains(index)
+                    && after.position == before.position
                     && after.kind == before.kind
                     && after.anchor_kind == before.anchor_kind
                     && after.footprint == before.footprint
                     && after.owner_slot_index == before.owner_slot_index
             });
+            if let Some((index, _)) = after {
+                matched_after.insert(index);
+            }
+            let after = after.map(|(_, after)| after);
             if after.is_none_or(|after| after.state.lock_intent() != LockIntent::StrongLocked) {
                 Some((before.slot, before.state))
             } else {
@@ -939,6 +999,10 @@ mod tests {
     #[test]
     fn open_and_update_bumps_version_and_reports_undeclared_actor() {
         let mut session = DocumentSession::open("file:///demo.mms", "desc?? \"app\"\n");
+        assert!(Arc::ptr_eq(
+            &session.observed.payload,
+            &session.authoritative.payload
+        ));
         assert_eq!(session.version(), 1);
         assert!(!session.diagnostics().delegation_queue.is_empty());
 
@@ -989,8 +1053,14 @@ mod tests {
         });
         assert!(response.accepted, "{:?}", response.violations);
         assert!(session.pending_transaction_id().is_some());
+        let parses_before_confirmation = session.observed_parse_count;
         session.observe_full("desc? \"proposal\"\n".into());
+        assert_eq!(session.observed_parse_count, parses_before_confirmation);
         assert_eq!(session.authoritative_source(), "desc? \"proposal\"\n");
+        assert!(Arc::ptr_eq(
+            &session.observed.payload,
+            &session.authoritative.payload
+        ));
         assert!(!session.is_divergent());
     }
 
@@ -1073,6 +1143,57 @@ mod tests {
         session.observe_full("func$ Pay:\n    steps:\n        charge payment\n".into());
         assert!(session.pending_transaction_id().is_none());
         assert!(session.unlock_tokens.get(&token.token).unwrap().used);
+    }
+
+    #[test]
+    fn ai_cannot_delete_an_identical_locked_node_from_another_scope() {
+        for suffix in ["$", "$$"] {
+            let source = format!(
+                "module A:\n    func{suffix} Same: ...\nmodule B:\n    func{suffix} Same: ...\n"
+            );
+            let candidate = format!("module A:\n    func{suffix} Same: ...\n");
+            let mut session = DocumentSession::open("file:///cross-scope.mms", source);
+            let response = session.prepare_edit(DocumentEditRequest {
+                base_version: 1,
+                actor: Actor::Ai,
+                edits: vec![SessionTextEdit {
+                    range: None,
+                    text: candidate,
+                }],
+                authorization: HumanAuthorization::default(),
+                unlock_tokens: Vec::new(),
+                challenge_reason: None,
+            });
+            assert!(!response.accepted, "{suffix}: {response:?}");
+            assert!(response.transaction_id.is_none());
+
+            if suffix == "$$" {
+                let surviving_slot =
+                    collect_semantic_slot_snapshots(session.authoritative_document())
+                        .into_iter()
+                        .find(|slot| slot.state == Commitment::StrongLocked)
+                        .unwrap()
+                        .slot;
+                let wrong_token = session
+                    .issue_unlock_token(1, Actor::Human, surviving_slot)
+                    .unwrap();
+                let human = session.prepare_edit(DocumentEditRequest {
+                    base_version: 1,
+                    actor: Actor::Human,
+                    edits: vec![SessionTextEdit {
+                        range: None,
+                        text: format!("module A:\n    func{suffix} Same: ...\n"),
+                    }],
+                    authorization: HumanAuthorization {
+                        modify_protected: true,
+                        unlock_strong_lock: false,
+                    },
+                    unlock_tokens: vec![wrong_token.token],
+                    challenge_reason: None,
+                });
+                assert!(!human.accepted, "wrong slot token: {human:?}");
+            }
+        }
     }
 
     #[test]
@@ -1276,11 +1397,18 @@ mod tests {
         assert_eq!(session.source(), "desc \"external\"\n");
         assert!(session.pending_transaction_id().is_some());
 
+        let parses_before_confirmation = session.observed_parse_count;
         session.observe_full(source.into());
+        assert_eq!(session.observed_parse_count, parses_before_confirmation);
+        assert!(Arc::ptr_eq(
+            &session.observed.payload,
+            &session.authoritative.payload
+        ));
         assert_eq!(session.source(), session.authoritative_source());
         assert!(!session.is_divergent());
     }
 
+    #[cfg(feature = "experimental-targets")]
     #[test]
     fn session_profile_and_materialize_use_authoritative_revision() {
         let session = DocumentSession::open(

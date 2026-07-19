@@ -92,7 +92,7 @@ impl TargetCapabilities {
     }
 }
 
-/// Stable target profile protocol for Core materialization clients.
+/// Experimental target-profile protocol outside the MimiSpec Core freeze.
 pub trait TargetProfile {
     fn id(&self) -> ProfileId;
     fn capabilities(&self) -> TargetCapabilities;

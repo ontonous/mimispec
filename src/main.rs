@@ -65,6 +65,7 @@ enum Commands {
         command: UsabilityCommand,
     },
     /// Check experimental Core-external provenance sidecars
+    #[cfg(feature = "experimental-provenance")]
     Provenance {
         #[command(subcommand)]
         command: ProvenanceCommand,
@@ -90,6 +91,7 @@ enum Commands {
         flat_queues: bool,
     },
     /// Plan materialization from commit-ready locked slots
+    #[cfg(feature = "experimental-targets")]
     Materialize {
         /// .mms file(s) to plan; use - for stdin
         #[arg(default_value = "-")]
@@ -99,6 +101,7 @@ enum Commands {
         scope: String,
     },
     /// Analyze a target profile against commit-ready intent
+    #[cfg(feature = "experimental-targets")]
     Profile {
         /// .mms file(s) to analyze; use - for stdin
         #[arg(default_value = "-")]
@@ -111,6 +114,7 @@ enum Commands {
         scope: String,
     },
     /// Build an OSE-facing workflow board from slot states
+    #[cfg(feature = "experimental-targets")]
     Workflow {
         /// .mms file(s) to analyze; use - for stdin
         #[arg(default_value = "-")]
@@ -143,6 +147,7 @@ enum UsabilityCommand {
     },
 }
 
+#[cfg(feature = "experimental-provenance")]
 #[derive(Subcommand, Debug)]
 enum ProvenanceCommand {
     /// Validate hashes, safe paths, exact slot locators, and drift
@@ -411,6 +416,7 @@ fn run_diagnose(files: &[PathBuf], json: bool, flat_queues: bool) {
     }
 }
 
+#[cfg(feature = "experimental-targets")]
 fn run_materialize(files: &[PathBuf], scope: &str, json: bool) {
     let mut plans = Vec::new();
     let mut any_error = false;
@@ -460,6 +466,7 @@ fn run_materialize(files: &[PathBuf], scope: &str, json: bool) {
     }
 }
 
+#[cfg(feature = "experimental-provenance")]
 fn run_provenance_check(manifest: &Path, source_root: &Path, json: bool) {
     match mimispec::provenance::check_manifest_path(manifest, source_root) {
         Ok(report) => {
@@ -502,6 +509,7 @@ fn run_provenance_check(manifest: &Path, source_root: &Path, json: bool) {
     }
 }
 
+#[cfg(feature = "experimental-targets")]
 fn run_profile(files: &[PathBuf], target: &str, scope: &str, json: bool) {
     let mut results = Vec::new();
     let mut any_error = false;
@@ -564,6 +572,7 @@ fn run_profile(files: &[PathBuf], target: &str, scope: &str, json: bool) {
     }
 }
 
+#[cfg(feature = "experimental-targets")]
 fn run_workflow(files: &[PathBuf], scope: &str, json: bool) {
     let mut results = Vec::new();
     let mut any_error = false;
@@ -607,18 +616,23 @@ fn run_workflow(files: &[PathBuf], scope: &str, json: bool) {
     }
 }
 
+#[cfg(feature = "experimental-targets")]
 fn print_workflow_board(path: &Path, board: &mimispec::workflow::WorkflowBoard) {
     println!("== {} ==", path.display());
     println!(
-        "scope: {}  ready={}  decisions={} delegations={} challenges={} materialize={}",
+        "scope: {}  ready={} evidence_ready={} decisions={} delegations={} challenges={} materialize={}",
         board.release_scope,
         board.readiness.ready,
+        board.readiness.evidence_ready,
         board.decision.len(),
         board.delegation.len(),
         board.lock_challenges.len(),
         board.materialization.len()
     );
     println!("readiness: {}", board.readiness.summary);
+    for blocker in &board.readiness.blockers {
+        println!("  blocker: {blocker}");
+    }
     if !board.decision.is_empty() {
         println!("decision queue:");
         for task in &board.decision {
@@ -640,6 +654,7 @@ fn print_workflow_board(path: &Path, board: &mimispec::workflow::WorkflowBoard) 
     println!();
 }
 
+#[cfg(feature = "experimental-targets")]
 fn print_profile_analysis(path: &Path, analysis: &mimispec::profile::ProfileAnalysis) {
     println!("== {} ==", path.display());
     println!(
@@ -677,6 +692,7 @@ fn print_profile_analysis(path: &Path, analysis: &mimispec::profile::ProfileAnal
     println!();
 }
 
+#[cfg(feature = "experimental-targets")]
 fn print_materialize_plan(path: &Path, plan: &mimispec::materialize::MaterializationPlan) {
     println!("== {} ==", path.display());
     println!("release scope: {}", plan.selection.release_scope);
@@ -976,6 +992,7 @@ fn main() {
                 }
             },
         },
+        #[cfg(feature = "experimental-provenance")]
         Some(Commands::Provenance { command }) => match command {
             ProvenanceCommand::Check {
                 manifest,
@@ -991,9 +1008,11 @@ fn main() {
         Some(Commands::Diagnose { files, flat_queues }) => {
             run_diagnose(files, cli.json, *flat_queues);
         }
+        #[cfg(feature = "experimental-targets")]
         Some(Commands::Materialize { files, scope }) => {
             run_materialize(files, scope, cli.json);
         }
+        #[cfg(feature = "experimental-targets")]
         Some(Commands::Profile {
             files,
             target,
@@ -1001,6 +1020,7 @@ fn main() {
         }) => {
             run_profile(files, target, scope, cli.json);
         }
+        #[cfg(feature = "experimental-targets")]
         Some(Commands::Workflow { files, scope }) => {
             run_workflow(files, scope, cli.json);
         }

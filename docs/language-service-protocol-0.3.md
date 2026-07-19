@@ -36,7 +36,9 @@ text synchronization, publishDiagnostics, semanticTokens/full, hover,
 definition, references, codeAction, and codeAction/resolve. Incremental synchronization currently
 reparses the whole document once per received `contentChanges` batch; ranges
 are still applied sequentially with a lightweight line index. It is not
-advertised as an incremental parser.
+advertised as an incremental parser. A missing, non-array, or empty
+`contentChanges` value is rejected as `C-INVALID-EDIT` and does not advance the
+observed revision, change trust, or cancel a pending transaction.
 
 Semantic tokens cover Context Item kind, all nine commitment states, and rule
 attachment. Hover includes local and inherited effective protection.
@@ -110,7 +112,9 @@ evaluated. Missing fields, zero/invalid `base_version`, malformed
 `authorization`, non-string `unlock_tokens`, or a non-string
 `challenge_reason` are rejected with `C-INVALID-EDIT`; the server does not
 silently substitute authorization defaults. Field names follow the frozen
-snake_case schema.
+snake_case schema. Custom requests are decoded through typed
+deny-unknown-fields DTOs in `src/lib/protocol.rs`; unknown fields and nested
+request shapes outside the checked-in schema are rejected rather than ignored.
 
 ## Frozen collaboration codes
 

@@ -145,7 +145,38 @@
   `CommitmentSlotId + SlotLocator` values. Only exact `$`/`$$` slots are
   selected; open residual slots on the same node remain explicit.
 
+### Changed
+- Moved provenance behind `experimental-provenance` and the target-facing
+  Materialize/Profile/Workflow stack behind `experimental-targets`. The
+  default Core, Session, LSP, CLI, and library surface no longer depend on the
+  experimental target stack.
+- Added typed, deny-unknown-fields request DTOs for frozen custom language
+  service operations; the LSP adapter no longer accepts request shapes that
+  contradict the checked-in schema.
+- Shared immutable revision payloads between observed/authoritative session
+  handles, removed the duplicate source string, and reused revision-cached
+  diagnostics when producing IDE snapshots. Confirming an already validated
+  transaction or restoring unchanged authoritative text now reuses the parsed
+  payload without another semantic/lossless parse.
+- Release readiness now requires closed decisions, delegations and challenges
+  plus passed Tested/Built evidence for every selected slot. Commitment alone
+  can never produce `ready=true`; callers can supply external evidence only
+  when its slot locator and protected hash match the current selection.
+- Experimental materialization JSON now carries the MMS revision SHA-256 and
+  omits revision-local slot/node IDs; exact in-process analysis still retains
+  those IDs alongside `SlotLocator`.
+
 ### Fixed
+- Fixed cross-scope semantic-slot identity collisions that could let one
+  identical nested `$`/`$$` slot satisfy several before/after matches. Slot
+  positions now include the complete structural path, patch matching is
+  one-to-one, and strong-lock deletion cannot bypass its bound unlock check.
+- Fixed malformed or empty LSP `didChange` notifications being interpreted as
+  no-op observations that cancelled a pending transaction or changed revision
+  trust. They now emit `C-INVALID-EDIT` without mutating document state.
+- Made compatibility `ContentHash` deterministic across Rust toolchains by
+  freezing it to the first 64 bits of SHA-256, and made VS Code queue scope
+  headers navigate directly to their source.
 - Fixed locked-container validation missing same-kind child reordering; ordered
   named child identities now participate in the protected topology signature.
 - Fixed generic `E0010` parser failures receiving destructive Action quick

@@ -97,7 +97,9 @@ The custom method names, required request/response fields, and `C-*` codes in
 `docs/language-service-protocol-0.3.md` are Tier 1. Standard LSP behavior is
 LSP 3.17 over stdio. Adding optional fields is compatible; removing or
 reinterpreting a field, method, enum value, or code requires a new wire schema
-and migration note.
+and migration note. Frozen custom request DTOs live in `protocol`; transport
+adapters must decode through them rather than maintain a second permissive
+field parser.
 
 ### Tier 2 — Stable shape, evolving internals
 
@@ -122,7 +124,7 @@ for 0.3.x, but whose internal algorithms and helper methods may evolve:
 
 These modules are first-version prototypes. Their public types may change
 between minor 0.3.x releases without a migration note. They are excluded
-from the 0.3 Core freeze:
+from the 0.3 Core freeze and from the default Cargo feature set:
 
 - `materialize` — materialization plans, `CommitSelection`, `Evidence`.
 - `profile` — `TargetProfile` trait and built-in profiles.
@@ -137,6 +139,10 @@ from the 0.3 Core freeze:
 - `provenance` — Core-external `mimispec.provenance/0.1` sidecars and
   `SlotLocator`. This protocol remains experimental and cannot alter Core
   commitment or count as target verification.
+
+Use `experimental-provenance` for provenance alone, or
+`experimental-targets` for Materialize/Profile/Workflow plus provenance.
+`DocumentSession` and the default LSP build do not depend on either feature.
 
 ## 2. What Counts as a Breaking Change
 
@@ -164,14 +170,19 @@ The following are **not** breaking changes within 0.3.x:
 
 The frozen API surface is exercised by:
 
-- `cargo test --lib` — all 239 tests, including `property_tests` and
-  `multilingual_tests` which assert round-trip, JSON schema version, and
-  Unicode-content invariants.
+- `cargo test --lib` — all 225 default-Core tests, including
+  `property_tests` and `multilingual_tests` which assert round-trip, JSON
+  schema version, and Unicode-content invariants.
+- `cargo test --all-features --lib` — all 246 tests, including the explicitly
+  experimental Provenance, Materialization, Profile, and Workflow layers.
 - `cargo test --release stress_tests` — large-file slot-linearity guard.
 - `cargo test --release property_tests` — fuzz/property CI gate.
 - `cargo test --test lsp_stdio` — real stdio process lifecycle.
 - `cargo run -- conformance check` — frozen golden conformance suite.
-- `cargo clippy --all-targets -- -D warnings` and `cargo fmt -- --check`.
+- `cargo clippy --all-targets -- -D warnings`,
+  `cargo clippy --features experimental-provenance --all-targets -- -D warnings`,
+  `cargo clippy --all-features --all-targets -- -D warnings`, and
+  `cargo fmt -- --check`.
 
 A PR that changes any Tier-1 shape without the required migration artifacts
 must fail review.

@@ -12,9 +12,13 @@ pub mod latex;
 pub mod lexer;
 pub mod lossless;
 pub mod lsp;
+#[cfg(feature = "experimental-targets")]
 pub mod materialize;
 pub mod parser;
+#[cfg(feature = "experimental-targets")]
 pub mod profile;
+pub mod protocol;
+#[cfg(feature = "experimental-provenance")]
 pub mod provenance;
 pub mod query;
 pub mod render;
@@ -23,6 +27,7 @@ pub mod resolver;
 pub mod session;
 pub mod symbol;
 pub mod usability;
+#[cfg(feature = "experimental-targets")]
 pub mod workflow;
 
 use std::collections::HashMap;

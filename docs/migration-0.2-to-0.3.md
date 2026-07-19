@@ -195,7 +195,9 @@ exact indentation, or source spelling must remain unchanged.
 The consolidated 0.3.0 M5 milestone provides a stabilization toolchain that
 migration consumers can rely on before the independent RC trial completes:
 
-- `cargo test --lib` — 239 tests, including the families below.
+- `cargo test --lib` — 225 default-Core tests, including the families below.
+- `cargo test --all-features --lib` — 246 tests including the explicitly
+  experimental target/provenance layers.
 - `cargo test --release stress_tests` — large-file slot-linearity guard.
 - `cargo test --release property_tests` — seven seed-deterministic
   property/fuzz invariants: idempotent render, render determinism, AST JSON
@@ -229,6 +231,9 @@ migration consumers can rely on before the independent RC trial completes:
 - `mimispec lsp --stdio` — LSP 3.17 server with frozen
   `mimispec.ls/0.3` custom methods. The VS Code extension falls back to the
   released 0.2.1 parse process when the server command is unavailable.
+- Experimental provenance is compiled with `experimental-provenance`;
+  Materialize/Profile/Workflow require `experimental-targets`. Neither feature
+  is enabled by default or required by the Core parser/LSP.
 
 A 0.2.1 consumer migrating to 0.3 should run its own fixtures against
 `cargo run --render` and compare against the corpus patterns above when

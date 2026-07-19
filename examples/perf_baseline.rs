@@ -67,8 +67,8 @@ fn main() {
             "real={name} bytes={} parse={parse_us}us snapshot={snapshot_us}us slots={} decisions={} delegations={} queue_scopes={}",
             source.len(),
             snapshot.diagnostics.summary.total_slots,
-            snapshot.decision_queue.len(),
-            snapshot.delegation_queue.len(),
+            snapshot.diagnostics.decision_queue.len(),
+            snapshot.diagnostics.delegation_queue.len(),
             count_queue_scopes(&snapshot.diagnostics.queue_tree.root),
         );
     }

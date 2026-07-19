@@ -126,6 +126,13 @@ class QueueTreeProvider implements vscode.TreeDataProvider<QueueTreeEntry> {
             );
             item.description = `${scope.decision_count} decision · ${scope.delegation_count} delegation`;
             item.tooltip = scope.scope_path.join(' / ') || '<document>';
+            if (this.uri && scope.span) {
+                item.command = {
+                    command: 'vscode.open',
+                    title: 'Go to MimiSpec queue scope',
+                    arguments: [this.uri, { selection: rangeFromByteSpan(this.uri, scope.span) }],
+                };
+            }
             return item;
         }
         const queue = entry.value;

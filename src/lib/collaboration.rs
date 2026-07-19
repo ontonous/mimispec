@@ -1,7 +1,7 @@
-use std::collections::{hash_map::DefaultHasher, HashMap};
-use std::hash::{Hash, Hasher};
+use std::collections::HashMap;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::ast::{Commitment, LockIntent};
 use crate::lossless::{
@@ -10,22 +10,25 @@ use crate::lossless::{
 };
 
 /// 请求实际代表的授权主体。Tooling 必须代理其中一个主体，不能自行获得权限。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Actor {
     Human,
     Ai,
 }
 
-/// Stable hex digest of protected content/structure bytes.
+/// Stable first-64-bit SHA-256 digest of protected content/structure bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub struct ContentHash(pub u64);
 
 impl ContentHash {
     pub fn from_bytes(bytes: &[u8]) -> Self {
-        let mut hasher = DefaultHasher::new();
-        bytes.hash(&mut hasher);
-        Self(hasher.finish())
+        let digest = Sha256::digest(bytes);
+        Self(u64::from_be_bytes(
+            digest[..8]
+                .try_into()
+                .expect("SHA-256 always contains at least eight bytes"),
+        ))
     }
 
     pub fn hex(self) -> String {
@@ -570,10 +573,9 @@ pub fn validate_document_patch(
 
     for prior in &before_slots {
         let identity = semantic_slot_identity(prior);
-        let matched = after_slots
-            .iter()
-            .enumerate()
-            .find(|(_, candidate)| semantic_slot_identity(candidate) == identity);
+        let matched = after_slots.iter().enumerate().find(|(index, candidate)| {
+            !matched_after.contains(index) && semantic_slot_identity(candidate) == identity
+        });
         let Some((after_index, next)) = matched else {
             if prior.state.protects_content() {
                 let violation = match request.actor {
@@ -680,10 +682,9 @@ pub fn validate_ai_document_patch(
             continue;
         }
         let identity = semantic_slot_identity(prior);
-        let matched = after_slots
-            .iter()
-            .enumerate()
-            .find(|(_, candidate)| semantic_slot_identity(candidate) == identity);
+        let matched = after_slots.iter().enumerate().find(|(index, candidate)| {
+            !matched_after.contains(index) && semantic_slot_identity(candidate) == identity
+        });
         let Some((after_index, next)) = matched else {
             if prior.state.protects_content() {
                 results.push(Err(TransitionViolation::ProtectedContentChanged));
@@ -1535,6 +1536,52 @@ mod tests {
             crate::parse_lossless("module$$ M:\n    func? B: ...\n    func? A: ...\n").document;
         let strong = validate_ai_document_patch(&strong_before, &strong_after, None);
         assert!(strong.iter().any(Result::is_err), "{strong:?}");
+    }
+
+    #[test]
+    fn duplicate_nested_positions_cannot_reuse_one_after_slot_or_bypass_locks() {
+        for suffix in ["$", "$$"] {
+            let before = crate::parse_lossless(&format!(
+                "module A:\n    func{suffix} Same: ...\nmodule B:\n    func{suffix} Same: ...\n"
+            ));
+            let after = crate::parse_lossless(&format!("module A:\n    func{suffix} Same: ...\n"));
+            assert!(before.errors.is_empty(), "{:?}", before.errors);
+            assert!(after.errors.is_empty(), "{:?}", after.errors);
+
+            let compatible = validate_ai_document_patch(&before.document, &after.document, None);
+            assert!(
+                compatible.iter().any(Result::is_err),
+                "{suffix}: {compatible:?}"
+            );
+            let generalized = validate_document_patch(
+                &before.document,
+                &after.document,
+                &DocumentPatchRequest {
+                    actor: Some(Actor::Ai),
+                    authorization: HumanAuthorization::default(),
+                    challenge_reason: None,
+                },
+            );
+            assert!(
+                generalized.iter().any(Result::is_err),
+                "{suffix}: {generalized:?}"
+            );
+            let human = validate_document_patch(
+                &before.document,
+                &after.document,
+                &DocumentPatchRequest {
+                    actor: Some(Actor::Human),
+                    authorization: HumanAuthorization::default(),
+                    challenge_reason: None,
+                },
+            );
+            assert!(human.iter().any(Result::is_err), "{suffix}: {human:?}");
+        }
+    }
+
+    #[test]
+    fn content_hash_has_a_frozen_sha256_prefix_encoding() {
+        assert_eq!(ContentHash::from_bytes(b"abc").hex(), "ba7816bf8f01cfea");
     }
 
     #[test]

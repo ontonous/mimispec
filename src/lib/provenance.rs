@@ -138,6 +138,7 @@ pub fn resolve_slot_locator(
     }
 }
 
+#[cfg(feature = "experimental-targets")]
 pub(crate) fn resolve_locator_identity(
     document: &LosslessDocument,
     locator: &SlotLocator,
