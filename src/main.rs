@@ -818,7 +818,7 @@ fn main() {
                             println!(
                                 "{}",
                                 serde_json::to_string_pretty(&report)
-                                    .expect("conformance report must serialize")
+                                    .unwrap_or_else(|e| format!("{{\"error\": \"conformance report serialization failed: {e}\"}}"))
                             );
                         } else {
                             println!(
@@ -849,8 +849,8 @@ fn main() {
                     if cli.json {
                         println!(
                             "{}",
-                            serde_json::to_string_pretty(&report)
-                                .expect("usability report must serialize")
+                                serde_json::to_string_pretty(&report)
+                                    .unwrap_or_else(|e| format!("{{\"error\": \"usability report serialization failed: {e}\"}}"))
                         );
                     } else {
                         println!(

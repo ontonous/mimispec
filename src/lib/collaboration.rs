@@ -782,6 +782,23 @@ pub fn validate_ai_document_patch(
         let Some((after_index, next)) = matched else {
             if prior.state.protects_content() {
                 results.push(Err(TransitionViolation::ProtectedContentChanged));
+            } else {
+                // AI cannot silently delete non-protected slots either:
+                // the transition must be validated through the matrix.
+                let implicit = TransitionRequest {
+                    actor: Actor::Ai,
+                    from: prior.state,
+                    to: Commitment::None,
+                    effects: TransitionEffects {
+                        content_changed: true,
+                        ..TransitionEffects::default()
+                    },
+                    authorization: HumanAuthorization::default(),
+                    challenge_reason: None,
+                };
+                if let Err(violation) = validate_transition(&implicit) {
+                    results.push(Err(violation));
+                }
             }
             continue;
         };
