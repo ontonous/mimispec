@@ -270,11 +270,7 @@ pub struct LineIndex {
 impl LineIndex {
     pub(crate) fn new(source: &str) -> Self {
         let mut starts = vec![0];
-        for (index, byte) in source.bytes().enumerate() {
-            if byte == b'\n' {
-                starts.push(u32::try_from(index + 1).expect("document too large"));
-            }
-        }
+        starts.extend(newline_end_offsets(source));
         Self { starts }
     }
 
@@ -291,15 +287,9 @@ impl LineIndex {
             .filter(|line_start| *line_start <= start)
             .collect::<Vec<_>>();
         next.extend(
-            replacement
-                .bytes()
-                .enumerate()
-                .filter(|(_, byte)| *byte == b'\n')
-                .map(|(index, _)| {
-                    start
-                        .checked_add(u32::try_from(index + 1).expect("document too large"))
-                        .expect("document too large")
-                }),
+            newline_end_offsets(replacement)
+                .into_iter()
+                .map(|offset| start.checked_add(offset).expect("document too large")),
         );
         next.extend(
             self.starts
@@ -366,6 +356,26 @@ impl LineIndex {
     }
 }
 
+fn newline_end_offsets(source: &str) -> Vec<u32> {
+    let bytes = source.as_bytes();
+    let mut offsets = Vec::new();
+    let mut index = 0usize;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\r' if bytes.get(index + 1) == Some(&b'\n') => {
+                index += 2;
+                offsets.push(u32::try_from(index).expect("document too large"));
+            }
+            b'\r' | b'\n' => {
+                index += 1;
+                offsets.push(u32::try_from(index).expect("document too large"));
+            }
+            _ => index += 1,
+        }
+    }
+    offsets
+}
+
 fn offset_by_units(source: &str, target: usize, units: impl Fn(char) -> usize) -> Option<usize> {
     if target == 0 {
         return Some(0);
@@ -411,10 +421,13 @@ struct DocumentStructureIndex {
     slots_by_owner: Vec<Vec<CommitmentSlotId>>,
     rules_by_target: Vec<Vec<RuleOccurrenceId>>,
     scope_paths: Vec<Vec<SourceNodeId>>,
+    topology: Vec<String>,
+    positions: Vec<String>,
 }
 
 impl DocumentStructureIndex {
     fn build(
+        source: &str,
         nodes: &[SourceNode],
         slots: &[CommitmentSlotSyntax],
         rules: &[RuleOccurrence],
@@ -508,6 +521,39 @@ impl DocumentStructureIndex {
             });
         }
 
+        let structural_identity = |id: SourceNodeId| {
+            let node = &nodes[id.0 as usize];
+            let stable_anchor = slots_by_owner
+                .get(id.0 as usize)
+                .into_iter()
+                .flatten()
+                .filter_map(|slot| slots.get(slot.0 as usize))
+                .find(|slot| slot.footprint == CommitmentFootprintKind::NameOrReference)
+                .and_then(|slot| source.get(slot.anchor_span.as_range()))
+                .map(str::trim)
+                .filter(|anchor| !anchor.is_empty())
+                .unwrap_or("");
+            format!("{:?}:{stable_anchor}", node.kind)
+        };
+        let mut topology = vec![String::new(); nodes.len()];
+        for node in nodes {
+            topology[node.id.0 as usize] = children[node.id.0 as usize]
+                .iter()
+                .map(|child| structural_identity(*child))
+                .collect::<Vec<_>>()
+                .join("|");
+        }
+
+        let mut positions = vec![String::new(); nodes.len()];
+        for (ordinal, id) in roots.iter().enumerate() {
+            positions[id.0 as usize] = format!("document/{ordinal}");
+        }
+        for parent in nodes {
+            for (ordinal, child) in children[parent.id.0 as usize].iter().enumerate() {
+                positions[child.0 as usize] = format!("{:?}/{ordinal}", parent.kind);
+            }
+        }
+
         let mut scope_paths = vec![Vec::new(); nodes.len()];
         let mut traversal = roots.into_iter().rev().collect::<Vec<_>>();
         while let Some(id) = traversal.pop() {
@@ -531,6 +577,8 @@ impl DocumentStructureIndex {
             slots_by_owner,
             rules_by_target,
             scope_paths,
+            topology,
+            positions,
         }
     }
 }
@@ -657,6 +705,22 @@ impl LosslessDocument {
             .into_iter()
             .flatten()
             .filter_map(|rule| self.rule(*rule))
+    }
+
+    pub(crate) fn structural_topology(&self, id: SourceNodeId) -> Option<&str> {
+        self.node(id)?;
+        self.structure
+            .topology
+            .get(id.0 as usize)
+            .map(String::as_str)
+    }
+
+    pub(crate) fn structural_position(&self, id: SourceNodeId) -> Option<&str> {
+        self.node(id)?;
+        self.structure
+            .positions
+            .get(id.0 as usize)
+            .map(String::as_str)
     }
 
     pub fn movable_span(&self, id: SourceNodeId) -> Option<ByteSpan> {
@@ -925,7 +989,7 @@ pub(crate) fn build_document(
     };
     let rules = map_recorded_rules(&token_spans, recorded_rules, &nodes);
     let comments = attach_comments(&source, &pieces, &nodes, &paragraph_breaks);
-    let structure = DocumentStructureIndex::build(&nodes, &commitment_slots, &rules);
+    let structure = DocumentStructureIndex::build(&source, &nodes, &commitment_slots, &rules);
     LosslessDocument {
         source,
         semantic,
@@ -2320,6 +2384,28 @@ flow Checkout:
     }
 
     #[test]
+    fn line_index_treats_lf_crlf_and_lone_cr_as_single_line_breaks() {
+        for source in ["a\nb", "a\r\nb", "a\rb"] {
+            let index = LineIndex::new(source);
+            let b = source.rfind('b').unwrap() as u32;
+            assert_eq!(
+                index.position(source, b, ColumnEncoding::Utf16),
+                Some(SourcePosition { line: 1, column: 0 }),
+                "{source:?}"
+            );
+            assert_eq!(
+                index.offset(
+                    source,
+                    SourcePosition { line: 1, column: 0 },
+                    ColumnEncoding::Utf16
+                ),
+                Some(b),
+                "{source:?}"
+            );
+        }
+    }
+
+    #[test]
     fn rule_groups_keep_exact_spans_and_attachment_candidates() {
         let source = r#"rule "first"
 rule$ "second"
@@ -2545,6 +2631,12 @@ type Status?: Active | Paid
         assert!(document.child_nodes(module).any(|node| node.id == func));
         assert_eq!(document.scope_path(func), Some([module, func].as_slice()));
         assert_eq!(document.scope_path(desc), Some([module, func].as_slice()));
+        assert!(document
+            .structural_topology(module)
+            .is_some_and(|topology| topology.contains("Func:Load")));
+        assert!(document
+            .structural_position(func)
+            .is_some_and(|position| position.starts_with("Module/")));
 
         let func_slots = document
             .commitment_slots_for_owner(func)

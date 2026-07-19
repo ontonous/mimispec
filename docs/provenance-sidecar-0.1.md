@@ -28,7 +28,9 @@ mimispec provenance check path/to/file.provenance.json \
 
 Every `mms.path` and `source.path` must be relative to `--source-root`.
 Absolute paths, `..`, missing files, and symlinks that resolve outside the root
-are rejected. The command reads and hashes files, parses the MMS with the
+are rejected. Missing declared artifacts are returned as structured
+`P-MMS-MISSING` / `P-SOURCE-MISSING` findings; unsafe or escaping paths remain
+hard request errors. The command reads and hashes files, parses the MMS with the
 canonical parser, validates source spans and locators, and reports drift. It
 does not execute MIMI, a compiler, Z3, tests, or generated code, and it never
 changes a commitment suffix.

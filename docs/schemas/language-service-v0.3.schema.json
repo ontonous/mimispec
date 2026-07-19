@@ -74,8 +74,33 @@
     },
     "snapshotRequest": {
       "type": "object",
-      "required": ["uri"],
-      "properties": { "uri": { "type": "string" } },
+      "properties": {
+        "uri": { "type": "string" },
+        "textDocument": {
+          "type": "object",
+          "required": ["uri"],
+          "properties": { "uri": { "type": "string" } },
+          "additionalProperties": false
+        }
+      },
+      "oneOf": [
+        { "required": ["uri"] },
+        { "required": ["textDocument"] }
+      ],
+      "additionalProperties": false
+    },
+    "snapshotResponse": {
+      "type": "object",
+      "required": ["schema_version", "session", "decision_queue", "delegation_queue", "queue_tree", "confirmed_intent", "lock_challenges"],
+      "properties": {
+        "schema_version": { "const": "mimispec.ls/0.3" },
+        "session": { "type": "object" },
+        "decision_queue": { "type": "array" },
+        "delegation_queue": { "type": "array" },
+        "queue_tree": { "type": "object" },
+        "confirmed_intent": { "type": "array" },
+        "lock_challenges": { "type": "array" }
+      },
       "additionalProperties": false
     },
     "queueBatchRequest": {
@@ -142,6 +167,15 @@
       },
       "additionalProperties": false
     },
+    "slotNavigationResponse": {
+      "type": "object",
+      "required": ["schema_version", "targets"],
+      "properties": {
+        "schema_version": { "const": "mimispec.ls/0.3" },
+        "targets": { "type": "array" }
+      },
+      "additionalProperties": false
+    },
     "operationResponse": {
       "type": "object",
       "required": ["schema_version", "accepted", "authoritative_version", "violations"],
@@ -165,11 +199,13 @@
     { "$ref": "#/$defs/documentEditRequest" },
     { "$ref": "#/$defs/documentEditResponse" },
     { "$ref": "#/$defs/snapshotRequest" },
+    { "$ref": "#/$defs/snapshotResponse" },
     { "$ref": "#/$defs/queueBatchRequest" },
     { "$ref": "#/$defs/unlockTokenRequest" },
     { "$ref": "#/$defs/adoptObservedRequest" },
     { "$ref": "#/$defs/restoreAuthoritativeRequest" },
     { "$ref": "#/$defs/slotNavigationRequest" },
+    { "$ref": "#/$defs/slotNavigationResponse" },
     { "$ref": "#/$defs/operationResponse" }
   ]
 }

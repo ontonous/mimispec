@@ -151,7 +151,7 @@ class QueueTreeProvider implements vscode.TreeDataProvider<QueueTreeEntry> {
         return [
             ...entry.value.children.map((value): QueueTreeEntry => ({ kind: 'scope', value })),
             ...entry.value.items.map((value): QueueTreeEntry => ({ kind: 'item', value })),
-        ];
+        ].sort((left, right) => queueEntryStart(left) - queueEntryStart(right));
     }
 
     private async load(): Promise<void> {
@@ -169,6 +169,12 @@ class QueueTreeProvider implements vscode.TreeDataProvider<QueueTreeEntry> {
             chan.appendLine(`Unable to refresh MimiSpec queues: ${String(error)}`);
         }
     }
+}
+
+function queueEntryStart(entry: QueueTreeEntry): number {
+    return entry.kind === 'scope'
+        ? (entry.value.span?.start ?? Number.MAX_SAFE_INTEGER)
+        : entry.value.span.start;
 }
 
 function rangeFromByteSpan(uri: vscode.Uri, span: ByteSpan): vscode.Range {

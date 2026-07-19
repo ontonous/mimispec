@@ -164,7 +164,7 @@ The following are **not** breaking changes within 0.3.x:
 
 The frozen API surface is exercised by:
 
-- `cargo test --lib` — all 233 tests, including `property_tests` and
+- `cargo test --lib` — all 239 tests, including `property_tests` and
   `multilingual_tests` which assert round-trip, JSON schema version, and
   Unicode-content invariants.
 - `cargo test --release stress_tests` — large-file slot-linearity guard.

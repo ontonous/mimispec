@@ -377,7 +377,7 @@ impl ParseError {
 /// keywords or punctuation. This preserves the grammar and the stable E0010
 /// code while making the parser's recovery intent explicit.
 pub(crate) fn enrich_action_syntax_errors(source: &str, errors: &mut [ParseError]) {
-    let lines = source.lines().collect::<Vec<_>>();
+    let lines = physical_lines(source);
     for error in errors
         .iter_mut()
         .filter(|error| error.code == ErrorCode::E0010)
@@ -431,6 +431,28 @@ pub(crate) fn enrich_action_syntax_errors(source: &str, errors: &mut [ParseError
         ));
         error.suggestion = Some(format!("desc \"{escaped}\""));
     }
+}
+
+fn physical_lines(source: &str) -> Vec<&str> {
+    let bytes = source.as_bytes();
+    let mut lines = Vec::new();
+    let mut start = 0usize;
+    while start < bytes.len() {
+        let mut end = start;
+        while end < bytes.len() && !matches!(bytes[end], b'\r' | b'\n') {
+            end += 1;
+        }
+        lines.push(&source[start..end]);
+        if end == bytes.len() {
+            break;
+        }
+        start = if bytes[end] == b'\r' && bytes.get(end + 1) == Some(&b'\n') {
+            end + 2
+        } else {
+            end + 1
+        };
+    }
+    lines
 }
 
 fn is_ident_continue(ch: char) -> bool {

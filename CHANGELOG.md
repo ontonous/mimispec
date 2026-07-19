@@ -146,6 +146,19 @@
   selected; open residual slots on the same node remain explicit.
 
 ### Fixed
+- Fixed locked-container validation missing same-kind child reordering; ordered
+  named child identities now participate in the protected topology signature.
+- Fixed generic `E0010` parser failures receiving destructive Action quick
+  fixes; only explicitly enriched Action-recovery diagnostics are editable.
+- Fixed pending transactions being overwritten or cleared by later prepare
+  failures, and delayed strong-unlock token consumption until candidate hash
+  confirmation.
+- Restored `ImportCache: Send + Sync` while retaining the compatible `get(&self)`
+  LRU access update.
+- Fixed actor-aware and syntax CodeActions to resolve through an authoritative,
+  confirmable transaction before returning their `WorkspaceEdit`.
+- Fixed materialization drift missing commitment-state changes, structured
+  provenance findings for deleted artifacts, and lone-CR line handling.
 - Fixed `DocumentSession::observe_edits` reparsing after every LSP change; a
   batch now applies sequential UTF-16 changes to text/LineIndex and parses once.
 - Fixed intent-gap diagnostics skipping nested Contexts and matching duplicate

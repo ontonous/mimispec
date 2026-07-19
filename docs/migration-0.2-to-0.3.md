@@ -195,7 +195,7 @@ exact indentation, or source spelling must remain unchanged.
 The consolidated 0.3.0 M5 milestone provides a stabilization toolchain that
 migration consumers can rely on before the independent RC trial completes:
 
-- `cargo test --lib` — 233 tests, including the families below.
+- `cargo test --lib` — 239 tests, including the families below.
 - `cargo test --release stress_tests` — large-file slot-linearity guard.
 - `cargo test --release property_tests` — seven seed-deterministic
   property/fuzz invariants: idempotent render, render determinism, AST JSON

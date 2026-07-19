@@ -260,7 +260,7 @@ impl<'a> Lexer<'a> {
 
     fn bump(&mut self) -> Option<char> {
         let c = self.chars.next()?;
-        if c == '\n' {
+        if c == '\n' || (c == '\r' && self.chars.peek().copied() != Some('\n')) {
             self.line += 1;
             self.col = 1;
             self.at_line_start = true;
@@ -276,11 +276,22 @@ impl<'a> Lexer<'a> {
 
     fn skip_whitespace_inline(&mut self) {
         while let Some(c) = self.peek() {
-            if c == ' ' || c == '\t' || c == '\r' {
+            if c == ' ' || c == '\t' {
                 self.bump();
             } else {
                 break;
             }
+        }
+    }
+
+    fn consume_newline(&mut self) {
+        if self.peek() == Some('\r') {
+            self.bump();
+            if self.peek() == Some('\n') {
+                self.bump();
+            }
+        } else if self.peek() == Some('\n') {
+            self.bump();
         }
     }
 
@@ -312,8 +323,8 @@ impl<'a> Lexer<'a> {
                     None => {
                         return Ok(self.flush_eof());
                     }
-                    Some('\n') => {
-                        self.bump(); // empty line
+                    Some('\n' | '\r') => {
+                        self.consume_newline(); // empty line
                         self.blank_line_count =
                             self.blank_line_count.saturating_add(1).min(BLANK_LINE_CAP);
                         continue;
@@ -325,8 +336,8 @@ impl<'a> Lexer<'a> {
                         // A comment-only physical line is trivia, not a blank line.
                         // Consume its newline here so the next layout iteration does
                         // not increment `blank_line_count` for it.
-                        if self.peek() == Some('\n') {
-                            self.bump();
+                        if matches!(self.peek(), Some('\n' | '\r')) {
+                            self.consume_newline();
                         }
                         // Ensure progress even if skip_comment is a no-op.
                         if self.line == before_line && self.col == before {
@@ -397,8 +408,8 @@ impl<'a> Lexer<'a> {
                 line,
                 col,
             }),
-            Some('\n') => {
-                self.bump();
+            Some('\n' | '\r') => {
+                self.consume_newline();
                 Ok(Token {
                     kind: TokenKind::Newline,
                     line,
@@ -603,7 +614,7 @@ impl<'a> Lexer<'a> {
 
     fn skip_comment(&mut self) {
         while let Some(c) = self.peek() {
-            if c == '\n' {
+            if matches!(c, '\n' | '\r') {
                 break;
             }
             self.bump();
@@ -671,7 +682,7 @@ impl<'a> Lexer<'a> {
                     self.bump();
                     break;
                 }
-                Some('\n') => {
+                Some('\n' | '\r') => {
                     // 字符串不允许隐式跨行；未闭合的引号应立即报错
                     return Err(ParseError::unterminated_string(line, col));
                 }

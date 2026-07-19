@@ -266,16 +266,23 @@ pub fn analyze_document(document: &LosslessDocument, errors: &[ParseError]) -> D
 pub fn syntax_quick_fixes(source: &str, errors: &[ParseError]) -> Vec<SyntaxQuickFix> {
     let error_lines = errors
         .iter()
-        .filter(|error| error.code == crate::error::ErrorCode::E0010)
+        .filter(|error| {
+            error.code == crate::error::ErrorCode::E0010
+                && error.help.as_deref().is_some_and(|help| {
+                    help.contains("quote the whole action label")
+                        && help.contains("natural language")
+                })
+                && error
+                    .suggestion
+                    .as_deref()
+                    .is_some_and(|suggestion| suggestion.starts_with("desc \""))
+        })
         .map(|error| error.line)
         .collect::<HashSet<_>>();
     let mut fixes = Vec::new();
-    let mut offset = 0usize;
-    for (index, physical) in source.split_inclusive('\n').enumerate() {
+    for (index, (offset, line)) in physical_lines(source).into_iter().enumerate() {
         let line_number = index + 1;
-        let line = physical.trim_end_matches(['\n', '\r']);
         if !error_lines.contains(&line_number) {
-            offset += physical.len();
             continue;
         }
         let leading = line.len() - line.trim_start().len();
@@ -285,7 +292,6 @@ pub fn syntax_quick_fixes(source: &str, errors: &[ParseError]) -> Vec<SyntaxQuic
             || content.contains('=')
             || content.contains(':');
         if unsafe_structure {
-            offset += physical.len();
             continue;
         }
         let escaped = escape_mimispec_string(content);
@@ -300,9 +306,30 @@ pub fn syntax_quick_fixes(source: &str, errors: &[ParseError]) -> Vec<SyntaxQuic
             span,
             replacement: format!("desc \"{escaped}\""),
         });
-        offset += physical.len();
     }
     fixes
+}
+
+fn physical_lines(source: &str) -> Vec<(usize, &str)> {
+    let bytes = source.as_bytes();
+    let mut lines = Vec::new();
+    let mut start = 0usize;
+    while start < bytes.len() {
+        let mut end = start;
+        while end < bytes.len() && !matches!(bytes[end], b'\r' | b'\n') {
+            end += 1;
+        }
+        lines.push((start, &source[start..end]));
+        if end == bytes.len() {
+            break;
+        }
+        start = if bytes[end] == b'\r' && bytes.get(end + 1) == Some(&b'\n') {
+            end + 2
+        } else {
+            end + 1
+        };
+    }
+    lines
 }
 
 fn escape_mimispec_string(text: &str) -> String {
@@ -1067,6 +1094,20 @@ flow Checkout:
         let parsed = parse_lossless(unsafe_line);
         assert!(!parsed.errors.is_empty());
         assert!(syntax_quick_fixes(unsafe_line, &parsed.errors).is_empty());
+
+        let structural = "func Broken(\n";
+        let parsed = parse_lossless(structural);
+        assert!(parsed
+            .errors
+            .iter()
+            .any(|error| error.code == crate::error::ErrorCode::E0010));
+        assert!(syntax_quick_fixes(structural, &parsed.errors).is_empty());
+
+        let lone_cr = "func Work:\r    steps:\r        non-empty\r";
+        let parsed = parse_lossless(lone_cr);
+        let fixes = syntax_quick_fixes(lone_cr, &parsed.errors);
+        assert_eq!(fixes.len(), 2, "{:?}", parsed.errors);
+        assert!(fixes.iter().all(|fix| fix.span.start > 20));
     }
 
     #[test]

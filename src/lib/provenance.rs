@@ -193,6 +193,28 @@ pub fn check_manifest(
 
     let mms_path = resolve_inside_root(&root, &manifest.mms.path)?;
     let source_path = resolve_inside_root(&root, &manifest.source.path)?;
+    if mms_path.is_none() {
+        findings.push(ProvenanceFinding {
+            code: "P-MMS-MISSING".into(),
+            message: "declared MMS artifact does not exist under source root".into(),
+            link_index: None,
+        });
+    }
+    if source_path.is_none() {
+        findings.push(ProvenanceFinding {
+            code: "P-SOURCE-MISSING".into(),
+            message: "declared source artifact does not exist under source root".into(),
+            link_index: None,
+        });
+    }
+    let (Some(mms_path), Some(source_path)) = (mms_path, source_path) else {
+        return Ok(ProvenanceCheckReport {
+            schema_version: PROVENANCE_SCHEMA_VERSION,
+            valid: false,
+            checked_links: 0,
+            findings,
+        });
+    };
     let mms_bytes = fs::read(&mms_path)
         .map_err(|error| format!("failed to read MMS {}: {error}", mms_path.display()))?;
     let source_bytes = fs::read(&source_path)
@@ -258,7 +280,7 @@ pub fn check_manifest(
     })
 }
 
-fn resolve_inside_root(root: &Path, relative: &str) -> Result<PathBuf, String> {
+fn resolve_inside_root(root: &Path, relative: &str) -> Result<Option<PathBuf>, String> {
     let path = Path::new(relative);
     if path.as_os_str().is_empty()
         || path.components().any(|component| {
@@ -272,14 +294,19 @@ fn resolve_inside_root(root: &Path, relative: &str) -> Result<PathBuf, String> {
             "path must be relative and may not escape source root: {relative}"
         ));
     }
-    let resolved = root
-        .join(path)
-        .canonicalize()
-        .map_err(|error| format!("unable to resolve source-root path {relative}: {error}"))?;
+    let resolved = match root.join(path).canonicalize() {
+        Ok(resolved) => resolved,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(format!(
+                "unable to resolve source-root path {relative}: {error}"
+            ))
+        }
+    };
     if !resolved.starts_with(root) {
         return Err(format!("path escapes source root: {relative}"));
     }
-    Ok(resolved)
+    Ok(Some(resolved))
 }
 
 pub fn sha256_bytes(bytes: &[u8]) -> String {
@@ -387,6 +414,15 @@ mod tests {
             .findings
             .iter()
             .any(|finding| finding.code == "P-SOURCE-DRIFT"));
+
+        fs::remove_file(root.join("source.mimi")).unwrap();
+        let missing = check_manifest(&manifest, &root).unwrap();
+        assert!(!missing.valid);
+        assert_eq!(missing.checked_links, 0);
+        assert!(missing
+            .findings
+            .iter()
+            .any(|finding| finding.code == "P-SOURCE-MISSING"));
 
         let mut escaped = manifest.clone();
         escaped.source.path = "../outside.mimi".into();

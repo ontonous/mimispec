@@ -252,7 +252,20 @@ pub struct SemanticSlotSnapshot {
 /// metadata. Zero-width slots are retained so IDEs can address insertion
 /// positions without inventing a node-wide state.
 pub fn collect_semantic_slot_snapshots(document: &LosslessDocument) -> Vec<SemanticSlotSnapshot> {
-    let structure = DocumentStructureIndex::new(document);
+    let attachments = AttachmentIndex::new(document);
+    let mut explicit_open_footprints = document
+        .commitment_slots()
+        .iter()
+        .filter(|slot| {
+            slot.semantic_slot
+                && matches!(
+                    slot.value,
+                    Commitment::Question | Commitment::QuestionQuestion
+                )
+        })
+        .filter_map(|slot| footprint_span(document, slot))
+        .collect::<Vec<_>>();
+    explicit_open_footprints.sort_by_key(|span| (span.start, std::cmp::Reverse(span.end)));
     let mut owner_counts = HashMap::<SourceNodeId, u32>::new();
     let mut snapshots = Vec::new();
     for slot in document
@@ -277,10 +290,17 @@ pub fn collect_semantic_slot_snapshots(document: &LosslessDocument) -> Vec<Seman
             .text(node.spans.header)
             .unwrap_or_default()
             .to_string();
-        let protected_text = protected_text_for_slot(document, slot, node, &structure);
-        let topology = structure.topology(node_id).to_string();
-        let attachment = structure.attachment(node_id).to_string();
-        let position = structure.position(node_id).to_string();
+        let protected_text =
+            protected_text_for_slot(document, slot, node, &explicit_open_footprints);
+        let topology = document
+            .structural_topology(node_id)
+            .unwrap_or_default()
+            .to_string();
+        let attachment = attachments.signature(node_id).to_string();
+        let position = document
+            .structural_position(node_id)
+            .unwrap_or_default()
+            .to_string();
         snapshots.push(SemanticSlotSnapshot {
             slot: slot.id,
             node: node_id,
@@ -307,17 +327,21 @@ fn protected_text_for_slot(
     document: &LosslessDocument,
     slot: &CommitmentSlotSyntax,
     node: &SourceNode,
-    structure: &DocumentStructureIndex,
+    explicit_open_footprints: &[ByteSpan],
 ) -> String {
     if slot.state_is_strong_lock() {
-        return masked_strong_subtree(document, slot, node);
+        return masked_strong_subtree(document, node, explicit_open_footprints);
     }
 
     let span = match slot.footprint {
         CommitmentFootprintKind::Clause => node.spans.core,
         CommitmentFootprintKind::Event => event_footprint_span(document, slot, node),
         CommitmentFootprintKind::Transition => transition_footprint_span(document, node),
-        CommitmentFootprintKind::EntityKind if structure.is_container(node) => node.spans.header,
+        CommitmentFootprintKind::EntityKind
+            if node.kind.is_scope_container() || document.child_nodes(node.id).next().is_some() =>
+        {
+            node.spans.header
+        }
         CommitmentFootprintKind::EntityKind => node.spans.core,
         CommitmentFootprintKind::Placeholder => node.spans.core,
         CommitmentFootprintKind::NameOrReference
@@ -370,22 +394,15 @@ fn transition_footprint_span(document: &LosslessDocument, node: &SourceNode) -> 
 
 fn masked_strong_subtree(
     document: &LosslessDocument,
-    strong_slot: &CommitmentSlotSyntax,
     node: &SourceNode,
+    explicit_open_footprints: &[ByteSpan],
 ) -> String {
     let base = node.spans.core;
-    let mut masks = document
-        .commitment_slots()
+    let first = explicit_open_footprints.partition_point(|span| span.start < base.start);
+    let mut masks = explicit_open_footprints[first..]
         .iter()
-        .filter(|candidate| {
-            candidate.id != strong_slot.id
-                && candidate.semantic_slot
-                && matches!(
-                    candidate.value,
-                    Commitment::Question | Commitment::QuestionQuestion
-                )
-        })
-        .filter_map(|candidate| footprint_span(document, candidate))
+        .copied()
+        .take_while(|span| span.start <= base.end)
         .filter(|span| span.start >= base.start && span.end <= base.end)
         .collect::<Vec<_>>();
     masks.sort_by_key(|span| (span.start, std::cmp::Reverse(span.end)));
@@ -430,73 +447,14 @@ fn footprint_span(document: &LosslessDocument, slot: &CommitmentSlotSyntax) -> O
     })
 }
 
-/// Revision-local structural facts shared by all semantic slots.
-///
-/// Parent discovery is deliberately performed once per document. The prior
-/// implementation rediscovered every node's parent while building every
-/// slot's topology and position, which made snapshot collection effectively
-/// cubic on large Context documents.
-struct DocumentStructureIndex {
-    children: HashMap<SourceNodeId, Vec<SourceNodeId>>,
-    topology: HashMap<SourceNodeId, String>,
+/// Attachment signatures derived once per semantic snapshot. Parent/children,
+/// topology and position come directly from `LosslessDocument`'s shared index.
+struct AttachmentIndex {
     attachment: HashMap<SourceNodeId, String>,
-    position: HashMap<SourceNodeId, String>,
 }
 
-impl DocumentStructureIndex {
+impl AttachmentIndex {
     fn new(document: &LosslessDocument) -> Self {
-        let mut sibling_groups = HashMap::<Option<SourceNodeId>, Vec<SourceNodeId>>::new();
-        for node in document.nodes() {
-            sibling_groups
-                .entry(document.parent_node(node.id).map(|parent| parent.id))
-                .or_default()
-                .push(node.id);
-        }
-        for siblings in sibling_groups.values_mut() {
-            siblings.sort_by_key(|id| {
-                let node = document
-                    .node(*id)
-                    .expect("structure index only contains parser-recorded nodes");
-                (node.spans.core.start, node.spans.core.end, node.id.0)
-            });
-        }
-
-        let children = document
-            .nodes()
-            .iter()
-            .filter_map(|node| {
-                let children = document
-                    .child_nodes(node.id)
-                    .map(|child| child.id)
-                    .collect::<Vec<_>>();
-                (!children.is_empty()).then_some((node.id, children))
-            })
-            .collect::<HashMap<_, _>>();
-
-        let mut topology = HashMap::new();
-        for node in document.nodes() {
-            let signature = children
-                .get(&node.id)
-                .into_iter()
-                .flatten()
-                .filter_map(|id| document.node(*id))
-                .map(|child| format!("{:?}", child.kind))
-                .collect::<Vec<_>>()
-                .join("|");
-            topology.insert(node.id, signature);
-        }
-
-        let mut position = HashMap::new();
-        for (parent, siblings) in &sibling_groups {
-            let parent_label = parent
-                .and_then(|id| document.node(id))
-                .map(|node| format!("{:?}", node.kind))
-                .unwrap_or_else(|| "document".into());
-            for (ordinal, id) in siblings.iter().enumerate() {
-                position.insert(*id, format!("{parent_label}/{ordinal}"));
-            }
-        }
-
         let attachment = document
             .nodes()
             .iter()
@@ -511,40 +469,11 @@ impl DocumentStructureIndex {
             })
             .collect();
 
-        Self {
-            children,
-            topology,
-            attachment,
-            position,
-        }
+        Self { attachment }
     }
 
-    fn is_container(&self, node: &SourceNode) -> bool {
-        matches!(
-            node.kind,
-            SourceNodeKind::Module
-                | SourceNodeKind::TypeDef
-                | SourceNodeKind::Flow
-                | SourceNodeKind::Func
-                | SourceNodeKind::Ui
-                | SourceNodeKind::Steps
-                | SourceNodeKind::UiNode
-        ) || self.children.contains_key(&node.id)
-    }
-
-    fn topology(&self, node: SourceNodeId) -> &str {
-        self.topology.get(&node).map(String::as_str).unwrap_or("")
-    }
-
-    fn attachment(&self, node: SourceNodeId) -> &str {
+    fn signature(&self, node: SourceNodeId) -> &str {
         self.attachment.get(&node).map(String::as_str).unwrap_or("")
-    }
-
-    fn position(&self, node: SourceNodeId) -> &str {
-        self.position
-            .get(&node)
-            .map(String::as_str)
-            .expect("every parser-recorded node has a structural position")
     }
 }
 
@@ -1576,6 +1505,36 @@ mod tests {
             crate::parse_lossless("module$$ App:\n    desc? \"delegated two\"\n").document;
         let explicit_open = validate_ai_document_patch(&open_before, &open_after, None);
         assert!(explicit_open.iter().all(Result::is_ok), "{explicit_open:?}");
+    }
+
+    #[test]
+    fn locked_container_rejects_same_kind_child_reordering() {
+        let ordinary_before =
+            crate::parse_lossless("module$ M:\n    func A: ...\n    func B: ...\n").document;
+        let ordinary_after =
+            crate::parse_lossless("module$ M:\n    func B: ...\n    func A: ...\n").document;
+        let ordinary = validate_ai_document_patch(&ordinary_before, &ordinary_after, None);
+        assert!(ordinary.iter().any(Result::is_err), "{ordinary:?}");
+        let ordinary_session = validate_document_patch(
+            &ordinary_before,
+            &ordinary_after,
+            &DocumentPatchRequest {
+                actor: Some(Actor::Ai),
+                authorization: HumanAuthorization::default(),
+                challenge_reason: None,
+            },
+        );
+        assert!(
+            ordinary_session.iter().any(Result::is_err),
+            "{ordinary_session:?}"
+        );
+
+        let strong_before =
+            crate::parse_lossless("module$$ M:\n    func? A: ...\n    func? B: ...\n").document;
+        let strong_after =
+            crate::parse_lossless("module$$ M:\n    func? B: ...\n    func? A: ...\n").document;
+        let strong = validate_ai_document_patch(&strong_before, &strong_after, None);
+        assert!(strong.iter().any(Result::is_err), "{strong:?}");
     }
 
     #[test]

@@ -85,6 +85,8 @@ pub struct MaterializationPlan {
 pub struct DriftFinding {
     pub slot: CommitmentSlotId,
     pub locator: SlotLocator,
+    pub expected_state: Commitment,
+    pub observed_state: Option<Commitment>,
     pub expected_hash: ContentHash,
     pub observed_hash: ContentHash,
     pub message: String,
@@ -201,6 +203,8 @@ pub fn detect_drift(baseline: &CommitSelection, current: &LosslessDocument) -> V
             findings.push(DriftFinding {
                 slot: slot.slot,
                 locator: slot.locator.clone(),
+                expected_state: slot.state,
+                observed_state: None,
                 expected_hash: slot.content_hash,
                 observed_hash: ContentHash(0),
                 message: format!(
@@ -214,6 +218,8 @@ pub fn detect_drift(baseline: &CommitSelection, current: &LosslessDocument) -> V
             findings.push(DriftFinding {
                 slot: slot.slot,
                 locator: slot.locator.clone(),
+                expected_state: slot.state,
+                observed_state: None,
                 expected_hash: slot.content_hash,
                 observed_hash: ContentHash(0),
                 message: format!(
@@ -224,10 +230,29 @@ pub fn detect_drift(baseline: &CommitSelection, current: &LosslessDocument) -> V
             });
             continue;
         }
+        if current_slot.state != slot.state || !current_slot.state.is_confirmed() {
+            findings.push(DriftFinding {
+                slot: slot.slot,
+                locator: slot.locator.clone(),
+                expected_state: slot.state,
+                observed_state: Some(current_slot.state),
+                expected_hash: slot.content_hash,
+                observed_hash: current_slot.protected_hash,
+                message: format!(
+                    "locked slot `{}` commitment drifted from {} to {}",
+                    slot.header.trim(),
+                    slot.state,
+                    current_slot.state
+                ),
+            });
+            continue;
+        }
         if current_slot.protected_hash != slot.content_hash {
             findings.push(DriftFinding {
                 slot: slot.slot,
                 locator: slot.locator.clone(),
+                expected_state: slot.state,
+                observed_state: Some(current_slot.state),
                 expected_hash: slot.content_hash,
                 observed_hash: current_slot.protected_hash,
                 message: format!(
@@ -368,6 +393,24 @@ func Pay$:
 
         let findings = detect_drift(&selection, &reordered);
         assert!(findings.is_empty(), "{findings:?}");
+    }
+
+    #[test]
+    fn drift_detection_flags_commitment_changes_even_when_content_is_unchanged() {
+        let before = parse_lossless("func Pay$: ...\n").document;
+        let selection = select_commit_ready(&before, "payments", false);
+
+        for source in ["func Pay?: ...\n", "func Pay$$: ...\n"] {
+            let current = parse_lossless(source).document;
+            let findings = detect_drift(&selection, &current);
+            assert!(
+                findings.iter().any(|finding| {
+                    finding.expected_state == Commitment::Locked
+                        && finding.observed_state != Some(Commitment::Locked)
+                }),
+                "{source}: {findings:?}"
+            );
+        }
     }
 
     #[test]

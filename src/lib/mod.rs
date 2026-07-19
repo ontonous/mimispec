@@ -1,3 +1,5 @@
+//! MimiSpec canonical parser, lossless document, collaboration, and tooling APIs.
+
 pub mod ast;
 pub mod cache;
 pub mod collaboration;

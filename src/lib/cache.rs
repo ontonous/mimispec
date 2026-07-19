@@ -1,6 +1,6 @@
-use std::cell::Cell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -9,18 +9,18 @@ use crate::ast::File;
 struct CacheEntry {
     mtime: Option<SystemTime>,
     file: Arc<File>,
-    last_access: Cell<u64>,
+    last_access: AtomicU64,
 }
 
 /// Import parse cache with optional finite-capacity LRU eviction.
 ///
 /// [`ImportCache::new`] preserves the historical unlimited behavior. The LRU
-/// clock uses interior mutability so the existing `get(&self, ...)` API remains
-/// source-compatible.
+/// clock uses atomics so the existing `get(&self, ...)` API and the cache's
+/// historical `Send + Sync` auto-traits remain compatible.
 pub struct ImportCache {
     entries: HashMap<PathBuf, CacheEntry>,
     capacity: Option<usize>,
-    access_clock: Cell<u64>,
+    access_clock: AtomicU64,
 }
 
 impl Default for ImportCache {
@@ -34,7 +34,7 @@ impl ImportCache {
         Self {
             entries: HashMap::new(),
             capacity: None,
-            access_clock: Cell::new(0),
+            access_clock: AtomicU64::new(0),
         }
     }
 
@@ -43,7 +43,7 @@ impl ImportCache {
         Self {
             entries: HashMap::with_capacity(capacity),
             capacity: Some(capacity),
-            access_clock: Cell::new(0),
+            access_clock: AtomicU64::new(0),
         }
     }
 
@@ -57,7 +57,7 @@ impl ImportCache {
 
     pub fn clear(&mut self) {
         self.entries.clear();
-        self.access_clock.set(0);
+        self.access_clock.store(0, Ordering::Relaxed);
     }
 
     /// Get cached file, validating mtime if available.
@@ -72,7 +72,9 @@ impl ImportCache {
         if !valid {
             return None;
         }
-        entry.last_access.set(self.next_access());
+        entry
+            .last_access
+            .store(self.next_access(), Ordering::Relaxed);
         Some(entry.file.clone())
     }
 
@@ -87,7 +89,7 @@ impl ImportCache {
             CacheEntry {
                 mtime,
                 file: file.clone(),
-                last_access: Cell::new(access),
+                last_access: AtomicU64::new(access),
             },
         );
         self.evict_to_capacity();
@@ -95,9 +97,12 @@ impl ImportCache {
     }
 
     fn next_access(&self) -> u64 {
-        let next = self.access_clock.get().saturating_add(1);
-        self.access_clock.set(next);
-        next
+        self.access_clock
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                Some(current.saturating_add(1))
+            })
+            .map(|previous| previous.saturating_add(1))
+            .expect("access clock update is infallible")
     }
 
     fn evict_to_capacity(&mut self) {
@@ -108,7 +113,7 @@ impl ImportCache {
             let Some(lru) = self
                 .entries
                 .iter()
-                .min_by_key(|(_, entry)| entry.last_access.get())
+                .min_by_key(|(_, entry)| entry.last_access.load(Ordering::Relaxed))
                 .map(|(path, _)| path.clone())
             else {
                 break;
@@ -125,6 +130,12 @@ mod tests {
 
     fn file(label: &str) -> File {
         crate::parse(&format!("desc \"{label}\"\n")).file
+    }
+
+    #[test]
+    fn cache_remains_send_and_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<ImportCache>();
     }
 
     #[test]

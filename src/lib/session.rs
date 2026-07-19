@@ -138,6 +138,7 @@ struct PendingTransaction {
     id: String,
     candidate: DocumentRevision,
     challenges: Vec<LockChallenge>,
+    reserved_unlock_tokens: Vec<String>,
 }
 
 /// In-memory target-neutral language-service document state.
@@ -286,6 +287,11 @@ impl DocumentSession {
 
         if let Some(pending) = self.pending.take() {
             if pending.candidate.hash == candidate.hash {
+                for token_id in &pending.reserved_unlock_tokens {
+                    if let Some(token) = self.unlock_tokens.get_mut(token_id) {
+                        token.used = true;
+                    }
+                }
                 let mut accepted = pending.candidate;
                 accepted.version = next_version;
                 self.observed = accepted.clone();
@@ -299,7 +305,8 @@ impl DocumentSession {
                 self.violations.clear();
                 return;
             }
-            self.pending = Some(pending);
+            // Any other observed revision invalidates the candidate's ranges.
+            // Drop it atomically; reserved unlock tokens remain unused.
         }
 
         if self.mode == CollaborationMode::Strict && candidate.hash == self.authoritative.hash {
@@ -403,6 +410,12 @@ impl DocumentSession {
         allow_divergence: bool,
     ) -> DocumentEditResponse {
         let mut violations = Vec::new();
+        if self.pending.is_some() {
+            violations.push(SessionViolation::new(
+                "C-INVALID-EDIT",
+                "another transaction is pending; apply it or observe another revision before preparing a replacement",
+            ));
+        }
         if request.base_version != self.authoritative.version {
             violations.push(SessionViolation::new(
                 "C-STALE-REVISION",
@@ -498,18 +511,20 @@ impl DocumentSession {
             return self.rejected_edit(violations);
         }
 
-        for (slot, from) in strong_unlocks {
-            if let Some(token) = self.unlock_tokens.values_mut().find(|token| {
-                supplied.contains(token.token.as_str())
-                    && !token.used
-                    && token.uri == self.uri
-                    && token.authoritative_version == self.authoritative.version
-                    && token.slot == slot
-                    && token.from == from
-            }) {
-                token.used = true;
-            }
-        }
+        let reserved_unlock_tokens = strong_unlocks
+            .iter()
+            .filter_map(|(slot, from)| {
+                self.unlock_tokens.values().find(|token| {
+                    supplied.contains(token.token.as_str())
+                        && !token.used
+                        && token.uri == self.uri
+                        && token.authoritative_version == self.authoritative.version
+                        && token.slot == *slot
+                        && token.from == *from
+                })
+            })
+            .map(|token| token.token.clone())
+            .collect::<Vec<_>>();
 
         let transaction_id = RevisionHash::from_source(&format!(
             "{}|{}|{}|edit|{}",
@@ -521,6 +536,7 @@ impl DocumentSession {
             id: transaction_id.clone(),
             candidate: candidate.clone(),
             challenges: new_challenges,
+            reserved_unlock_tokens,
         });
         DocumentEditResponse {
             schema_version: LANGUAGE_SERVICE_SCHEMA_VERSION,
@@ -578,6 +594,12 @@ impl DocumentSession {
                 "only a Human actor may restore the authoritative revision",
             )]);
         }
+        if self.pending.is_some() {
+            return self.rejected_edit(vec![SessionViolation::new(
+                "C-INVALID-EDIT",
+                "another transaction is pending; apply it or observe another revision before preparing a restore",
+            )]);
+        }
         if base_version != self.authoritative.version {
             return self.rejected_edit(vec![SessionViolation::new(
                 "C-STALE-REVISION",
@@ -602,6 +624,7 @@ impl DocumentSession {
             id: transaction_id.clone(),
             candidate: candidate.clone(),
             challenges: Vec::new(),
+            reserved_unlock_tokens: Vec::new(),
         });
         DocumentEditResponse {
             schema_version: LANGUAGE_SERVICE_SCHEMA_VERSION,
@@ -614,7 +637,6 @@ impl DocumentSession {
     }
 
     fn rejected_edit(&mut self, violations: Vec<SessionViolation>) -> DocumentEditResponse {
-        self.pending = None;
         DocumentEditResponse {
             schema_version: LANGUAGE_SERVICE_SCHEMA_VERSION,
             accepted: false,
@@ -988,6 +1010,7 @@ mod tests {
         });
         assert!(review.accepted, "{:?}", review.violations);
 
+        let mut session = DocumentSession::open("file:///delegated.mms", "");
         let delegated = session.prepare_edit(DocumentEditRequest {
             base_version: 1,
             actor: Actor::Ai,
@@ -1030,13 +1053,51 @@ mod tests {
             unlock_tokens: vec![token.token.clone()],
             challenge_reason: None,
         };
+        session.set_mode(CollaborationMode::Strict);
         assert!(session.prepare_edit(request()).accepted);
-        let replay = session.prepare_edit(request());
-        assert!(!replay.accepted);
-        assert!(replay
+        assert!(!session.unlock_tokens.get(&token.token).unwrap().used);
+        let blocked = session.prepare_edit(request());
+        assert!(!blocked.accepted);
+        assert!(blocked
             .violations
             .iter()
-            .any(|violation| violation.code == "C-STRONG-UNLOCK-REQUIRED"));
+            .any(|violation| violation.message.contains("transaction is pending")));
+
+        // Observing a different revision cancels the candidate without spending
+        // its reserved token.
+        session.observe_full(source.into());
+        assert!(session.pending_transaction_id().is_none());
+        assert!(!session.unlock_tokens.get(&token.token).unwrap().used);
+        let accepted = session.prepare_edit(request());
+        assert!(accepted.accepted, "{:?}", accepted.violations);
+        session.observe_full("func$ Pay:\n    steps:\n        charge payment\n".into());
+        assert!(session.pending_transaction_id().is_none());
+        assert!(session.unlock_tokens.get(&token.token).unwrap().used);
+    }
+
+    #[test]
+    fn rejected_prepare_preserves_the_existing_pending_candidate() {
+        let mut session = DocumentSession::open("file:///pending.mms", "desc?? \"draft\"\n");
+        let accepted = session.prepare_edit(DocumentEditRequest {
+            base_version: 1,
+            actor: Actor::Ai,
+            edits: vec![SessionTextEdit {
+                range: None,
+                text: "desc? \"proposal\"\n".into(),
+            }],
+            authorization: HumanAuthorization::default(),
+            unlock_tokens: Vec::new(),
+            challenge_reason: None,
+        });
+        assert!(accepted.accepted);
+        let pending = session.pending_transaction_id().unwrap().to_string();
+
+        let rejected = session.prepare_restore(99, Actor::Human);
+        assert!(!rejected.accepted);
+        assert_eq!(session.pending_transaction_id(), Some(pending.as_str()));
+
+        session.observe_full("desc? \"proposal\"\n".into());
+        assert_eq!(session.authoritative_source(), "desc? \"proposal\"\n");
     }
 
     #[test]

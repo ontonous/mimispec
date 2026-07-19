@@ -33,7 +33,7 @@ an omitted actor or a stale `base_version`.
 
 `mimispec lsp --stdio` implements initialize/shutdown/exit, incremental UTF-16
 text synchronization, publishDiagnostics, semanticTokens/full, hover,
-definition, references, and codeAction. Incremental synchronization currently
+definition, references, codeAction, and codeAction/resolve. Incremental synchronization currently
 reparses the whole document once per received `contentChanges` batch; ranges
 are still applied sequentially with a lightweight line index. It is not
 advertised as an incremental parser.
@@ -41,8 +41,10 @@ advertised as an incremental parser.
 Semantic tokens cover Context Item kind, all nine commitment states, and rule
 attachment. Hover includes local and inherited effective protection.
 Definition/references navigate rule attachments and Flow state targets.
-Syntax recovery code actions for ambiguous prose return standard
-`WorkspaceEdit` values. Lines containing `>>>`, assignment, or a structural
+Syntax recovery and actor-aware suffix actions are unresolved until selected;
+`codeAction/resolve` validates the exact authoritative revision, registers one
+pending transaction, and returns a standard `WorkspaceEdit`. Lines containing
+`>>>`, assignment, or a structural
 block colon receive guidance only and are not rewritten automatically.
 
 ## Frozen custom methods
@@ -64,7 +66,11 @@ violations, and, when accepted, a `workspace_edit`.
 
 An accepted transaction becomes authoritative only after a subsequent
 `didChange` produces the exact candidate SHA-256. A candidate with parser
-errors is rejected as `C-PARTIAL-CANDIDATE`.
+errors is rejected as `C-PARTIAL-CANDIDATE`. While one candidate is pending,
+another prepare is rejected without replacing it. A different observed
+revision cancels the pending candidate because its ranges are stale. Strong
+unlock tokens reserved by a transaction are consumed only after matching hash
+confirmation.
 
 `documentSnapshot` preserves the compatible flat `decision_queue` and
 `delegation_queue` arrays and adds `queue_tree`. The tree groups exact queue

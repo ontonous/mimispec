@@ -5,7 +5,7 @@ use std::io::{self, BufRead, BufReader, Write};
 
 use serde_json::{json, Map, Value};
 
-use crate::ast::{LockIntent, ReviewIntent};
+use crate::ast::{Commitment, LockIntent, ReviewIntent};
 use crate::collaboration::{collect_semantic_slot_snapshots, Actor, HumanAuthorization};
 use crate::diagnostics::{syntax_quick_fixes, Severity};
 use crate::ide::{navigation_at_position, NavigationKind, SemanticTokenKind};
@@ -118,7 +118,7 @@ impl LanguageServer {
                             "hoverProvider": true,
                             "definitionProvider": true,
                             "referencesProvider": true,
-                            "codeActionProvider": true,
+                            "codeActionProvider": { "resolveProvider": true },
                             "semanticTokensProvider": {
                                 "legend": { "tokenTypes": TOKEN_TYPES, "tokenModifiers": [] },
                                 "full": true
@@ -150,6 +150,7 @@ impl LanguageServer {
             "textDocument/definition" => vec![self.definition(id, params)],
             "textDocument/references" => vec![self.references(id, params)],
             "textDocument/codeAction" => vec![self.code_actions(id, params)],
+            "codeAction/resolve" => vec![self.resolve_code_action(id, params)],
             "mimispec/documentSnapshot" => vec![self.document_snapshot(id, params)],
             "mimispec/prepareQueueBatch" => vec![self.prepare_queue_batch(id, params)],
             "mimispec/applyDocumentEdit" => vec![self.apply_document_edit(id, params)],
@@ -382,6 +383,9 @@ impl LanguageServer {
         let Some(session) = self.sessions.get(uri) else {
             return success(id, json!([]));
         };
+        if session.mode() == CollaborationMode::Strict && session.is_divergent() {
+            return success(id, json!([]));
+        }
         let Some(offset) = session.document().line_index().offset(
             session.source(),
             source_position(position),
@@ -396,11 +400,13 @@ impl LanguageServer {
                 json!({
                     "title": fix.title,
                     "kind": "quickfix",
-                    "edit": workspace_edit_for_spans(uri, session, &[(fix.span, fix.replacement)]),
                     "data": {
                         "schemaVersion": LANGUAGE_SERVICE_SCHEMA_VERSION,
                         "uri": uri,
-                        "syntaxRecovery": true
+                        "baseVersion": session.authoritative_version(),
+                        "syntaxRecovery": true,
+                        "span": { "start": fix.span.start, "end": fix.span.end },
+                        "replacement": fix.replacement
                     }
                 })
             })
@@ -412,28 +418,161 @@ impl LanguageServer {
             .filter(|node| node.spans.core.start <= offset && offset <= node.spans.core.end)
             .min_by_key(|node| node.spans.core.len())
         {
-            actions.extend(session.code_actions(node.id).into_iter().map(|action| {
+            actions.extend(session.code_actions(node.id).into_iter().filter_map(|action| {
+                let to = action.to?;
                 let mut value = json!({
                     "title": action.title,
                     "kind": "quickfix",
                     "data": {
                         "schemaVersion": LANGUAGE_SERVICE_SCHEMA_VERSION,
                         "uri": uri,
+                        "baseVersion": session.authoritative_version(),
                         "target": action.target.0,
                         "slot": action.slot.map(|slot| slot.0),
                         "actor": format!("{:?}", action.actor).to_lowercase(),
                         "from": action.from.to_string(),
-                        "to": action.to.map(|state| state.to_string())
+                        "to": to.to_string()
                     }
                 });
                 if !action.allowed {
                     value["disabled"] =
                         json!({ "reason": action.reason.unwrap_or_else(|| "not allowed".into()) });
                 }
-                value
+                Some(value)
             }));
         }
         success(id, Value::Array(actions))
+    }
+
+    fn resolve_code_action(&mut self, id: Option<Value>, mut action: Value) -> Value {
+        if action.get("disabled").is_some() {
+            return success(id, action);
+        }
+        let Some(data) = action.get("data").cloned() else {
+            return success(id, action);
+        };
+        if data.get("schemaVersion").and_then(Value::as_str)
+            != Some(LANGUAGE_SERVICE_SCHEMA_VERSION)
+        {
+            action["disabled"] = json!({ "reason": "unsupported MimiSpec code-action schema" });
+            return success(id, action);
+        }
+        let Some(uri) = data.get("uri").and_then(Value::as_str) else {
+            action["disabled"] = json!({ "reason": "missing document URI" });
+            return success(id, action);
+        };
+        let Some(base_version) = data.get("baseVersion").and_then(Value::as_u64) else {
+            action["disabled"] = json!({ "reason": "missing authoritative base version" });
+            return success(id, action);
+        };
+        let Some(session) = self.sessions.get_mut(uri) else {
+            action["disabled"] = json!({ "reason": "document is not open" });
+            return success(id, action);
+        };
+        if base_version != session.authoritative_version() {
+            action["disabled"] = json!({ "reason": "code action is stale" });
+            return success(id, action);
+        }
+
+        let (edit, actor, challenge_reason) = if data.get("syntaxRecovery").and_then(Value::as_bool)
+            == Some(true)
+        {
+            let span = data.get("span");
+            let start = span
+                .and_then(|span| span.get("start"))
+                .and_then(Value::as_u64)
+                .and_then(|value| u32::try_from(value).ok());
+            let end = span
+                .and_then(|span| span.get("end"))
+                .and_then(Value::as_u64)
+                .and_then(|value| u32::try_from(value).ok());
+            let replacement = data.get("replacement").and_then(Value::as_str);
+            let (Some(start), Some(end), Some(replacement)) = (start, end, replacement) else {
+                action["disabled"] = json!({ "reason": "invalid syntax-recovery edit" });
+                return success(id, action);
+            };
+            let Some(range) = text_range_for_span(
+                session.authoritative_document(),
+                session.authoritative_source(),
+                ByteSpan { start, end },
+            ) else {
+                action["disabled"] = json!({ "reason": "syntax-recovery span is no longer valid" });
+                return success(id, action);
+            };
+            (
+                SessionTextEdit {
+                    range: Some(range),
+                    text: replacement.to_string(),
+                },
+                Actor::Human,
+                None,
+            )
+        } else {
+            let slot_id = data
+                .get("slot")
+                .and_then(Value::as_u64)
+                .and_then(|value| u32::try_from(value).ok());
+            let to = data
+                .get("to")
+                .and_then(Value::as_str)
+                .and_then(parse_commitment);
+            let actor = data
+                .get("actor")
+                .and_then(Value::as_str)
+                .and_then(parse_actor);
+            let (Some(slot_id), Some(to), Some(actor)) = (slot_id, to, actor) else {
+                action["disabled"] = json!({ "reason": "invalid commitment transition data" });
+                return success(id, action);
+            };
+            let Some(slot) = session
+                .authoritative_document()
+                .commitment_slot(crate::lossless::CommitmentSlotId(slot_id))
+                .filter(|slot| slot.semantic_slot)
+            else {
+                action["disabled"] = json!({ "reason": "commitment slot is stale" });
+                return success(id, action);
+            };
+            let Some(range) = text_range_for_span(
+                session.authoritative_document(),
+                session.authoritative_source(),
+                slot.suffix_span,
+            ) else {
+                action["disabled"] =
+                    json!({ "reason": "commitment suffix is no longer addressable" });
+                return success(id, action);
+            };
+            let reason = (actor == Actor::Ai)
+                .then(|| "Code action requested a review of lock-readiness evidence.".to_string());
+            (
+                SessionTextEdit {
+                    range: Some(range),
+                    text: to.to_string(),
+                },
+                actor,
+                reason,
+            )
+        };
+
+        let response = session.prepare_edit(DocumentEditRequest {
+            base_version,
+            actor,
+            edits: vec![edit.clone()],
+            authorization: HumanAuthorization::default(),
+            unlock_tokens: Vec::new(),
+            challenge_reason,
+        });
+        if response.accepted {
+            action["edit"] = workspace_edit(uri, session, &[edit]);
+        } else {
+            let reason = response
+                .violations
+                .iter()
+                .map(|violation| violation.message.as_str())
+                .collect::<Vec<_>>()
+                .join("; ");
+            action["disabled"] = json!({ "reason": reason });
+        }
+        success(id, action)
     }
 
     fn document_snapshot(&self, id: Option<Value>, params: Value) -> Value {
@@ -1194,6 +1333,21 @@ fn parse_actor(actor: &str) -> Option<Actor> {
     }
 }
 
+fn parse_commitment(value: &str) -> Option<Commitment> {
+    match value {
+        "" | "none" => Some(Commitment::None),
+        "?" => Some(Commitment::Question),
+        "??" => Some(Commitment::QuestionQuestion),
+        "$" => Some(Commitment::Locked),
+        "$?" => Some(Commitment::LockedQuestion),
+        "$??" => Some(Commitment::LockedQuestionQuestion),
+        "$$" => Some(Commitment::StrongLocked),
+        "$$?" => Some(Commitment::StrongLockedQuestion),
+        "$$??" => Some(Commitment::StrongLockedQuestionQuestion),
+        _ => None,
+    }
+}
+
 fn parse_mode(mode: &str) -> Option<CollaborationMode> {
     match mode.to_ascii_lowercase().as_str() {
         "advisory" => Some(CollaborationMode::Advisory),
@@ -1245,25 +1399,6 @@ fn text_range_for_span(
     })
 }
 
-fn workspace_edit_for_spans(
-    uri: &str,
-    session: &DocumentSession,
-    edits: &[(ByteSpan, String)],
-) -> Value {
-    let edits = edits
-        .iter()
-        .map(|(span, replacement)| {
-            json!({
-                "range": span_range(session, *span),
-                "newText": replacement
-            })
-        })
-        .collect::<Vec<_>>();
-    let mut changes = Map::new();
-    changes.insert(uri.into(), Value::Array(edits));
-    json!({ "changes": changes })
-}
-
 fn zero_range() -> Value {
     json!({ "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 1 } })
 }
@@ -1271,11 +1406,7 @@ fn zero_range() -> Value {
 fn parser_error_range(session: &DocumentSession, line: usize, column: usize) -> Value {
     let line_index = line.saturating_sub(1) as u32;
     let scalar_column = column.saturating_sub(1);
-    let line_text = session
-        .source()
-        .lines()
-        .nth(line_index as usize)
-        .unwrap_or("");
+    let line_text = physical_line(session.source(), line_index as usize).unwrap_or("");
     let byte_offset = line_text
         .char_indices()
         .nth(scalar_column)
@@ -1285,6 +1416,33 @@ fn parser_error_range(session: &DocumentSession, line: usize, column: usize) -> 
         "start": { "line": line_index, "character": utf16 },
         "end": { "line": line_index, "character": utf16.saturating_add(1) }
     })
+}
+
+fn physical_line(source: &str, target: usize) -> Option<&str> {
+    let bytes = source.as_bytes();
+    let mut start = 0usize;
+    let mut line = 0usize;
+    loop {
+        if start > bytes.len() {
+            return None;
+        }
+        let mut end = start;
+        while end < bytes.len() && !matches!(bytes[end], b'\r' | b'\n') {
+            end += 1;
+        }
+        if line == target {
+            return Some(&source[start..end]);
+        }
+        if end == bytes.len() {
+            return None;
+        }
+        start = if bytes[end] == b'\r' && bytes.get(end + 1) == Some(&b'\n') {
+            end + 2
+        } else {
+            end + 1
+        };
+        line += 1;
+    }
 }
 
 fn severity_number(severity: Severity) -> u8 {
@@ -1532,9 +1690,72 @@ mod tests {
             .filter(|action| action.pointer("/data/syntaxRecovery") == Some(&Value::Bool(true)))
             .collect::<Vec<_>>();
         assert_eq!(syntax.len(), 2, "{actions:?}");
-        assert!(syntax.iter().all(|action| action["edit"]["changes"][uri]
+        assert!(syntax.iter().all(|action| action.get("edit").is_none()));
+
+        let resolved = server.handle(json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "codeAction/resolve",
+            "params": syntax[0]
+        }));
+        assert!(resolved[0]["result"]["edit"]["changes"][uri]
             .as_array()
-            .is_some_and(|edits| edits.len() == 1)));
+            .is_some_and(|edits| edits.len() == 1));
+        assert!(server
+            .sessions
+            .get(uri)
+            .unwrap()
+            .pending_transaction_id()
+            .is_some());
+    }
+
+    #[test]
+    fn actor_code_action_resolves_through_a_confirmable_transaction() {
+        let uri = "file:///actor-action.mms";
+        let mut server = LanguageServer::default();
+        server.handle(json!({
+            "jsonrpc": "2.0", "method": "textDocument/didOpen",
+            "params": { "textDocument": {
+                "uri": uri, "version": 1, "languageId": "mimispec",
+                "text": "desc?? \"delegated\"\n"
+            }}
+        }));
+        let listed = server.handle(json!({
+            "jsonrpc": "2.0", "id": 1, "method": "textDocument/codeAction",
+            "params": {
+                "textDocument": { "uri": uri },
+                "range": { "start": { "line": 0, "character": 2 }, "end": { "line": 0, "character": 2 } },
+                "context": { "diagnostics": [] }
+            }
+        }));
+        let action = listed[0]["result"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|action| action.pointer("/data/to") == Some(&json!("?")))
+            .unwrap()
+            .clone();
+        let resolved = server.handle(json!({
+            "jsonrpc": "2.0", "id": 2, "method": "codeAction/resolve", "params": action
+        }));
+        assert!(resolved[0]["result"]["edit"]["changes"][uri].is_array());
+        assert!(server
+            .sessions
+            .get(uri)
+            .unwrap()
+            .pending_transaction_id()
+            .is_some());
+
+        server.handle(json!({
+            "jsonrpc": "2.0", "method": "textDocument/didChange",
+            "params": {
+                "textDocument": { "uri": uri, "version": 2 },
+                "contentChanges": [{ "text": "desc? \"delegated\"\n" }]
+            }
+        }));
+        let session = server.sessions.get(uri).unwrap();
+        assert_eq!(session.authoritative_source(), "desc? \"delegated\"\n");
+        assert!(session.pending_transaction_id().is_none());
     }
 
     #[test]

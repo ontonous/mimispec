@@ -759,11 +759,24 @@ fn print_queue_scope(scope: &mimispec::diagnostics::QueueScopeNode, depth: usize
         "{indent}{} [decision={} delegation={}]",
         scope.header, scope.decision_count, scope.delegation_count
     );
-    for item in &scope.items {
-        println!("{indent}  - [{}] {}", item.state, item.anchor);
-    }
-    for child in &scope.children {
-        print_queue_scope(child, depth + 1);
+    let mut entries =
+        scope
+            .items
+            .iter()
+            .enumerate()
+            .map(|(index, item)| (item.span.start, false, index))
+            .chain(scope.children.iter().enumerate().map(|(index, child)| {
+                (child.span.map_or(u32::MAX, |span| span.start), true, index)
+            }))
+            .collect::<Vec<_>>();
+    entries.sort_by_key(|entry| (entry.0, entry.1, entry.2));
+    for (_, child, index) in entries {
+        if child {
+            print_queue_scope(&scope.children[index], depth + 1);
+        } else {
+            let item = &scope.items[index];
+            println!("{indent}  - [{}] {}", item.state, item.anchor);
+        }
     }
 }
 
