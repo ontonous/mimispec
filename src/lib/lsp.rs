@@ -1639,6 +1639,99 @@ mod tests {
     }
 
     #[test]
+    fn author_journey_recovers_syntax_reviews_queue_and_confirms_batch() {
+        let uri = "file:///author-journey.mms";
+        let source =
+            "desc?? \"draft service\"\nfunc Work:\n    steps:\n        bind and listen on\n";
+        let mut server = LanguageServer::default();
+        server.handle(json!({
+            "jsonrpc": "2.0", "method": "textDocument/didOpen",
+            "params": { "textDocument": {
+                "uri": uri, "version": 1, "languageId": "mimispec", "text": source
+            }}
+        }));
+
+        let listed = server.handle(json!({
+            "jsonrpc": "2.0", "id": 1, "method": "textDocument/codeAction",
+            "params": {
+                "textDocument": { "uri": uri },
+                "range": { "start": { "line": 3, "character": 10 }, "end": { "line": 3, "character": 10 } },
+                "context": { "diagnostics": [] }
+            }
+        }));
+        let action = listed[0]["result"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|action| action.pointer("/data/syntaxRecovery") == Some(&Value::Bool(true)))
+            .unwrap()
+            .clone();
+        let resolved = server.handle(json!({
+            "jsonrpc": "2.0", "id": 2, "method": "codeAction/resolve", "params": action
+        }));
+        let replacement = resolved[0]["result"]["edit"]["changes"][uri][0]["newText"]
+            .as_str()
+            .unwrap();
+        let corrected = source.replacen("bind and listen on", replacement, 1);
+        server.handle(json!({
+            "jsonrpc": "2.0", "method": "textDocument/didChange",
+            "params": {
+                "textDocument": { "uri": uri, "version": 2 },
+                "contentChanges": [{ "text": corrected.clone() }]
+            }
+        }));
+
+        let (base_version, delegated_slot) = {
+            let session = server.sessions.get(uri).unwrap();
+            assert!(session.errors().is_empty());
+            assert!(session.pending_transaction_id().is_none());
+            (
+                session.authoritative_version(),
+                session.diagnostics().delegation_queue[0].slot.0,
+            )
+        };
+        let batched = server.handle(json!({
+            "jsonrpc": "2.0", "id": 3, "method": "mimispec/prepareQueueBatch",
+            "params": {
+                "uri": uri, "base_version": base_version, "actor": "human",
+                "slot_ids": [delegated_slot], "target": "?"
+            }
+        }));
+        assert_eq!(batched[0]["result"]["accepted"], true, "{batched:?}");
+        assert!(batched[0]["result"]["workspace_edit"]["changes"][uri].is_array());
+
+        let reviewed = corrected.replacen("desc??", "desc?", 1);
+        server.handle(json!({
+            "jsonrpc": "2.0", "method": "textDocument/didChange",
+            "params": {
+                "textDocument": { "uri": uri, "version": 3 },
+                "contentChanges": [{ "text": reviewed }]
+            }
+        }));
+        let snapshot = server.handle(json!({
+            "jsonrpc": "2.0", "id": 4, "method": "mimispec/documentSnapshot",
+            "params": { "uri": uri }
+        }));
+        assert_eq!(
+            snapshot[0]["result"]["delegation_queue"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+        assert_eq!(
+            snapshot[0]["result"]["decision_queue"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        let session = server.sessions.get(uri).unwrap();
+        assert_eq!(session.authoritative_version(), 3);
+        assert!(session.pending_transaction_id().is_none());
+    }
+
+    #[test]
     fn actor_code_action_resolves_through_a_confirmable_transaction() {
         let uri = "file:///actor-action.mms";
         let mut server = LanguageServer::default();

@@ -2,7 +2,7 @@
   "schema_version": "mimispec.provenance/0.1",
   "mms": {
     "path": "mimispec/mimispec/docs/corpora/mimi-kv-real-project.mms",
-    "revision_sha256": "afdd0b83bdc2dc8edba920d5b8b3baa83e7a0dbf62bff5ef232ee23c8e2aac4a"
+    "revision_sha256": "565366ae9fda0e9617171ff7c54214aa2e12dcfb00f3e0dbfb2bada81f249e35"
   },
   "source": {
     "language": "mimi",

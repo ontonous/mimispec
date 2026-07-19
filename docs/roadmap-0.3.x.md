@@ -2,14 +2,20 @@
 
 > Current released version: `0.2.1`
 >
+> Development snapshot status: the current main line is technically ready to
+> be cut as `0.3.0-dev` for explicit source/binary evaluation. No `0.3.0-dev`
+> Cargo version, tag, or artifact exists until a separately authorized release
+> operation performs those changes.
+>
 > This roadmap covers the MimiSpec language, canonical parser, document model,
 > collaboration semantics, diagnostics, and language-service protocol only.
 >
-> Main development status (2026-07-19): Core milestones M0-M3, the M4 stdio
-> language service, and the technical M5 stabilization gates are implemented
-> in the working tree. A real-project reverse-transcription trial added two
-> internal usability follow-ups, and the independent 5-author/25-document gate
-> is still incomplete, so Cargo and published release facts remain `0.2.1`.
+> Main development status (2026-07-20): M0-M4 and the technical portion of M5
+> are implemented in the working tree. Four real-project reverse transcriptions
+> close the internal Action-recovery and queue-scalability P1s. The independent
+> trial remains at 0/5 authors, 0/25 documents, 0/5 domains, and 0/4 five-minute
+> successes, so Cargo and published release facts remain `0.2.1` and RC
+> preparation remains blocked.
 
 ## 1. Series Goal
 
@@ -85,6 +91,8 @@ Every 0.3.x release must preserve these invariants:
 
 The historical `0.3.0`-`0.3.5` labels were never published. They are internal
 milestones M0-M5, consolidated into one future public version: `0.3.0`.
+`0.3.0-dev` names the optional development snapshot between technical M5 and
+the independent-author gate; it is not an additional milestone or an RC.
 
 | Milestone | Theme | Main status | Required outcome |
 |---------|-------|-------------|------------------|
@@ -93,10 +101,12 @@ milestones M0-M5, consolidated into one future public version: `0.3.0`.
 | `M2` | Collaboration validation | Implemented | Actor transition matrix, semantic footprints, SHA-256 revisions, lock challenges, structured patch validation |
 | `M3` | Parser and diagnostic contract | Implemented | Context Item API, versioned JSON, non-loss diagnostics, semantic queries |
 | `M4` | Language-service protocol | Implemented, release-gated | advisory/strict session state, UTF-16 sync, stdio LSP, navigation, hover, semantic tokens, actor-declared edits |
-| `M5` | Compatibility and stabilization | External trial pending | conformance suite, corpus, performance, fuzzing, API/wire freeze, 5-author/25-document trial, release candidate |
+| `M5` | Compatibility and stabilization | Technical gates implemented; external trial pending | conformance suite, corpus, performance, fuzzing, API/wire freeze, 5-author/25-document trial, release candidate |
 
-`0.3.0-rc.1` may be prepared only after M5's external trial passes. The final
-`0.3.0` requires a 14-day RC observation window with no unresolved P0/P1.
+The technical tree may be explicitly packaged as `0.3.0-dev` without claiming
+independent usability validation. `0.3.0-rc.1` may be prepared only after M5's
+external trial passes. The final `0.3.0` requires a 14-day RC observation
+window with no unresolved P0/P1.
 
 The dependency order is strict:
 
@@ -325,7 +335,7 @@ the corrected semantics.
   `partial` booleans ride alongside the versioned `status` field in CLI
   envelopes; `is_commit_ready()` remains as a compatibility alias for
   `is_confirmed()`.
-- Corpus covering: ✅ Ten technical acceptance corpora under
+- Corpus covering: ✅ Twelve technical acceptance corpora under
   `docs/corpora/`, each gated by `corpus_acceptance_tests` in
   `src/lib/mod.rs`:
   - plain-language product intent (`plain-product-intent.mms`);
@@ -337,8 +347,10 @@ the corrected semantics.
   - multilingual descriptions (`multilingual.mms`);
   - cohesive real-world product usability (`real-world-family-ledger.mms`);
   - MIMI key-value server/client transcription (`mimi-kv-real-project.mms`);
-  - 2,014-line MIMI Actor/chat transcription (`mimichat-real-project.mms`).
-  The two reverse transcriptions are technical fixtures, not independent-author
+  - 2,014-line MIMI Actor/chat transcription (`mimichat-real-project.mms`);
+  - 1,009-line Markdown/HTML transcription (`mimi-markdown-real-project.mms`);
+  - 755-line log-analysis pipeline transcription (`mimi-log-real-project.mms`).
+  The four reverse transcriptions are technical fixtures, not independent-author
   trial evidence; findings are recorded in
   `docs/0.3-real-project-transcription-report.md`.
 - Parser/formatter fuzzing and property tests. ✅ Implemented in
@@ -350,7 +362,7 @@ the corrected semantics.
 - Large-file performance and memory baseline. ✅ Measured on release builds
   with `examples/perf_baseline.rs`; deterministic slot-linearity guard added
   as `stress_tests::stress_slot_count_scales_linearly_with_module_size`. The
-  baseline now also measures both real MIMI transcriptions, QueueTree/IDE
+  baseline now also measures all four real MIMI transcriptions, QueueTree/IDE
   snapshot construction, and a 200-change sequential UTF-16 batch that parses
   only once.
 
@@ -373,17 +385,19 @@ the corrected semantics.
 - Language-neutral conformance suite. ✅ `mimispec conformance check` validates
   parse/AST goldens, lossless attachment/span facts, the commitment transition
   matrix, and an LSP transcript under `mimispec.conformance/0.3`.
-- Internal real-project usability follow-ups. ✅ The `mimi-kv`/`mimichat`
-  trial's two P1 findings now have contextual E0010 guidance, conservative
-  standard-LSP quick fixes, hierarchical QueueTree presentation, VS Code tree
-  navigation, and Human-only atomic queue batching. Flat queue fields and
-  `--flat-queues` remain available for compatibility. This closes the internal
-  technical P1s but does not substitute for independent authors.
+- Internal real-project usability follow-ups. ✅ The four-project
+  `mimi-kv`/`mimichat`/`mimi-markdown`/`mimi-log` trial now has contextual
+  E0010 guidance, conservative standard-LSP quick fixes, hierarchical
+  QueueTree presentation, VS Code tree navigation, and Human-only atomic queue
+  batching. Flat queue fields and `--flat-queues` remain available for
+  compatibility. This closes the internal technical P1s but does not
+  substitute for independent authors.
 - Independent usability gate. ⏳ The release workflow requires five independent
   authors, 25 final documents across five domains, four successful five-minute
   entries, exact lossless/semantic round-trip, and zero open P0/P1. The
-  machine-readable manifest is currently `in_progress`; this intentionally
-  blocks an RC.
+  machine-readable manifest is currently `in_progress` with 0/5 authors,
+  0/25 documents, 0/5 domains, and 0/4 five-minute successes. This
+  intentionally blocks an RC, but not a clearly labelled development snapshot.
 
 ### Acceptance
 

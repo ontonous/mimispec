@@ -1,7 +1,8 @@
-# Migrating from MimiSpec 0.2.1 to 0.3.x
+# Migrating from MimiSpec 0.2.1 to 0.3.0-dev
 
-> Status: migration guide for the implemented but unreleased main-line 0.3
-> Core draft. Published behavior remains `0.2.1` until an explicit 0.3 release.
+> Status: migration guide for the implemented main-line `0.3.0-dev` snapshot
+> candidate. Published behavior and Cargo remain `0.2.1` until an explicit
+> release; the independent-author gate still blocks `0.3.0-rc.1`.
 
 ## 1. Compatibility Promise
 
@@ -195,8 +196,8 @@ exact indentation, or source spelling must remain unchanged.
 The consolidated 0.3.0 M5 milestone provides a stabilization toolchain that
 migration consumers can rely on before the independent RC trial completes:
 
-- `cargo test --lib` — 225 default-Core tests, including the families below.
-- `cargo test --all-features --lib` — 246 tests including the explicitly
+- `cargo test --lib` — 228 default-Core tests, including the families below.
+- `cargo test --all-features --lib` — 249 tests including the explicitly
   experimental target/provenance layers.
 - `cargo test --release stress_tests` — large-file slot-linearity guard.
 - `cargo test --release property_tests` — seven seed-deterministic
@@ -207,7 +208,7 @@ migration consumers can rely on before the independent RC trial completes:
 - `cargo run --release --example perf_baseline` — measures parse/render/
   lossless timings for 500/1000/2000-func modules. Published budget numbers
   live in `docs/roadmap-0.3.x.md` §10.
-- `docs/corpora/` — ten technical acceptance corpora
+- `docs/corpora/` — twelve technical acceptance corpora
   (`corpus_acceptance_tests` in `src/lib/mod.rs`):
   - `plain-product-intent.mms` — five-minute entry, no named wrapper;
   - `state-transitions.mms` — anonymous/named Flow, event labels, open-world;
@@ -223,6 +224,10 @@ migration consumers can rely on before the independent RC trial completes:
     server and client from the sibling MIMI checkout;
   - `mimichat-real-project.mms` — reverse transcription of a 2,014-line
     Actor/concurrency/chat project, including unresolved production questions.
+  - `mimi-markdown-real-project.mms` — reverse transcription of a 1,009-line
+    Markdown/HTML parser-renderer, including escaping and malformed-input gaps;
+  - `mimi-log-real-project.mms` — reverse transcription of a 755-line log
+    pipeline, including parser, statistics, serialization, and CLI defects.
 - `docs/api-stability-0.3.md` — the Tier 1/2/3 public API freeze. Tier 1
   (parser entry points, result types, AST shape, `AST_SCHEMA_VERSION`, and
   `ErrorCode` assignments) is frozen for the remainder of 0.3.x.
@@ -231,6 +236,9 @@ migration consumers can rely on before the independent RC trial completes:
 - `mimispec lsp --stdio` — LSP 3.17 server with frozen
   `mimispec.ls/0.3` custom methods. The VS Code extension falls back to the
   released 0.2.1 parse process when the server command is unavailable.
+- `mimispec --json diagnose file.mms` emits the versioned
+  `mimispec.collaboration/0.3` envelope with `kind: "diagnose"`; global flags
+  may appear before or after the subcommand.
 - Experimental provenance is compiled with `experimental-provenance`;
   Materialize/Profile/Workflow require `experimental-targets`. Neither feature
   is enabled by default or required by the Core parser/LSP.

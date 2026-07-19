@@ -1,8 +1,9 @@
-# MimiSpec 语法规范草案（0.3.x 目标）
+# MimiSpec 语法规范草案（0.3.0-dev）
 
 > **版本状态说明**：当前已发布的参考实现是 `v0.2.1`。当前 main 工作树已经
-> 实现本文所述 0.3 Core parser/AST 主干，但尚未发布、尚未改 Cargo 版本；
-> 因此本文不能作为 crates.io 已发布 0.3 的声明。0.3.x 的收口顺序见
+> 实现本文所述 0.3 Core parser/AST、无损文档与协作协议，可作为
+> `0.3.0-dev` 开发快照候选；但尚未发布、尚未改 Cargo 版本。因此本文不能
+> 作为 crates.io 已发布 0.3 或 RC 的声明。0.3.x 的收口顺序见
 > [`roadmap-0.3.x.md`](roadmap-0.3.x.md)，后缀的规范语义见
 > [`commitment-state-machine.md`](commitment-state-machine.md)，Core 的正式设计
 > 边界见 [`0.3.x-design-zh.md`](0.3.x-design-zh.md)。

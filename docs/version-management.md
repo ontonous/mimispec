@@ -45,8 +45,11 @@
 | `-alpha.N` | 内部实验版，可能大幅变更 | `1.0.0-alpha.1` |
 | `-beta.N` | 功能冻结，主要 bug 修复 | `1.0.0-beta.2` |
 | `-rc.N` | 发布候选，仅关键修复 | `1.0.0-rc.3` |
+| `-dev` | 可复现的开发快照，不承诺 RC 级外部验证 | `0.3.0-dev` |
 
-预发布版本**优先级低于**正式版本：`1.0.0-alpha < 1.0.0-rc.1 < 1.0.0`。
+预发布版本**优先级低于**正式版本：`0.3.0-dev < 0.3.0-rc.1 < 0.3.0`。
+`-dev` 只描述显式打包的试用快照，不意味着 crates.io 已发布，也不绕过 RC 的
+独立作者门禁。
 
 ---
 
@@ -91,7 +94,22 @@ main ── v1.0.0 ── v1.0.1 ── v1.1.0 ── ...
 0.3 的历史 `0.3.0`-`0.3.5` 名称只是未发布的内部里程碑 M0-M5。
 它们不会被伪造为补丁发布历史；首个候选版本统一为 `0.3.0-rc.1`。
 
-### 3.1 标准化发布步骤
+当前 main 已通过 M0-M4 与 M5 技术门禁，可在明确授权后切出 `0.3.0-dev` 开发快照，
+供源码/二进制试用。它不是“候选版本”：独立试用当前为 0/5 作者、0/25 文档、
+0/5 领域和 0/4 五分钟成功，仍然阻断 `0.3.0-rc.1`。
+
+### 3.1 开发快照步骤
+
+```
+1. 保持 main 的 fmt、三种 clippy feature 矩阵、default/all-feature test、
+   release stress/property、conformance、stdio LSP、VS Code 和 package 门禁为绿色
+2. 确认 README、CHANGELOG、迁移指南明确区分 0.2.1 / 0.3.0-dev / 0.3.0-rc.1
+3. 仅在用户明确授权后，把 Cargo 版本改为 0.3.0-dev 并重新运行 package/install 门禁
+4. 提交版本变更、创建 annotated tag 和发布均需单独明确授权
+5. 开发快照反馈进入回归测试；不得计入独立作者门禁，除非满足试用协议
+```
+
+### 3.2 RC 与正式版发布步骤
 
 ```
 1. 保持 main 全部门禁为绿色
@@ -103,17 +121,18 @@ main ── v1.0.0 ── v1.0.1 ── v1.1.0 ── ...
 7. 无 P0/P1 后以同一门禁准备正式 `0.3.0`
 ```
 
-### 3.2 标签规范
+### 3.3 标签规范
 
 ```
 v1.0.0          # 正式发布
 v1.0.0-rc.1     # 候选发布
 v1.0.0-beta.1   # Beta 版
+v0.3.0-dev      # 明确授权后创建的开发快照
 ```
 
 标签使用带注释的标签（annotated tag），包含发布说明摘要。
 
-### 3.3 预发布流程
+### 3.4 预发布流程
 
 ```bash
 # RC 示例
@@ -175,18 +194,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - run: cargo clippy -- -D warnings
       - run: cargo test --lib
       - run: cargo test --release stress_tests
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: clippy
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo clippy --features experimental-provenance --all-targets -- -D warnings
+      - run: cargo clippy --all-features --all-targets -- -D warnings
 ```
 
 ### 5.2 CI 阶段
 
 | 阶段 | 命令 | 超时 | 说明 |
 |------|------|------|------|
-| Lint | `cargo clippy -- -D warnings` | 5m | 零警告策略，将警告视为错误 |
-| 单元测试 | `cargo test --lib` | 5m | 运行所有 75+ 个单元测试 |
+| Lint | `cargo clippy --all-targets -- -D warnings` + provenance/all-features 变体 | 5m | 三种 feature 组合均零警告 |
+| 单元测试 | `cargo test --lib` | 5m | 当前 default Core 228 个测试 |
 | 集成测试 | `cargo test` | 5m | 含 bin 测试 |
+| 实验能力 | `cargo test --all-features --all-targets` | 10m | 当前全 feature library 249 个测试，并覆盖 targets |
 | 压力测试 | `cargo test --release stress_tests` | 30m | 1000 个 items 的大文件测试 |
 | 构建 | `cargo build --release` | 10m | 验证发布构建 |
 
@@ -220,9 +249,9 @@ jobs:
 
 | 评估项 | 当前状态 | 等级 |
 |--------|----------|------|
-| 版本号 | 已发布/Cargo 仍为 `0.2.1`；0.3 尚未满足 RC gate | ✅ |
+| 版本号 | 已发布/Cargo 仍为 `0.2.1`；main 已可切 `0.3.0-dev`，尚未满足 RC gate | ✅ |
 | Git Tag | 发布基线为 `v0.2.1` | ✅ |
-| CHANGELOG | 已记录未发布的合并版 0.3 开发内容 | ✅ |
+| CHANGELOG | 已记录 `0.3.0-dev` 快照候选及未发布的合并版 0.3 内容 | ✅ |
 | 发布流程 | tag workflow 已存在，但 tag/publish 必须明确授权 | ✅ |
 
 ### 6.2 分支管理 / Branch Management

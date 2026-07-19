@@ -441,6 +441,14 @@ mod tests {
                 include_str!("../../docs/corpora/mimichat-real-project.provenance.json"),
                 include_str!("../../docs/corpora/mimichat-real-project.mms"),
             ),
+            (
+                include_str!("../../docs/corpora/mimi-markdown-real-project.provenance.json"),
+                include_str!("../../docs/corpora/mimi-markdown-real-project.mms"),
+            ),
+            (
+                include_str!("../../docs/corpora/mimi-log-real-project.provenance.json"),
+                include_str!("../../docs/corpora/mimi-log-real-project.mms"),
+            ),
         ] {
             let manifest: ProvenanceManifest = serde_json::from_str(manifest_text).unwrap();
             assert_eq!(manifest.schema_version, PROVENANCE_SCHEMA_VERSION);

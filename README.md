@@ -17,9 +17,12 @@
 ---
 
 > Release status: crates.io, Cargo and the latest release tag remain `0.2.1`.
-> The main line contains the consolidated, unreleased 0.3 Core, stdio language
-> server, conformance suite, and a release-blocking usability gate. Published
-> facts stay at 0.2.1 until the independent trial and an authorized release.
+> The current main line is technically ready to be cut as a `0.3.0-dev`
+> development snapshot for source/binary evaluation. It includes the
+> consolidated 0.3 Core, stdio language server, conformance suite, and package
+> gates. It is not `0.3.0-rc.1`: the independent 5-author/25-document usability
+> gate is still empty, and any version bump, tag, or publication requires an
+> explicit release action.
 
 MimiSpec embeds a **progressive workflow** — from uncertainty to structured to fully locked — directly into the syntax. Every phase of design is a **syntactically valid `.mms` file**.
 
@@ -91,6 +94,7 @@ mimispec path/to/file.mms --render        # render back to source
 mimispec path/to/file.mms --latex         # render math to LaTeX
 mimispec diagnose path/to/file.mms        # scope-grouped queues + intent diagnostics
 mimispec diagnose --flat-queues path/to/file.mms  # compatible flat queue view
+mimispec --json diagnose path/to/file.mms # mimispec.collaboration/0.3 envelope
 mimispec path/to/file.mms --diagnostics   # same as diagnose
 mimispec lsp --stdio                       # long-lived LSP 3.17 server
 mimispec conformance check                # verify mimispec.conformance/0.3
@@ -110,8 +114,9 @@ cargo run --features experimental-targets -- workflow path/to/file.mms --scope p
 ```
 
 > Note: the current crates.io release is still `0.2.1`. Lossless parsing,
-> collaboration validation, and `diagnose` are under development on `main` for
-> the `0.3.x` series and are not yet a published release contract. The
+> collaboration validation, and `diagnose` are implemented in the
+> `0.3.0-dev` snapshot candidate on `main`, but are not yet a published crate
+> contract. The
 > Feature-gated `materialize`, `profile`, `provenance`, and `workflow` commands
 > are provisional research surfaces outside the 0.3 Core-language roadmap.
 
@@ -142,7 +147,7 @@ if result.errors.is_empty() {
     }
 }
 
-// 0.3.x development APIs (available on main; not the published 0.2.1 crate):
+// 0.3.0-dev APIs (available on main; not the published 0.2.1 crate):
 // let lossless = mimispec::parse_lossless(source);
 // let report = mimispec::diagnostics::analyze_document(&lossless.document, &lossless.errors);
 ```
@@ -219,9 +224,10 @@ mimispec/
 
 | Document | Description |
 |----------|-------------|
-| [Syntax Specification Draft](docs/specification.md) | Implemented main-line 0.3 Core draft; released package remains 0.2.1 |
-| [0.3.x Roadmap](docs/roadmap-0.3.x.md) | Core-language plan from semantic reset through lossless parsing and stabilization |
-| [0.3.x Usability Report](docs/0.3-usability-report.md) | Real-world family-ledger trial, verified behavior, and remaining completion gaps |
+| [Syntax Specification Draft](docs/specification.md) | Implemented `0.3.0-dev` Core contract; released package remains 0.2.1 |
+| [0.3.x Roadmap](docs/roadmap-0.3.x.md) | Completed technical milestones, dev snapshot boundary, and remaining RC gate |
+| [0.3 Usability Report](docs/0.3-usability-report.md) | Technical snapshot readiness and the unfulfilled independent-author gate |
+| [Real-Project Transcription Report](docs/0.3-real-project-transcription-report.md) | Four non-trivial MIMI transcriptions and their authoring/review findings |
 | [0.3 Language Service Protocol](docs/language-service-protocol-0.3.md) | Frozen stdio LSP custom methods, collaboration modes, and error codes |
 | [0.3.x Chinese Design Overview](docs/0.3.x-design-zh.md) | Formal Core baseline for Context, descriptions, rules, clauses, Flow, and commitment |
 | [Commitment State Machine](docs/commitment-state-machine.md) | Normative `$`/`?` transitions, actor permissions, and lock challenges |
@@ -284,7 +290,7 @@ A: Yes. MimiSpec is a fully self-contained specification language. AI tooling is
 A: MimiSpec and Mimi are separate languages with independent syntax, ASTs, toolchains, and release cycles. `.mms` is a progressive, natural-language-friendly intent format; `.mimi` is an independently usable Typestate/Flow systems language. An external language or document container may pass MMS text to the canonical MimiSpec parser, but that wrapper does not redefine MimiSpec syntax or semantics.
 
 **Q: What is the current released version?**
-A: The current release is `v0.2.1`. Parsing, cross-file resolution, symbol tables, incremental caching, and the CLI are available. The `0.3.x` series will correct Context/`desc`/clause/Flow semantics, add a lossless document model, and make the commitment protocol enforceable; forward-looking specification text is not yet released behavior.
+A: The current published release is `v0.2.1`. Main now implements the consolidated 0.3 Core, lossless document model, enforceable commitment protocol, diagnostics, and stdio language service, and is ready to be cut as a `0.3.0-dev` evaluation snapshot. It is not an RC or stable release; the independent 5-author/25-document trial remains at zero and still blocks `0.3.0-rc.1`.
 
 **Q: How do I contribute?**  
 A: See [CONTRIBUTING.md](CONTRIBUTING.md). All contributions — code, docs, issues — are welcome.

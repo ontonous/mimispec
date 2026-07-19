@@ -2,6 +2,8 @@
 
 > Wire schema: `mimispec.ls/0.3`. Transport in 0.3.0 is LSP 3.17 over stdio
 > only. Rust `ide`, `session`, and `lsp` implementation types are not frozen.
+> The wire contract is implemented in the `0.3.0-dev` snapshot candidate on
+> main; the published crate and Cargo version remain `0.2.1`.
 
 ## Document state
 

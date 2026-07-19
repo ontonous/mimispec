@@ -4,6 +4,10 @@
 
 First of all, thank you for considering contributing to MimiSpec!
 
+> 当前发布/Cargo/tag 仍为 `0.2.1`。main 已达到 `0.3.0-dev` 技术快照候选状态；
+> 独立 5 人/25 文档试用仍阻断 `0.3.0-rc.1`。贡献者不得把 main 能力描述成已
+> 发布的 crate 契约。
+
 ## 行为准则 / Code of Conduct
 
 本项目采用 [Contributor Covenant v2.0](CODE_OF_CONDUCT.md)。参与即表示您同意遵守其条款。
@@ -29,14 +33,21 @@ rustup update stable
 cargo build              # 编译 / Build
 cargo test --lib         # 单元测试 / Unit tests
 cargo test               # 全量测试 / All tests (incl. bin)
-cargo clippy -- -D warnings        # lint 检查 / Lint
+cargo test --all-features --all-targets  # 实验 feature 与全部 target
+cargo clippy --all-targets -- -D warnings
+cargo clippy --features experimental-provenance --all-targets -- -D warnings
+cargo clippy --all-features --all-targets -- -D warnings
 cargo fmt -- --check               # 格式检查 / Format check
 cargo test --release stress_tests  # 压力测试 / Stress tests
+cargo test --release property_tests # 属性/确定性 fuzz 门禁
+cargo run -- conformance check      # 0.3 语言无关符合性门禁
 ```
 
 ## 代码规范 / Code Conventions
 
 - 所有 `cargo clippy` 警告视为错误 / All clippy warnings are errors
+- 当前基线为 default Core library 228 个测试、all-feature library 249 个测试；
+  数字变化时必须同步本文件和稳定性文档
 - 表达式解析器使用 Pratt（precedence climbing）算法
 - 缩进和布局语法由 `lexer.rs` 处理（indent/dedent token）
 - 测试分布在 `src/lib/mod.rs` 的 `mod tests`、`edge_case_tests`、`stress_tests`、`fuzzy_tests` 中

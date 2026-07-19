@@ -1,6 +1,9 @@
-# MimiSpec 0.3.x Public API and Diagnostic-Code Stability
+# MimiSpec 0.3.0-dev Public API and Diagnostic-Code Stability
 
-> Status: consolidated 0.3.0 M5 stabilization deliverable.
+> Status: consolidated 0.3.0 M5 stabilization deliverable and development
+> snapshot contract. It is implemented on main and ready for `0.3.0-dev`
+> evaluation; Cargo and the published release remain `0.2.1`, and this is not
+> an RC declaration.
 >
 > This document freezes the public Rust API surface and diagnostic-code
 > assignments that may not change in a breaking way within the 0.3.x series
@@ -87,9 +90,13 @@ absorbed into a future `ResolveError` variant.
 | Schema file | Frozen version |
 |-------------|---------------|
 | `docs/schemas/parse-output-v0.3.schema.json` | `mimispec.parse/0.3` |
-| `docs/schemas/collaboration-report.schema.json` | collaboration report envelope |
+| `docs/schemas/collaboration-report.schema.json` | `mimispec.collaboration/0.3` envelope |
 | `docs/schemas/language-service-v0.3.schema.json` | `mimispec.ls/0.3` custom LSP values |
 | `docs/schemas/conformance-v0.3.schema.json` | `mimispec.conformance/0.3` manifest |
+
+The collaboration envelope version is also exposed as
+`diagnostics::COLLABORATION_REPORT_SCHEMA_VERSION` so CLI consumers do not
+need to duplicate the wire literal.
 
 #### Frozen language-service wire contract
 
@@ -170,10 +177,10 @@ The following are **not** breaking changes within 0.3.x:
 
 The frozen API surface is exercised by:
 
-- `cargo test --lib` — all 225 default-Core tests, including
+- `cargo test --lib` — all 228 default-Core tests, including
   `property_tests` and `multilingual_tests` which assert round-trip, JSON
   schema version, and Unicode-content invariants.
-- `cargo test --all-features --lib` — all 246 tests, including the explicitly
+- `cargo test --all-features --lib` — all 249 tests, including the explicitly
   experimental Provenance, Materialization, Profile, and Workflow layers.
 - `cargo test --release stress_tests` — large-file slot-linearity guard.
 - `cargo test --release property_tests` — fuzz/property CI gate.

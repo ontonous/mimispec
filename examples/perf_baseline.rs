@@ -56,6 +56,14 @@ fn main() {
             "mimichat",
             include_str!("../docs/corpora/mimichat-real-project.mms"),
         ),
+        (
+            "mimi-markdown",
+            include_str!("../docs/corpora/mimi-markdown-real-project.mms"),
+        ),
+        (
+            "mimi-log",
+            include_str!("../docs/corpora/mimi-log-real-project.mms"),
+        ),
     ] {
         let started = Instant::now();
         let parsed = mimispec::parse_lossless(source);

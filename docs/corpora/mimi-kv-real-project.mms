@@ -84,6 +84,7 @@ module? KeyValueServer:
 
     func? LoadStore(current_store, path):
         ensures?: loaded.valid == true or current_store.preserved == true
+        ensures?: loaded.valid == true or failure.visible == true
         steps:
             check whether data file exists
             read file
@@ -117,6 +118,7 @@ module? KeyValueClient:
             return response >>> done
 
     func? RunInteractiveClient(host, port):
+        ensures?: completed == true or connection.failure_visible == true
         steps:
             connect to server
             read user command

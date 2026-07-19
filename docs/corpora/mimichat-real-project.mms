@@ -89,6 +89,7 @@ module? UserRegistry:
 
     func? UnregisterUser(connection):
         ensures?: all_indexes_agree == true
+        ensures?: removed == true or failure.visible == true
         steps:
             locate nickname by connection
             remove connection and nickname indexes

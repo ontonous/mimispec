@@ -2,7 +2,7 @@
   "schema_version": "mimispec.provenance/0.1",
   "mms": {
     "path": "mimispec/mimispec/docs/corpora/mimichat-real-project.mms",
-    "revision_sha256": "f15f968939aac1395f68f81b12acae5f649478e09c198923e72b3148d8a247de"
+    "revision_sha256": "2d2c16760b3756f318524347d4705f1a47146e16c89080de611074a7fb6eda9e"
   },
   "source": {
     "language": "mimi",

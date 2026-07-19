@@ -1,7 +1,9 @@
 # Experimental Provenance Sidecar 0.1
 
 > Schema: `mimispec.provenance/0.1`. This protocol is outside MimiSpec Core and
-> outside the 0.3 API freeze. It is not Evidence of implementation correctness.
+> outside the 0.3 API freeze. It is available only through the experimental
+> feature in the `0.3.0-dev` snapshot candidate and is not Evidence of
+> implementation correctness or part of RC readiness.
 
 A sidecar relates one exact MMS revision and one external source revision. All
 hashes are lowercase SHA-256. Each link contains an optional source symbol/span,
@@ -38,6 +40,8 @@ changes a commitment suffix.
 Reference fixtures:
 
 - `docs/corpora/mimi-kv-real-project.provenance.json`;
-- `docs/corpora/mimichat-real-project.provenance.json`.
+- `docs/corpora/mimichat-real-project.provenance.json`;
+- `docs/corpora/mimi-markdown-real-project.provenance.json`;
+- `docs/corpora/mimi-log-real-project.provenance.json`.
 
 The JSON schema is `docs/schemas/provenance-v0.1.schema.json`.

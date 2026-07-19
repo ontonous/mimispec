@@ -1,9 +1,11 @@
 # MimiSpec Commitment State Machine
 
-> Status: normative 0.3 design; semantic-slot identities, footprints and the
-> actor/patch validator are implemented on the unreleased main development line
+> Status: normative `0.3.0-dev` Core contract; semantic-slot identities,
+> footprints and the actor/patch validator are implemented on the unreleased
+> main development line and are ready for development-snapshot evaluation
 >
-> Current released implementation: `0.2.1`
+> Current published implementation and Cargo version: `0.2.1`; this document
+> does not claim an RC or stable 0.3 release
 
 ## 1. Purpose
 

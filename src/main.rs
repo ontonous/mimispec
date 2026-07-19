@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use mimispec::diagnostics::COLLABORATION_REPORT_SCHEMA_VERSION;
 use mimispec::format::format_diagnostic;
 use mimispec::latex::render_file_latex;
 use mimispec::parse;
@@ -10,13 +11,10 @@ use std::path::{Path, PathBuf};
 
 const PARSE_JSON_SCHEMA_VERSION: &str = "mimispec.parse/0.3";
 
+// Global output flags must not disable subcommand recognition when they appear
+// before the subcommand name (for example, `mimispec --json diagnose file`).
 #[derive(Parser, Debug)]
-#[command(
-    name = "mimispec",
-    version,
-    about = "MimiSpec parser CLI",
-    args_conflicts_with_subcommands = true
-)]
+#[command(name = "mimispec", version, about = "MimiSpec parser CLI")]
 struct Cli {
     /// .mms file(s) to parse; use - for stdin
     #[arg(default_value = "-")]
@@ -406,7 +404,7 @@ fn run_diagnose(files: &[PathBuf], json: bool, flat_queues: bool) {
     if json {
         println!(
             "{}",
-            serde_json::to_string_pretty(&serde_json::json!({ "results": reports }))
+            serde_json::to_string_pretty(&collaboration_json("diagnose", reports))
                 .unwrap_or_else(|e| format!("{{\"error\": \"JSON serialization failed: {}\"}}", e))
         );
     }
@@ -456,7 +454,7 @@ fn run_materialize(files: &[PathBuf], scope: &str, json: bool) {
     if json {
         println!(
             "{}",
-            serde_json::to_string_pretty(&serde_json::json!({ "results": plans }))
+            serde_json::to_string_pretty(&collaboration_json("materialize", plans))
                 .unwrap_or_else(|e| format!("{{\"error\": \"JSON serialization failed: {}\"}}", e))
         );
     }
@@ -562,7 +560,7 @@ fn run_profile(files: &[PathBuf], target: &str, scope: &str, json: bool) {
     if json {
         println!(
             "{}",
-            serde_json::to_string_pretty(&serde_json::json!({ "results": results }))
+            serde_json::to_string_pretty(&collaboration_json("profile", results))
                 .unwrap_or_else(|e| format!("{{\"error\": \"JSON serialization failed: {}\"}}", e))
         );
     }
@@ -606,7 +604,7 @@ fn run_workflow(files: &[PathBuf], scope: &str, json: bool) {
     if json {
         println!(
             "{}",
-            serde_json::to_string_pretty(&serde_json::json!({ "results": results }))
+            serde_json::to_string_pretty(&collaboration_json("workflow", results))
                 .unwrap_or_else(|e| format!("{{\"error\": \"JSON serialization failed: {}\"}}", e))
         );
     }
@@ -614,6 +612,14 @@ fn run_workflow(files: &[PathBuf], scope: &str, json: bool) {
     if any_error {
         std::process::exit(1);
     }
+}
+
+fn collaboration_json(kind: &str, results: Vec<serde_json::Value>) -> serde_json::Value {
+    serde_json::json!({
+        "schema_version": COLLABORATION_REPORT_SCHEMA_VERSION,
+        "kind": kind,
+        "results": results,
+    })
 }
 
 #[cfg(feature = "experimental-targets")]
@@ -1038,6 +1044,48 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn global_flags_work_on_both_sides_of_subcommands() {
+        for args in [
+            ["mimispec", "--json", "diagnose", "demo.mms"],
+            ["mimispec", "diagnose", "demo.mms", "--json"],
+        ] {
+            let cli = Cli::try_parse_from(args).expect("global JSON flag must preserve subcommand");
+            assert!(cli.json);
+            match cli.command {
+                Some(Commands::Diagnose { files, flat_queues }) => {
+                    assert_eq!(files, [PathBuf::from("demo.mms")]);
+                    assert!(!flat_queues);
+                }
+                command => panic!("expected diagnose subcommand, got {command:?}"),
+            }
+        }
+
+        let flat = Cli::try_parse_from(["mimispec", "demo.mms", "--json"])
+            .expect("legacy flat parse arguments must remain valid");
+        assert!(flat.command.is_none());
+        assert_eq!(flat.files, [PathBuf::from("demo.mms")]);
+    }
+
+    #[test]
+    fn collaboration_json_envelope_is_versioned_and_typed() {
+        let schema: serde_json::Value = serde_json::from_str(include_str!(
+            "../docs/schemas/collaboration-report.schema.json"
+        ))
+        .expect("collaboration schema must remain valid JSON");
+        assert_eq!(
+            schema.pointer("/properties/schema_version/const"),
+            Some(&serde_json::json!(COLLABORATION_REPORT_SCHEMA_VERSION))
+        );
+        let value = collaboration_json(
+            "diagnose",
+            vec![serde_json::json!({ "path": "demo.mms", "report": {} })],
+        );
+        assert_eq!(value["schema_version"], COLLABORATION_REPORT_SCHEMA_VERSION);
+        assert_eq!(value["kind"], "diagnose");
+        assert_eq!(value["results"][0]["path"], "demo.mms");
+    }
 
     #[test]
     fn parse_json_output_is_versioned_and_marks_partial_documents() {

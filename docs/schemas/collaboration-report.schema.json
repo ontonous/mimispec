@@ -2,46 +2,73 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/ontonous/mimispec/docs/schemas/collaboration-report.schema.json",
   "title": "MimiSpec Collaboration Report",
-  "description": "Provisional development summary for diagnose/workflow/materialize/profile outputs. Materialize/profile/workflow protocols are outside the MimiSpec 0.3 Core roadmap, and this schema is not a durable derivation or evidence ledger.",
+  "description": "Versioned envelope for diagnose and feature-gated workflow/materialize/profile reports. Experimental target payloads remain outside the MimiSpec 0.3 Core freeze.",
   "type": "object",
-  "required": ["schema_version", "kind"],
+  "required": ["schema_version", "kind", "results"],
   "properties": {
     "schema_version": {
       "type": "string",
-      "const": "0.3.0-dev"
+      "const": "mimispec.collaboration/0.3"
     },
     "kind": {
       "type": "string",
       "enum": ["diagnose", "workflow", "materialize", "profile"]
     },
-    "path": { "type": "string" },
-    "release_scope": {
-      "type": "string",
-      "description": "Provisional CLI label outside the MimiSpec 0.3 Core contract."
-    },
-    "summary": {
-      "type": "object",
-      "additionalProperties": true
-    },
-    "decision_queue": {
+    "results": {
       "type": "array",
-      "items": { "$ref": "#/$defs/queueItem" }
-    },
-    "delegation_queue": {
-      "type": "array",
-      "items": { "$ref": "#/$defs/queueItem" }
-    },
-    "queue_tree": { "$ref": "#/$defs/queueTree" },
-    "diagnostics": {
-      "type": "array",
-      "items": { "$ref": "#/$defs/diagnostic" }
-    },
-    "plan": { "type": "object", "additionalProperties": true },
-    "board": { "type": "object", "additionalProperties": true },
-    "analysis": { "type": "object", "additionalProperties": true }
+      "items": { "$ref": "#/$defs/reportResult" }
+    }
   },
-  "additionalProperties": true,
+  "additionalProperties": false,
   "$defs": {
+    "reportResult": {
+      "type": "object",
+      "required": ["path"],
+      "properties": {
+        "path": { "type": "string" },
+        "report": { "$ref": "#/$defs/documentDiagnostics" },
+        "plan": { "type": "object", "additionalProperties": true },
+        "board": { "type": "object", "additionalProperties": true },
+        "analysis": { "type": "object", "additionalProperties": true }
+      },
+      "oneOf": [
+        { "required": ["report"] },
+        { "required": ["plan"] },
+        { "required": ["board"] },
+        { "required": ["analysis"] }
+      ],
+      "additionalProperties": false
+    },
+    "documentDiagnostics": {
+      "type": "object",
+      "required": ["summary", "decision_queue", "delegation_queue", "queue_tree", "diagnostics"],
+      "properties": {
+        "summary": { "$ref": "#/$defs/commitmentSummary" },
+        "decision_queue": { "type": "array", "items": { "$ref": "#/$defs/queueItem" } },
+        "delegation_queue": { "type": "array", "items": { "$ref": "#/$defs/queueItem" } },
+        "queue_tree": { "$ref": "#/$defs/queueTree" },
+        "diagnostics": { "type": "array", "items": { "$ref": "#/$defs/diagnostic" } }
+      },
+      "additionalProperties": false
+    },
+    "commitmentSummary": {
+      "type": "object",
+      "required": ["total_slots", "open", "content_review", "content_delegated", "locked", "lock_review", "lock_delegated", "strong_locked", "strong_lock_review", "strong_lock_delegated", "commit_ready"],
+      "properties": {
+        "total_slots": { "type": "integer", "minimum": 0 },
+        "open": { "type": "integer", "minimum": 0 },
+        "content_review": { "type": "integer", "minimum": 0 },
+        "content_delegated": { "type": "integer", "minimum": 0 },
+        "locked": { "type": "integer", "minimum": 0 },
+        "lock_review": { "type": "integer", "minimum": 0 },
+        "lock_delegated": { "type": "integer", "minimum": 0 },
+        "strong_locked": { "type": "integer", "minimum": 0 },
+        "strong_lock_review": { "type": "integer", "minimum": 0 },
+        "strong_lock_delegated": { "type": "integer", "minimum": 0 },
+        "commit_ready": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
     "queueTree": {
       "type": "object",
       "required": ["root"],
@@ -111,7 +138,7 @@
         "span": { "$ref": "#/$defs/byteSpan" },
         "review_target": { "type": "string" }
       },
-      "additionalProperties": true
+      "additionalProperties": false
     },
     "diagnostic": {
       "type": "object",
@@ -136,9 +163,16 @@
           "enum": ["error", "warning", "info", "hint"]
         },
         "message": { "type": "string" },
-        "help": { "type": ["string", "null"] }
+        "span": {
+          "oneOf": [
+            { "$ref": "#/$defs/byteSpan" },
+            { "type": "null" }
+          ]
+        },
+        "help": { "type": ["string", "null"] },
+        "related_nodes": { "type": "array", "items": { "type": "integer", "minimum": 0 } }
       },
-      "additionalProperties": true
+      "additionalProperties": false
     }
   }
 }

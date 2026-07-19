@@ -1,0 +1,27 @@
+{
+  "schema_version": "mimispec.provenance/0.1",
+  "mms": {
+    "path": "mimispec/mimispec/docs/corpora/mimi-log-real-project.mms",
+    "revision_sha256": "fc00bcf0f273493d3cc29b91a5e6398ed8d5308c1ae04843cfb778b8724fbe0a"
+  },
+  "source": {
+    "language": "mimi",
+    "path": "mimi/mimi/projects/mimi-log/src/main.mimi",
+    "revision_sha256": "34f0ed910610ead08722511d8c35100f99973442517d6fe286bbaf95e2407025"
+  },
+  "links": [
+    {
+      "source_symbol": "main",
+      "slot": {
+        "scope_path": [],
+        "node_kind": "desc",
+        "anchor_kind": "keyword",
+        "footprint": "entitykind",
+        "owner_slot_ordinal": 0,
+        "protected_sha256": "102512f8c5028fae4d5f81ce6dd56b012b9e31afc6cb42999a71243d0974ddad"
+      },
+      "relation": "observed_from",
+      "note": "The log-pipeline overview is traceable to the reviewed MIMI source without confirming its defects as intent."
+    }
+  ]
+}

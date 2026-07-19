@@ -2054,7 +2054,7 @@ mod stress_tests {
             .all(|slot| result.document.node(slot.node).is_some()));
     }
 
-    /// 0.3.5 performance budget guard: slot count must scale linearly with
+    /// Consolidated 0.3 performance guard: slot count must scale linearly with
     /// module size, and every slot must resolve to a live node. This is a
     /// deterministic regression guard (no wall-clock dependency). Measured
     /// baseline numbers live in `docs/roadmap-0.3.x.md` §10 and in
@@ -2087,7 +2087,7 @@ mod stress_tests {
 
         // Linearity guard: doubling module size must double slot count within
         // ±5%. If this fails, either slot collection gained a quadratic term
-        // or a per-func slot was silently added/removed — both are 0.3.5
+        // or a per-func slot was silently added/removed — both are 0.3
         // release blockers.
         for window in per_func.windows(2) {
             let ratio = window[1] / window[0];
@@ -2524,15 +2524,15 @@ math:
     }
 }
 
-// ── 0.3.5 Cross-domain acceptance corpus ────────────────────────────────────
+// ── Consolidated 0.3 cross-domain acceptance corpus
 //
-// Closes the 0.3.5 roadmap §10 "Corpus covering: plain-language product
+// Exercises the consolidated 0.3 roadmap §10 corpus covering plain-language product
 // intent; state transitions and forbidden behavior; failure and recovery;
 // resource ownership and permissions; ordered communication; external
 // boundaries; multilingual descriptions; and one cohesive real-world product
-// document."
+// document.
 //
-// The ten corpus files live under `docs/corpora/` and are the canonical
+// The corpus files live under `docs/corpora/` and are the canonical
 // cross-domain intent fixtures. This test embeds them with `include_str!`
 // so a syntax change that breaks any corpus fails CI immediately, with the
 // file name in the panic message. Each corpus must:
@@ -2540,7 +2540,7 @@ math:
 //   2. round-trip through the semantic renderer with an equivalent AST;
 //   3. serialize as valid 0.3 JSON carrying `schema_version`.
 //
-// A regression here is a 0.3.5 release blocker: it means the parser
+// A regression here is a 0.3 release blocker: it means the parser
 // silently lost or rejected a real-world intent pattern.
 #[cfg(test)]
 mod corpus_acceptance_tests {
@@ -2561,6 +2561,10 @@ mod corpus_acceptance_tests {
     const MIMI_KV_REAL_PROJECT: &str = include_str!("../../docs/corpora/mimi-kv-real-project.mms");
     const MIMICHAT_REAL_PROJECT: &str =
         include_str!("../../docs/corpora/mimichat-real-project.mms");
+    const MIMI_MARKDOWN_REAL_PROJECT: &str =
+        include_str!("../../docs/corpora/mimi-markdown-real-project.mms");
+    const MIMI_LOG_REAL_PROJECT: &str =
+        include_str!("../../docs/corpora/mimi-log-real-project.mms");
 
     fn assert_corpus_round_trips(name: &'static str, src: &'static str) {
         let first = parse(src);
@@ -2691,13 +2695,20 @@ mod corpus_acceptance_tests {
         }));
     }
 
+    struct RealProjectExpectations {
+        types: usize,
+        flows: usize,
+        funcs: usize,
+        modules: usize,
+        slots: usize,
+        decisions: usize,
+        delegations: usize,
+    }
+
     fn assert_real_project_transcription(
         name: &'static str,
         src: &'static str,
-        expected_types: usize,
-        expected_flows: usize,
-        expected_funcs: usize,
-        expected_modules: usize,
+        expected: RealProjectExpectations,
     ) {
         use crate::diagnostics::{analyze_document, DiagnosticClass};
 
@@ -2714,7 +2725,7 @@ mod corpus_acceptance_tests {
                     .iter()
                     .filter(|item| matches!(item, Fragment::TypeDef { .. }))
                     .count(),
-                expected_types,
+                expected.types,
             ),
             (
                 "flows",
@@ -2722,7 +2733,7 @@ mod corpus_acceptance_tests {
                     .iter()
                     .filter(|item| matches!(item, Fragment::Flow { .. }))
                     .count(),
-                expected_flows,
+                expected.flows,
             ),
             (
                 "functions",
@@ -2730,7 +2741,7 @@ mod corpus_acceptance_tests {
                     .iter()
                     .filter(|item| matches!(item, Fragment::Func { .. }))
                     .count(),
-                expected_funcs,
+                expected.funcs,
             ),
             (
                 "modules",
@@ -2738,7 +2749,7 @@ mod corpus_acceptance_tests {
                     .iter()
                     .filter(|item| matches!(item, Fragment::Module { .. }))
                     .count(),
-                expected_modules,
+                expected.modules,
             ),
         ] {
             assert_eq!(actual, expected, "{name} lost {label}");
@@ -2746,18 +2757,47 @@ mod corpus_acceptance_tests {
 
         let report = analyze_document(&lossless.document, &lossless.errors);
         assert_eq!(report.summary.commit_ready, 0);
-        assert!(report.decision_queue.len() >= 40);
-        assert!(report.diagnostics.iter().all(|diagnostic| {
-            !matches!(
-                diagnostic.class,
-                DiagnosticClass::Syntax | DiagnosticClass::Attachment
-            )
-        }));
+        assert_eq!(
+            report.summary.total_slots, expected.slots,
+            "{name} slot drift"
+        );
+        assert_eq!(
+            report.decision_queue.len(),
+            expected.decisions,
+            "{name} decision queue drift"
+        );
+        assert_eq!(
+            report.delegation_queue.len(),
+            expected.delegations,
+            "{name} delegation queue drift"
+        );
+        assert!(
+            report.diagnostics.iter().all(|diagnostic| {
+                matches!(
+                    diagnostic.class,
+                    DiagnosticClass::Decision | DiagnosticClass::Delegation
+                )
+            }),
+            "{name} has a non-queue diagnostic: {:?}",
+            report.diagnostics
+        );
     }
 
     #[test]
     fn corpus_mimi_kv_real_project_transcription_round_trips() {
-        assert_real_project_transcription("mimi-kv-real-project", MIMI_KV_REAL_PROJECT, 4, 2, 7, 2);
+        assert_real_project_transcription(
+            "mimi-kv-real-project",
+            MIMI_KV_REAL_PROJECT,
+            RealProjectExpectations {
+                types: 4,
+                flows: 2,
+                funcs: 7,
+                modules: 2,
+                slots: 401,
+                decisions: 48,
+                delegations: 0,
+            },
+        );
     }
 
     #[test]
@@ -2765,10 +2805,49 @@ mod corpus_acceptance_tests {
         assert_real_project_transcription(
             "mimichat-real-project",
             MIMICHAT_REAL_PROJECT,
-            4,
-            2,
-            13,
-            6,
+            RealProjectExpectations {
+                types: 4,
+                flows: 2,
+                funcs: 13,
+                modules: 6,
+                slots: 680,
+                decisions: 73,
+                delegations: 0,
+            },
+        );
+    }
+
+    #[test]
+    fn corpus_mimi_markdown_real_project_transcription_round_trips() {
+        assert_real_project_transcription(
+            "mimi-markdown-real-project",
+            MIMI_MARKDOWN_REAL_PROJECT,
+            RealProjectExpectations {
+                types: 4,
+                flows: 2,
+                funcs: 13,
+                modules: 5,
+                slots: 649,
+                decisions: 70,
+                delegations: 0,
+            },
+        );
+    }
+
+    #[test]
+    fn corpus_mimi_log_real_project_transcription_round_trips() {
+        assert_real_project_transcription(
+            "mimi-log-real-project",
+            MIMI_LOG_REAL_PROJECT,
+            RealProjectExpectations {
+                types: 5,
+                flows: 2,
+                funcs: 14,
+                modules: 5,
+                slots: 752,
+                decisions: 79,
+                delegations: 0,
+            },
         );
     }
 }
@@ -2905,9 +2984,9 @@ mod fuzzy_tests {
     }
 }
 
-// ── 0.3.5 Multilingual / Unicode acceptance tests ──────────────────────────
+// ── Consolidated 0.3 multilingual / Unicode acceptance tests
 //
-// Closes the 0.3.5 roadmap §12 deliverable:
+// Covers the consolidated 0.3 multilingual roadmap deliverable:
 //   "Multilingual: Unicode descriptions and rules preserve exact content."
 //
 // MimiSpec treats natural language as a first-class citizen. The parser must
@@ -3071,9 +3150,9 @@ mod multilingual_tests {
     }
 }
 
-// ── 0.3.5 Property and fuzz tests ───────────────────────────────────────────
+// ── Consolidated 0.3 property and fuzz tests
 //
-// These tests close the 0.3.5 "Parser/formatter fuzzing and property tests"
+// These tests cover the consolidated 0.3 parser/formatter property gate
 // deliverable without pulling in external proptest/quickcheck dependencies
 // (the crate intentionally stays zero-dev-dependency). They use a deterministic
 // linear congruential generator so failures are reproducible from the seed
@@ -3092,7 +3171,7 @@ mod multilingual_tests {
 //      the same `File` on the OK branch.
 //
 // These are CI gates: a regression in any of these invariants is a silent
-// intent-loss bug, which 0.3.5 explicitly forbids.
+// intent-loss bug, which the 0.3 release gate explicitly forbids.
 #[cfg(test)]
 mod property_tests {
     use super::*;
@@ -3300,7 +3379,7 @@ mod property_tests {
                     .unwrap_or("<non-string panic payload>");
                 panic!(
                     "seed {seed}: parse entry `{name}` panicked on arbitrary input \
-                     (this is a 0.3.5 release blocker)\nsrc: {src:?}\npayload: {msg}"
+                     (this is a 0.3 release blocker)\nsrc: {src:?}\npayload: {msg}"
                 );
             }
         }

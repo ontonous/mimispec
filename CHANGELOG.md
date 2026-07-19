@@ -1,8 +1,25 @@
 # Changelog
 
-## [Unreleased] - 0.3.x development
+## [Unreleased] - 0.3.0-dev snapshot candidate
+
+The main-line technical scope is ready to be cut as an explicitly prerelease
+`0.3.0-dev` development snapshot for source/binary evaluation. This heading
+does not claim that such an artifact has been published: Cargo, crates.io, and
+the latest release tag remain `0.2.1`. `0.3.0-rc.1` remains blocked on the
+independent 5-author/25-document usability gate and requires a separate,
+explicitly authorized release operation.
 
 ### Added
+- Added second-round real-project transcriptions for the 1,009-line
+  `mimi-markdown` and 755-line `mimi-log` MIMI projects. Both are permanent
+  Complete/lossless/AST-round-trip corpus gates and explicitly separate
+  observed implementation defects from Human-confirmed intent; exact
+  provenance sidecars bind each MMS revision back to its reviewed source.
+- Added an end-to-end LSP author-journey regression covering Action syntax
+  recovery, standard WorkspaceEdit resolution, observed confirmation,
+  QueueTree-backed Human batching, and final transaction confirmation.
+- Tightened all four real-project gates to exact structure, semantic-slot,
+  decision/delegation, and zero non-queue diagnostic counts.
 - Added the frozen `mimispec.ls/0.3` target-neutral wire protocol and
   `mimispec lsp --stdio`, implementing LSP 3.17 document sync, diagnostics,
   semantic tokens, effective-protection hover, rule/Flow navigation, code
@@ -146,6 +163,9 @@
   selected; open residual slots on the same node remain explicit.
 
 ### Changed
+- Versioned diagnose and experimental collaboration JSON under the shared
+  `mimispec.collaboration/0.3` envelope (`schema_version`, `kind`, `results`)
+  and tightened the checked-in schema around exact diagnose result fields.
 - Moved provenance behind `experimental-provenance` and the target-facing
   Materialize/Profile/Workflow stack behind `experimental-targets`. The
   default Core, Session, LSP, CLI, and library surface no longer depend on the
@@ -167,6 +187,10 @@
   those IDs alongside `SlotLocator`.
 
 ### Fixed
+- Fixed global CLI flags placed before a subcommand disabling subcommand
+  recognition (`mimispec --json diagnose file.mms` was previously interpreted
+  as two legacy parse paths). Both flag orders and flat parse usage are now
+  covered by the CLI parser tests.
 - Fixed cross-scope semantic-slot identity collisions that could let one
   identical nested `$`/`$$` slot satisfy several before/after matches. Slot
   positions now include the complete structural path, patch matching is
@@ -238,15 +262,16 @@
 ### Changed
 
 - Reclassified the never-published 0.3.0-0.3.5 labels as internal M0-M5
-  milestones. The only planned public release is consolidated `0.3.0`, with
-  `0.3.0-rc.1` blocked on the independent usability gate.
+  milestones. The stable series is consolidated into `0.3.0`; an explicitly
+  labelled `0.3.0-dev` snapshot may precede it, while `0.3.0-rc.1` remains
+  blocked on the independent usability gate.
 - Upgraded the VS Code extension development version to 0.5.0 and made the
   long-lived server primary, retaining reduced 0.2.1 CLI validation fallback.
 
 ### Documentation
-- Clarified that the current released implementation is `0.2.1`; the existing
-  advanced specification is a staged `0.3.x` design target, not a released
-  `1.0.0-rc` grammar.
+- Clarified that the current released implementation is `0.2.1`; the advanced
+  specification describes the implemented `0.3.0-dev` snapshot contract, not
+  an already published 0.3 or `1.0.0-rc` grammar.
 - Added the `0.3.x` development roadmap.
 - Added the normative commitment state-machine design, including the rule that
   `?`/`??` after `$`/`$$` review the lock decision rather than the content.

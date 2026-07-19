@@ -4,6 +4,8 @@
 > MimiSpec 0.3 Core language, parser contract, roadmap, or freeze gate.
 >
 > Current released version: `0.2.1`.
+> The `0.3.0-dev` snapshot candidate does not promote this document into Core;
+> the experimental target stack remains feature-gated and outside RC evidence.
 >
 > The first-wave `materialize` and `profile` APIs on `main` are prototypes. They
 > do not yet implement the complete contract in this document.

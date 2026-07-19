@@ -10,6 +10,9 @@ use crate::lossless::{
     SourceNodeId, SourceNodeKind,
 };
 
+/// Frozen CLI collaboration-report envelope version for the 0.3 line.
+pub const COLLABORATION_REPORT_SCHEMA_VERSION: &str = "mimispec.collaboration/0.3";
+
 /// Stable diagnostic class for intent-oriented guidance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -1116,9 +1119,9 @@ flow Checkout:
         let parsed = parse_lossless(source);
         assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
         let report = analyze_document(&parsed.document, &parsed.errors);
-        assert_eq!(report.decision_queue.len(), 72);
+        assert_eq!(report.decision_queue.len(), 73);
         assert!(report.delegation_queue.is_empty());
-        assert_eq!(report.queue_tree.root.decision_count, 72);
+        assert_eq!(report.queue_tree.root.decision_count, 73);
         assert_eq!(report.queue_tree.root.delegation_count, 0);
 
         fn collect(node: &QueueScopeNode, slots: &mut Vec<(u32, u32)>) {
@@ -1129,12 +1132,12 @@ flow Checkout:
         }
         let mut tree_slots = Vec::new();
         collect(&report.queue_tree.root, &mut tree_slots);
-        assert_eq!(tree_slots.len(), 72);
+        assert_eq!(tree_slots.len(), 73);
         let unique = tree_slots
             .iter()
             .map(|(_, slot)| *slot)
             .collect::<HashSet<_>>();
-        assert_eq!(unique.len(), 72);
+        assert_eq!(unique.len(), 73);
         let flat = report
             .decision_queue
             .iter()
