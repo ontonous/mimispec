@@ -96,7 +96,9 @@ impl SymbolTable {
                     Self::insert_entry(entries, &func.name.name, SymbolKind::Func, file_path);
                 }
                 Fragment::Flow { flow } => {
-                    Self::insert_entry(entries, &flow.name.name, SymbolKind::Flow, file_path);
+                    if let Some(name) = &flow.name {
+                        Self::insert_entry(entries, &name.name, SymbolKind::Flow, file_path);
+                    }
                 }
                 Fragment::Ui { ui } => {
                     Self::insert_entry(entries, &ui.name.name, SymbolKind::Ui, file_path);

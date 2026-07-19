@@ -60,22 +60,20 @@ pub fn render_file_latex(file: &File) -> String {
 fn collect_latex_fragments(fragments: &[Fragment], out: &mut Vec<String>) {
     for fragment in fragments {
         match fragment {
+            Fragment::Math { math } => out.push(render_math_block(math)),
             Fragment::Module { module } => {
-                if let Some(math) = &module.math {
-                    out.push(render_math_block(math));
-                }
                 collect_latex_fragments(&module.items, out);
             }
             Fragment::TypeDef { typedef } => {
-                if let Some(math) = &typedef.math {
-                    out.push(render_math_block(math));
-                }
+                collect_latex_fragments(typedef.items(), out);
             }
             Fragment::Func { func } => {
-                if let Some(math) = &func.math {
-                    out.push(render_math_block(math));
-                }
+                collect_latex_fragments(&func.items, out);
             }
+            Fragment::Flow { flow } => collect_latex_fragments(&flow.items, out),
+            Fragment::FlowEntry { entry } => collect_latex_fragments(&entry.items, out),
+            Fragment::FlowArm { arm } => collect_latex_fragments(&arm.items, out),
+            Fragment::Steps { items, .. } => collect_latex_fragments(items, out),
             _ => {}
         }
     }
@@ -307,7 +305,7 @@ module M:
         let Fragment::Func { func } = &module.items[0] else {
             panic!("expected func")
         };
-        let math = func.math.as_ref().unwrap();
+        let math = func.math_blocks()[0];
         let latex = render_math_block(math);
         assert!(latex.contains("\\frac{a + b}{c}"));
         assert!(latex.contains("mlm\\_loss"));

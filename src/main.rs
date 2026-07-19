@@ -8,6 +8,8 @@ use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+const PARSE_JSON_SCHEMA_VERSION: &str = "mimispec.parse/0.3";
+
 #[derive(Parser, Debug)]
 #[command(
     name = "mimispec",
@@ -46,6 +48,22 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
+    /// Run the long-lived MimiSpec 0.3 language server
+    Lsp {
+        /// Use Language Server Protocol framing over stdin/stdout
+        #[arg(long, default_value_t = true)]
+        stdio: bool,
+    },
+    /// Verify a MimiSpec 0.3 language-neutral conformance suite
+    Conformance {
+        #[command(subcommand)]
+        command: ConformanceCommand,
+    },
+    /// Audit the independent 0.3 usability-release gate
+    Usability {
+        #[command(subcommand)]
+        command: UsabilityCommand,
+    },
     /// Parse .mms file(s) and show diagnostics
     Parse {
         /// .mms file(s) to parse; use - for stdin
@@ -95,6 +113,28 @@ enum Commands {
     },
 }
 
+#[derive(Subcommand, Debug)]
+enum ConformanceCommand {
+    /// Check all parse, transition, lossless, and LSP fixtures in a manifest
+    Check {
+        /// Path to a mimispec.conformance/0.3 manifest
+        #[arg(default_value = "tests/conformance/0.3/manifest.json")]
+        manifest: PathBuf,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum UsabilityCommand {
+    /// Check author, document, domain, round-trip, and issue requirements
+    Check {
+        #[arg(default_value = "tests/usability/0.3/trial-manifest.json")]
+        manifest: PathBuf,
+        /// Exit unsuccessfully unless every RC usability requirement is met
+        #[arg(long)]
+        require_complete: bool,
+    },
+}
+
 #[derive(Serialize)]
 struct JsonError {
     code: String,
@@ -111,6 +151,8 @@ struct JsonError {
 struct JsonResult {
     path: String,
     success: bool,
+    partial: bool,
+    status: mimispec::error::ParseStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     ast: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -122,6 +164,7 @@ struct JsonResult {
 
 #[derive(Serialize)]
 struct JsonOutput {
+    schema_version: &'static str,
     results: Vec<JsonResult>,
 }
 
@@ -172,7 +215,9 @@ fn build_json_result(
         .collect();
     JsonResult {
         path: path.display().to_string(),
-        success: result.errors.is_empty(),
+        success: !result.is_partial(),
+        partial: result.is_partial(),
+        status: result.status,
         ast: ast_value,
         render: rendered,
         latex: latex_rendered,
@@ -240,6 +285,8 @@ fn parse_one(
             let json_result = JsonResult {
                 path: path.display().to_string(),
                 success: false,
+                partial: true,
+                status: mimispec::error::ParseStatus::Partial,
                 ast: None,
                 render: None,
                 latex: None,
@@ -282,6 +329,7 @@ fn run_parse(files: &[PathBuf], ast: bool, json: bool, render: bool, latex: bool
 
     if json {
         let output = JsonOutput {
+            schema_version: PARSE_JSON_SCHEMA_VERSION,
             results: json_results,
         };
         println!(
@@ -752,6 +800,81 @@ fn main() {
     let cli = Cli::parse();
 
     match &cli.command {
+        Some(Commands::Lsp { stdio }) => {
+            if !stdio {
+                eprintln!("only --stdio transport is supported in MimiSpec 0.3");
+                std::process::exit(2);
+            }
+            if let Err(error) = mimispec::lsp::run_stdio() {
+                eprintln!("MimiSpec LSP failed: {error}");
+                std::process::exit(1);
+            }
+        }
+        Some(Commands::Conformance { command }) => match command {
+            ConformanceCommand::Check { manifest } => {
+                match mimispec::conformance::check_manifest(manifest) {
+                    Ok(report) => {
+                        if cli.json {
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&report)
+                                    .expect("conformance report must serialize")
+                            );
+                        } else {
+                            println!(
+                                "MimiSpec conformance: {}/{} passed ({})",
+                                report.passed, report.total, report.manifest
+                            );
+                            for failure in &report.failures {
+                                eprintln!("  {}: {}", failure.case, failure.message);
+                            }
+                        }
+                        if !report.success() {
+                            std::process::exit(1);
+                        }
+                    }
+                    Err(error) => {
+                        eprintln!("Conformance check failed: {error}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+        },
+        Some(Commands::Usability { command }) => match command {
+            UsabilityCommand::Check {
+                manifest,
+                require_complete,
+            } => match mimispec::usability::check_trial_manifest(manifest) {
+                Ok(report) => {
+                    if cli.json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&report)
+                                .expect("usability report must serialize")
+                        );
+                    } else {
+                        println!(
+                            "MimiSpec usability: authors={} documents={} domains={} five-minute={} complete={}",
+                            report.independent_authors,
+                            report.documents,
+                            report.domains,
+                            report.five_minute_authors,
+                            report.complete
+                        );
+                        for failure in &report.failures {
+                            eprintln!("  {failure}");
+                        }
+                    }
+                    if *require_complete && !report.complete {
+                        std::process::exit(1);
+                    }
+                }
+                Err(error) => {
+                    eprintln!("Usability check failed: {error}");
+                    std::process::exit(1);
+                }
+            },
+        },
         Some(Commands::Parse { files }) => {
             run_parse(files, cli.ast, cli.json, cli.render, cli.latex);
         }
@@ -782,5 +905,37 @@ fn main() {
                 run_parse(&cli.files, cli.ast, cli.json, cli.render, cli.latex);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_json_output_is_versioned_and_marks_partial_documents() {
+        let _: serde_json::Value = serde_json::from_str(include_str!(
+            "../docs/schemas/parse-output-v0.3.schema.json"
+        ))
+        .expect("parse-output schema must be valid JSON");
+        let complete = mimispec::parse("desc \"ready\"\n");
+        let complete = build_json_result(Path::new("complete.mms"), &complete, true, true, false);
+        let partial = mimispec::parse("func Broken(:\n");
+        let partial = build_json_result(Path::new("partial.mms"), &partial, true, false, false);
+        let value = serde_json::to_value(JsonOutput {
+            schema_version: PARSE_JSON_SCHEMA_VERSION,
+            results: vec![complete, partial],
+        })
+        .expect("parse output must serialize");
+
+        assert_eq!(value["schema_version"], PARSE_JSON_SCHEMA_VERSION);
+        assert_eq!(value["results"][0]["status"], "complete");
+        assert_eq!(value["results"][0]["partial"], false);
+        assert_eq!(
+            value["results"][0]["ast"]["schema_version"],
+            mimispec::ast::AST_SCHEMA_VERSION
+        );
+        assert_eq!(value["results"][1]["status"], "partial");
+        assert_eq!(value["results"][1]["partial"], true);
     }
 }

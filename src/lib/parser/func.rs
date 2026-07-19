@@ -1,7 +1,7 @@
 use crate::ast::*;
 use crate::error::ParseError;
 use crate::lexer::TokenKind;
-use crate::parser::{Parser, RecordedRuleDecision, RecordedSlotKind};
+use crate::parser::{Parser, RecordedRuleDecision};
 
 impl Parser {
     pub(super) fn parse_func(&mut self) -> Result<FuncDef, ParseError> {
@@ -10,9 +10,9 @@ impl Parser {
         let name = self.fuzzy_ident()?;
         let params = if self.check(&TokenKind::LParen) {
             self.advance();
-            let p = self.parse_params()?;
+            let params = self.parse_params()?;
             self.expect(TokenKind::RParen, "`)`")?;
-            p
+            params
         } else {
             Vec::new()
         };
@@ -25,13 +25,13 @@ impl Parser {
         }
 
         self.expect(TokenKind::Colon, "`:`")?;
-
         self.skip_newlines();
+
         if self.check(&TokenKind::Ellipsis) {
-            self.advance();
+            let placeholder = self.parse_placeholder_item()?;
             if !self.line_will_end() {
                 let (found, line, col) = match self.peek() {
-                    Some(t) => (t.kind.to_string(), t.line, t.col),
+                    Some(token) => (token.kind.to_string(), token.line, token.col),
                     None => ("EOF".into(), 0, 0),
                 };
                 return Err(ParseError::unexpected_token(
@@ -43,130 +43,103 @@ impl Parser {
             }
             return Ok(FuncDef {
                 name,
-                desc: None,
-                rules: Vec::new(),
                 params,
                 capabilities,
-                requires: None,
-                ensures: None,
-                math: None,
-                steps: vec![],
+                items: vec![placeholder],
                 keyword_commitment,
-                requires_keyword_commitment: Commitment::None,
-                ensures_keyword_commitment: Commitment::None,
                 with_keyword_commitment,
-                steps_keyword_commitment: Commitment::None,
             });
         }
+
         self.expect(TokenKind::Indent, "indented block")?;
         self.enter_block()?;
 
-        let mut desc = None;
-        let mut rules = Vec::new();
-        let mut requires = None;
-        let mut requires_keyword_commitment = Commitment::None;
-        let mut ensures = None;
-        let mut ensures_keyword_commitment = Commitment::None;
-        let mut math = None;
-        let mut steps = Vec::new();
-        let mut steps_keyword_commitment = Commitment::None;
+        let mut items = Vec::new();
+        let mut pending_rules: Vec<(usize, Option<usize>)> = Vec::new();
 
         loop {
-            self.skip_newlines();
-            if self.check(&TokenKind::Dedent) || self.is_at_end() {
-                break;
-            }
-            if self.check(&TokenKind::Ellipsis) {
-                self.advance();
-                self.commitment_after_previous(RecordedSlotKind::Keyword)?;
-                continue;
-            }
-            if self.check(&TokenKind::Rule) {
-                let rule_errors = self.consume_pending_rules();
-                for e in rule_errors {
-                    self.emit_error(e);
-                }
-                let (collected, ids) = self.take_pending_rules_with_ids();
-                self.mark_rule_ids(
-                    &ids,
+            let newline_count = self.skip_newlines_and_count();
+            if newline_count >= 3 {
+                self.resolve_semantic_rules(
+                    &mut items,
+                    &mut pending_rules,
+                    RuleAttachment::Environment,
                     RecordedRuleDecision::Environment {
                         scope_token: Some(scope_token),
                     },
                 );
-                rules.extend(collected);
-                let newline_count = self.skip_newlines_and_count();
-                if newline_count < 3 {
-                    continue;
-                }
             }
-            self.skip_newlines();
-            if self.check(&TokenKind::Desc) {
-                let d = self.parse_desc_entity()?;
-                if desc.is_none() {
-                    desc = Some(d);
-                } else {
-                    steps.push(Step::Desc { content: d });
-                }
-            } else if self.check(&TokenKind::Requires) {
-                requires_keyword_commitment = self.expect_kw(TokenKind::Requires, "`requires`")?;
-                self.expect(TokenKind::Colon, "`:`")?;
-                requires = Some(self.parse_condition()?);
-                if !self.line_will_end() {
-                    let (found, line, col) = match self.peek() {
-                        Some(t) => (t.kind.to_string(), t.line, t.col),
-                        None => ("EOF".into(), 0, 0),
-                    };
-                    return Err(ParseError::unexpected_token(
-                        found,
-                        "newline after requires condition".into(),
-                        line,
-                        col,
-                    ));
-                }
-            } else if self.check(&TokenKind::Ensures) {
-                ensures_keyword_commitment = self.expect_kw(TokenKind::Ensures, "`ensures`")?;
-                self.expect(TokenKind::Colon, "`:`")?;
-                ensures = Some(self.parse_condition()?);
-                if !self.line_will_end() {
-                    let (found, line, col) = match self.peek() {
-                        Some(t) => (t.kind.to_string(), t.line, t.col),
-                        None => ("EOF".into(), 0, 0),
-                    };
-                    return Err(ParseError::unexpected_token(
-                        found,
-                        "newline after ensures condition".into(),
-                        line,
-                        col,
-                    ));
-                }
-            } else if self.check(&TokenKind::Math) {
-                let keyword_commitment = self.expect_kw(TokenKind::Math, "`math`")?;
-                self.expect(TokenKind::Colon, "`:`")?;
-                math = Some(MathBlock {
-                    statements: self.parse_block(|p| p.parse_math_statement()),
-                    keyword_commitment,
-                });
-            } else if self.check(&TokenKind::Steps) {
-                steps_keyword_commitment = self.expect_kw(TokenKind::Steps, "`steps`")?;
-                self.expect(TokenKind::Colon, "`:`")?;
-                steps = self.parse_block(|p| p.parse_step());
-            } else {
-                let save = self.pos;
-                let source_checkpoint = self.source_checkpoint();
-                match self.parse_step() {
-                    Ok(step) => steps.push(step),
-                    Err(e) => {
-                        self.pos = save;
-                        self.restore_source_checkpoint(source_checkpoint);
-                        self.emit_error(e);
-                        self.try_sync(|p| p.synchronize_to_next_item_in_block());
-                        if self.check(&TokenKind::Dedent) || self.is_at_end() {
-                            break;
-                        }
+
+            if self.check(&TokenKind::Dedent) || self.is_at_end() {
+                self.resolve_semantic_rules(
+                    &mut items,
+                    &mut pending_rules,
+                    RuleAttachment::Environment,
+                    RecordedRuleDecision::Environment {
+                        scope_token: Some(scope_token),
+                    },
+                );
+                break;
+            }
+
+            if self.check(&TokenKind::Rule) {
+                match self.parse_rule_def() {
+                    Ok((rule, record_id)) => {
+                        let index = items.len();
+                        items.push(Fragment::Rule { rule });
+                        pending_rules.push((index, record_id));
                     }
+                    Err(error) => {
+                        self.emit_error(error);
+                        self.try_sync(|parser| parser.synchronize_to_next_item_in_block());
+                    }
+                }
+                continue;
+            }
+
+            let target_token = self.pos;
+            let parsed = if self.check(&TokenKind::Desc) {
+                self.parse_desc_entity().map(|desc| Fragment::Desc { desc })
+            } else if self.check(&TokenKind::Requires) {
+                self.parse_clause(ClauseKind::Requires)
+                    .map(|clause| Fragment::Clause { clause })
+            } else if self.check(&TokenKind::Ensures) {
+                self.parse_clause(ClauseKind::Ensures)
+                    .map(|clause| Fragment::Clause { clause })
+            } else if self.check(&TokenKind::Math) {
+                self.parse_math_block().map(|math| Fragment::Math { math })
+            } else if self.check(&TokenKind::Steps) {
+                self.parse_steps_fragment()
+            } else if self.check(&TokenKind::Ellipsis) {
+                self.parse_placeholder_item()
+            } else {
+                self.parse_step().map(|step| Fragment::Step { step })
+            };
+
+            match parsed {
+                Ok(item) => {
+                    let target_index = items.len();
+                    self.resolve_semantic_rules(
+                        &mut items,
+                        &mut pending_rules,
+                        RuleAttachment::Attached { target_index },
+                        RecordedRuleDecision::Attached { target_token },
+                    );
+                    items.push(item);
+                }
+                Err(error) => {
+                    self.resolve_semantic_rules(
+                        &mut items,
+                        &mut pending_rules,
+                        RuleAttachment::UnresolvedByRecovery,
+                        RecordedRuleDecision::DroppedByRecovery,
+                    );
+                    self.emit_error(error);
+                    self.try_sync(|parser| parser.synchronize_to_next_item_in_block());
                 }
             }
         }
+
         if self.check(&TokenKind::Dedent) {
             self.advance();
         }
@@ -174,19 +147,11 @@ impl Parser {
 
         Ok(FuncDef {
             name,
-            desc,
-            rules,
             params,
             capabilities,
-            requires,
-            ensures,
-            math,
-            steps,
+            items,
             keyword_commitment,
-            requires_keyword_commitment,
-            ensures_keyword_commitment,
             with_keyword_commitment,
-            steps_keyword_commitment,
         })
     }
 
@@ -215,15 +180,15 @@ impl Parser {
     }
 
     pub(super) fn parse_capabilities(&mut self) -> Result<Vec<Capability>, ParseError> {
-        let mut caps = Vec::new();
+        let mut capabilities = Vec::new();
         loop {
             let name = self.fuzzy_ident()?;
             let commitment = name.commitment;
-            caps.push(Capability { name, commitment });
+            capabilities.push(Capability { name, commitment });
             if !self.matches(&TokenKind::Comma) {
                 break;
             }
         }
-        Ok(caps)
+        Ok(capabilities)
     }
 }

@@ -1,10 +1,12 @@
+use std::cmp::Reverse;
+use std::collections::{BTreeSet, BinaryHeap};
 use std::ops::Range;
 use std::sync::Arc;
 
 use serde::Serialize;
 
 use crate::ast::{Commitment, File};
-use crate::error::ParseError;
+use crate::error::{ParseError, ParseStatus};
 use crate::lexer::{Token, TokenKind};
 use crate::parser::{
     RecordedCommitmentSlot, RecordedNodeKind, RecordedRuleDecision, RecordedRuleOccurrence,
@@ -92,13 +94,34 @@ pub enum CommitmentAnchorKind {
 /// than as a free-form action symbol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct CommitmentSlotSyntax {
+    pub id: CommitmentSlotId,
+    pub owner: Option<SourceNodeId>,
     pub anchor_kind: CommitmentAnchorKind,
+    pub footprint: CommitmentFootprintKind,
     pub anchor_span: ByteSpan,
     pub suffix_span: ByteSpan,
     pub full_span: ByteSpan,
     pub value: Commitment,
     pub adjacent: bool,
     pub semantic_slot: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+pub struct CommitmentSlotId(pub u32);
+
+/// Semantic field governed by a commitment anchor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommitmentFootprintKind {
+    EntityKind,
+    NameOrReference,
+    Value,
+    Clause,
+    Event,
+    Transition,
+    ExpressionOperator,
+    Placeholder,
+    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -138,6 +161,7 @@ pub struct SourceNodeId(pub u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceNodeKind {
+    Rule,
     Module,
     TypeDef,
     Flow,
@@ -151,6 +175,9 @@ pub enum SourceNodeKind {
     FlowEntry,
     FlowArm,
     Step,
+    Desc,
+    Clause,
+    Math,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
@@ -345,6 +372,12 @@ impl LosslessDocument {
 
     pub fn commitment_slots(&self) -> &[CommitmentSlotSyntax] {
         &self.commitment_slots
+    }
+
+    pub fn commitment_slot(&self, id: CommitmentSlotId) -> Option<&CommitmentSlotSyntax> {
+        self.commitment_slots
+            .get(id.0 as usize)
+            .filter(|slot| slot.id == id)
     }
 
     pub fn paragraph_breaks(&self) -> &[ParagraphBreak] {
@@ -603,6 +636,13 @@ fn splice_move(source: &str, chunk: ByteSpan, insert_at: u32) -> String {
 pub struct LosslessParseResult {
     pub document: LosslessDocument,
     pub errors: Vec<ParseError>,
+    pub status: ParseStatus,
+}
+
+impl LosslessParseResult {
+    pub fn is_partial(&self) -> bool {
+        self.status == ParseStatus::Partial
+    }
 }
 
 pub(crate) fn build_document(
@@ -616,29 +656,16 @@ pub(crate) fn build_document(
     assert!(u32::try_from(source.len()).is_ok(), "document too large");
     let pieces = scan_source(&source);
     let line_index = LineIndex::new(&source);
+    let paragraph_breaks = scan_paragraph_breaks(&source, &pieces);
+    let rule_groups = scan_rule_groups(&source);
+    let token_spans = map_token_spans(&source, &pieces, &line_index, tokens);
+    let nodes = map_recorded_nodes(&source, tokens, &token_spans, recorded_nodes, &rule_groups);
     let commitment_slots = if recorded_commitments.is_empty() {
         scan_commitment_slots(&source, &pieces)
     } else {
-        map_recorded_commitments(&source, &pieces, &line_index, tokens, recorded_commitments)
+        map_recorded_commitments(&source, &token_spans, recorded_commitments, &nodes)
     };
-    let paragraph_breaks = scan_paragraph_breaks(&source, &pieces);
-    let rule_groups = scan_rule_groups(&source);
-    let nodes = map_recorded_nodes(
-        &source,
-        &pieces,
-        &line_index,
-        tokens,
-        recorded_nodes,
-        &rule_groups,
-    );
-    let rules = map_recorded_rules(
-        &source,
-        &pieces,
-        &line_index,
-        tokens,
-        recorded_rules,
-        &nodes,
-    );
+    let rules = map_recorded_rules(&token_spans, recorded_rules, &nodes);
     let comments = attach_comments(&source, &pieces, &nodes, &paragraph_breaks);
     LosslessDocument {
         source,
@@ -784,7 +811,10 @@ fn scan_commitment_slots(source: &str, pieces: &[SourcePiece]) -> Vec<Commitment
         };
         let suffix_end = pieces[index + consumed - 1].span.end;
         slots.push(CommitmentSlotSyntax {
+            id: CommitmentSlotId(u32::try_from(slots.len()).expect("too many commitment slots")),
+            owner: None,
             anchor_kind,
+            footprint: CommitmentFootprintKind::Unknown,
             anchor_span: anchor.span,
             suffix_span: ByteSpan {
                 start: pieces[index].span.start,
@@ -805,63 +835,159 @@ fn scan_commitment_slots(source: &str, pieces: &[SourcePiece]) -> Vec<Commitment
 
 fn map_recorded_commitments(
     source: &str,
-    pieces: &[SourcePiece],
-    line_index: &LineIndex,
-    tokens: &[Token],
+    token_spans: &[Option<ByteSpan>],
     recorded: &[RecordedCommitmentSlot],
+    nodes: &[SourceNode],
 ) -> Vec<CommitmentSlotSyntax> {
+    let anchor_spans = recorded
+        .iter()
+        .map(|slot| token_spans.get(slot.anchor_token).copied().flatten())
+        .collect::<Vec<_>>();
+    let owner_offsets = anchor_spans
+        .iter()
+        .map(|span| span.map(|span| span.start))
+        .collect::<Vec<_>>();
+    let owners = most_specific_nodes_at(nodes, &owner_offsets);
+
     recorded
         .iter()
-        .filter_map(|slot| {
-            let anchor_token = tokens.get(slot.anchor_token)?;
-            let anchor_offset = token_offset(source, line_index, anchor_token)?;
-            let anchor_piece = pieces.iter().find(|piece| {
-                piece.span.start as usize <= anchor_offset
-                    && anchor_offset < piece.span.end as usize
-                    && !piece.kind.is_trivia()
-            })?;
+        .enumerate()
+        .filter_map(|(id, slot)| {
+            let anchor_span = anchor_spans.get(id).copied().flatten()?;
             let suffix_span = if slot.suffix_tokens.is_empty() {
                 ByteSpan {
-                    start: anchor_piece.span.end,
-                    end: anchor_piece.span.end,
+                    start: anchor_span.end,
+                    end: anchor_span.end,
                 }
             } else {
-                let first = tokens.get(slot.suffix_tokens.start)?;
-                let last = tokens.get(slot.suffix_tokens.end.checked_sub(1)?)?;
-                let first_offset = token_offset(source, line_index, first)?;
-                let last_offset = token_offset(source, line_index, last)?;
-                let first_piece = pieces.iter().find(|piece| {
-                    piece.span.start as usize <= first_offset
-                        && first_offset < piece.span.end as usize
-                })?;
-                let last_piece = pieces.iter().find(|piece| {
-                    piece.span.start as usize <= last_offset
-                        && last_offset < piece.span.end as usize
-                })?;
+                let first = token_spans
+                    .get(slot.suffix_tokens.start)
+                    .copied()
+                    .flatten()?;
+                let last = token_spans
+                    .get(slot.suffix_tokens.end.checked_sub(1)?)
+                    .copied()
+                    .flatten()?;
                 ByteSpan {
-                    start: first_piece.span.start,
-                    end: last_piece.span.end,
+                    start: first.start,
+                    end: last.end,
                 }
             };
+            let owner = owners.get(id).copied().flatten();
+            let anchor_kind = match slot.kind {
+                RecordedSlotKind::Keyword => CommitmentAnchorKind::Keyword,
+                RecordedSlotKind::Identifier => CommitmentAnchorKind::Identifier,
+                RecordedSlotKind::String => CommitmentAnchorKind::String,
+                RecordedSlotKind::Value => CommitmentAnchorKind::Value,
+            };
             Some(CommitmentSlotSyntax {
-                anchor_kind: match slot.kind {
-                    RecordedSlotKind::Keyword => CommitmentAnchorKind::Keyword,
-                    RecordedSlotKind::Identifier => CommitmentAnchorKind::Identifier,
-                    RecordedSlotKind::String => CommitmentAnchorKind::String,
-                    RecordedSlotKind::Value => CommitmentAnchorKind::Value,
-                },
-                anchor_span: anchor_piece.span,
+                id: CommitmentSlotId(u32::try_from(id).ok()?),
+                owner,
+                anchor_kind,
+                footprint: classify_commitment_footprint(
+                    source,
+                    nodes,
+                    owner,
+                    anchor_kind,
+                    anchor_span,
+                ),
+                anchor_span,
                 suffix_span,
                 full_span: ByteSpan {
-                    start: anchor_piece.span.start,
+                    start: anchor_span.start,
                     end: suffix_span.end,
                 },
                 value: slot.value,
-                adjacent: anchor_piece.span.end == suffix_span.start,
+                adjacent: anchor_span.end == suffix_span.start,
                 semantic_slot: true,
             })
         })
         .collect()
+}
+
+fn classify_commitment_footprint(
+    source: &str,
+    nodes: &[SourceNode],
+    owner: Option<SourceNodeId>,
+    anchor_kind: CommitmentAnchorKind,
+    anchor_span: ByteSpan,
+) -> CommitmentFootprintKind {
+    let anchor = source.get(anchor_span.as_range()).unwrap_or_default();
+    let owner = owner.and_then(|id| nodes.get(id.0 as usize));
+
+    if let Some(owner) = owner {
+        if owner.kind == SourceNodeKind::FlowArm {
+            let header = source
+                .get(owner.spans.header.as_range())
+                .unwrap_or_default();
+            let arrow = header
+                .find(">>>")
+                .map(|index| owner.spans.header.start as usize + index);
+            if arrow.is_some_and(|arrow| (anchor_span.start as usize) < arrow)
+                && (anchor == "on"
+                    || matches!(
+                        anchor_kind,
+                        CommitmentAnchorKind::Identifier | CommitmentAnchorKind::String
+                    ))
+            {
+                return CommitmentFootprintKind::Event;
+            }
+        }
+    }
+
+    if matches!(anchor, "...") {
+        return CommitmentFootprintKind::Placeholder;
+    }
+    if matches!(anchor, "true" | "false") {
+        return CommitmentFootprintKind::Value;
+    }
+    if matches!(
+        anchor_kind,
+        CommitmentAnchorKind::String | CommitmentAnchorKind::Value
+    ) {
+        return CommitmentFootprintKind::Value;
+    }
+    if anchor_kind == CommitmentAnchorKind::Identifier {
+        return CommitmentFootprintKind::NameOrReference;
+    }
+
+    if matches!(anchor, "requires" | "ensures") {
+        return CommitmentFootprintKind::Clause;
+    }
+    if anchor == "on" && owner.is_some_and(|node| node.kind == SourceNodeKind::FlowArm) {
+        return CommitmentFootprintKind::Event;
+    }
+    if anchor == ">>>" {
+        return CommitmentFootprintKind::Transition;
+    }
+    if matches!(
+        anchor,
+        "and"
+            | "or"
+            | "not"
+            | "in"
+            | "=="
+            | "!="
+            | "<"
+            | ">"
+            | "<="
+            | ">="
+            | "+"
+            | "-"
+            | "*"
+            | "/"
+            | "**"
+            | "@"
+            | "&"
+            | "|"
+            | "^"
+            | "~"
+            | "<<"
+            | ">>"
+    ) {
+        return CommitmentFootprintKind::ExpressionOperator;
+    }
+    CommitmentFootprintKind::EntityKind
 }
 
 fn token_offset(source: &str, line_index: &LineIndex, token: &Token) -> Option<usize> {
@@ -874,11 +1000,78 @@ fn token_offset(source: &str, line_index: &LineIndex, token: &Token) -> Option<u
         .map(|offset| offset as usize)
 }
 
-fn map_recorded_nodes(
+fn map_token_spans(
     source: &str,
     pieces: &[SourcePiece],
     line_index: &LineIndex,
     tokens: &[Token],
+) -> Vec<Option<ByteSpan>> {
+    tokens
+        .iter()
+        .map(|token| {
+            let offset = token_offset(source, line_index, token)?;
+            let index = pieces.partition_point(|piece| piece.span.end as usize <= offset);
+            pieces.get(index).and_then(|piece| {
+                (piece.span.start as usize <= offset
+                    && offset < piece.span.end as usize
+                    && !piece.kind.is_trivia())
+                .then_some(piece.span)
+            })
+        })
+        .collect()
+}
+
+fn most_specific_nodes_at(
+    nodes: &[SourceNode],
+    offsets: &[Option<u32>],
+) -> Vec<Option<SourceNodeId>> {
+    let mut ordered_nodes = nodes.iter().collect::<Vec<_>>();
+    ordered_nodes.sort_by_key(|node| (node.spans.header.start, node.id.0));
+
+    let mut queries = offsets
+        .iter()
+        .enumerate()
+        .filter_map(|(index, offset)| offset.map(|offset| (offset, index)))
+        .collect::<Vec<_>>();
+    queries.sort_by_key(|(offset, index)| (*offset, *index));
+
+    let mut owners = vec![None; offsets.len()];
+    let mut active = BTreeSet::<(u32, u32)>::new();
+    let mut endings = BinaryHeap::<Reverse<(u32, u32, u32)>>::new();
+    let mut next_node = 0usize;
+
+    for (offset, query_index) in queries {
+        while next_node < ordered_nodes.len()
+            && ordered_nodes[next_node].spans.header.start <= offset
+        {
+            let node = ordered_nodes[next_node];
+            if node.spans.core.end > offset {
+                active.insert((node.spans.core.len(), node.id.0));
+                endings.push(Reverse((
+                    node.spans.core.end,
+                    node.spans.core.len(),
+                    node.id.0,
+                )));
+            }
+            next_node += 1;
+        }
+        while endings
+            .peek()
+            .is_some_and(|Reverse((end, _, _))| *end <= offset)
+        {
+            let Reverse((_, len, id)) = endings.pop().expect("peeked ending must exist");
+            active.remove(&(len, id));
+        }
+        owners[query_index] = active.first().map(|(_, id)| SourceNodeId(*id));
+    }
+
+    owners
+}
+
+fn map_recorded_nodes(
+    source: &str,
+    tokens: &[Token],
+    token_spans: &[Option<ByteSpan>],
     recorded: &[RecordedSourceNode],
     rule_groups: &[RuleGroupSyntax],
 ) -> Vec<SourceNode> {
@@ -894,26 +1087,19 @@ fn map_recorded_nodes(
                 ) {
                     return None;
                 }
-                let offset = token_offset(source, line_index, token)?;
-                pieces.iter().find(|piece| {
-                    piece.span.start as usize <= offset
-                        && offset < piece.span.end as usize
-                        && !piece.kind.is_trivia()
-                })
+                token_spans.get(token_index).copied().flatten()
             });
             let concrete = concrete.collect::<Vec<_>>();
             let first = concrete.first()?;
             let last = concrete.last()?;
             let core = ByteSpan {
-                start: first.span.start,
-                end: last.span.end,
+                start: first.start,
+                end: last.end,
             };
-            let header_end = source[first.span.start as usize..]
+            let header_end = source[first.start as usize..]
                 .find(['\r', '\n'])
-                .map_or(source.len(), |relative| {
-                    first.span.start as usize + relative
-                });
-            let header = ByteSpan::new(first.span.start as usize, header_end);
+                .map_or(source.len(), |relative| first.start as usize + relative);
+            let header = ByteSpan::new(first.start as usize, header_end);
             let prelude = rule_groups.iter().find(|group| {
                 group.attachment == RuleAttachmentSyntaxKind::AttachedCandidate
                     && group
@@ -935,6 +1121,7 @@ fn map_recorded_nodes(
 
 fn map_node_kind(kind: RecordedNodeKind) -> SourceNodeKind {
     match kind {
+        RecordedNodeKind::Rule => SourceNodeKind::Rule,
         RecordedNodeKind::Module => SourceNodeKind::Module,
         RecordedNodeKind::TypeDef => SourceNodeKind::TypeDef,
         RecordedNodeKind::Flow => SourceNodeKind::Flow,
@@ -948,6 +1135,9 @@ fn map_node_kind(kind: RecordedNodeKind) -> SourceNodeKind {
         RecordedNodeKind::FlowEntry => SourceNodeKind::FlowEntry,
         RecordedNodeKind::FlowArm => SourceNodeKind::FlowArm,
         RecordedNodeKind::Step => SourceNodeKind::Step,
+        RecordedNodeKind::Desc => SourceNodeKind::Desc,
+        RecordedNodeKind::Clause => SourceNodeKind::Clause,
+        RecordedNodeKind::Math => SourceNodeKind::Math,
     }
 }
 
@@ -1039,10 +1229,7 @@ fn line_start_offset(source: &str, offset: usize) -> usize {
 }
 
 fn map_recorded_rules(
-    source: &str,
-    pieces: &[SourcePiece],
-    line_index: &LineIndex,
-    tokens: &[Token],
+    token_spans: &[Option<ByteSpan>],
     recorded: &[RecordedRuleOccurrence],
     nodes: &[SourceNode],
 ) -> Vec<RuleOccurrence> {
@@ -1050,7 +1237,7 @@ fn map_recorded_rules(
         .iter()
         .enumerate()
         .filter_map(|(id, rule)| {
-            let span = token_range_span(source, pieces, line_index, tokens, rule.tokens.clone())?;
+            let span = token_range_span(token_spans, rule.tokens.clone())?;
             let (attachment, target_token, scope_token) = match rule.decision {
                 RecordedRuleDecision::Pending => (RuleAttachment::Pending, None, None),
                 RecordedRuleDecision::Attached { target_token } => {
@@ -1063,14 +1250,14 @@ fn map_recorded_rules(
                     (RuleAttachment::DroppedByRecovery, None, None)
                 }
             };
-            let target_anchor = target_token
-                .and_then(|token| token_anchor_span(source, pieces, line_index, tokens, token));
-            let scope_anchor = scope_token
-                .and_then(|token| token_anchor_span(source, pieces, line_index, tokens, token));
+            let target_anchor =
+                target_token.and_then(|token| token_anchor_span(token_spans, token));
+            let scope_anchor = scope_token.and_then(|token| token_anchor_span(token_spans, token));
             let target = target_anchor.and_then(|anchor| {
                 nodes
                     .iter()
-                    .find(|node| node.spans.header.start == anchor.start)
+                    .filter(|node| node.spans.header.start == anchor.start)
+                    .max_by_key(|node| node.id.0)
                     .map(|node| node.id)
             });
             Some(RuleOccurrence {
@@ -1085,16 +1272,8 @@ fn map_recorded_rules(
         .collect()
 }
 
-fn token_range_span(
-    source: &str,
-    pieces: &[SourcePiece],
-    line_index: &LineIndex,
-    tokens: &[Token],
-    range: Range<usize>,
-) -> Option<ByteSpan> {
-    let mut spans = range.filter_map(|token_index| {
-        token_anchor_span(source, pieces, line_index, tokens, token_index)
-    });
+fn token_range_span(token_spans: &[Option<ByteSpan>], range: Range<usize>) -> Option<ByteSpan> {
+    let mut spans = range.filter_map(|token_index| token_anchor_span(token_spans, token_index));
     let first = spans.next()?;
     let mut end = first.end;
     for span in spans {
@@ -1106,23 +1285,8 @@ fn token_range_span(
     })
 }
 
-fn token_anchor_span(
-    source: &str,
-    pieces: &[SourcePiece],
-    line_index: &LineIndex,
-    tokens: &[Token],
-    token_index: usize,
-) -> Option<ByteSpan> {
-    let token = tokens.get(token_index)?;
-    let offset = token_offset(source, line_index, token)?;
-    pieces
-        .iter()
-        .find(|piece| {
-            piece.span.start as usize <= offset
-                && offset < piece.span.end as usize
-                && !piece.kind.is_trivia()
-        })
-        .map(|piece| piece.span)
+fn token_anchor_span(token_spans: &[Option<ByteSpan>], token_index: usize) -> Option<ByteSpan> {
+    token_spans.get(token_index).copied().flatten()
 }
 
 fn suffix_at(source: &str, pieces: &[SourcePiece], index: usize) -> Option<(Commitment, usize)> {
@@ -1462,6 +1626,71 @@ mod tests {
             .all(|slot| slot.semantic_slot && slot.suffix_span.is_empty()));
         for slot in empty_slots {
             assert_eq!(slot.anchor_span.end, slot.suffix_span.start);
+        }
+    }
+
+    #[test]
+    fn semantic_commitment_slots_have_stable_ids_owners_and_footprints() {
+        let source = r#"rule$ "audit"?
+func?? Pay$:
+    requires$: ready
+    steps:
+        desc? "charge"??
+
+flow:
+    Pending:
+        on? Capture$ >>>$? Paid$: desc "done"
+"#;
+        let result = parse_lossless(source);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        for (index, slot) in result.document.commitment_slots().iter().enumerate() {
+            assert_eq!(slot.id, CommitmentSlotId(index as u32));
+            assert!(slot.owner.is_some(), "owner missing for {slot:?}");
+            assert_ne!(slot.footprint, CommitmentFootprintKind::Unknown);
+            assert_eq!(result.document.commitment_slot(slot.id), Some(slot));
+        }
+        assert!(result.document.nodes().iter().any(|node| {
+            node.kind == SourceNodeKind::Rule
+                && result.document.text(node.spans.header) == Some("rule$ \"audit\"?")
+        }));
+    }
+
+    #[test]
+    fn batched_slot_owner_lookup_matches_exhaustive_containment() {
+        let source = r#"module App:
+    func Pay(order):
+        requires: order.ready
+        steps:
+            if order.ready:
+                charge payment
+            else:
+                reject payment
+    flow:
+        Pending:
+            on Approved >>> Paid: desc "settled"
+"#;
+        let result = parse_lossless(source);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+
+        let mut offsets = result
+            .document
+            .commitment_slots()
+            .iter()
+            .map(|slot| Some(slot.anchor_span.start))
+            .collect::<Vec<_>>();
+        offsets.extend(result.document.nodes().iter().flat_map(|node| {
+            [
+                Some(node.spans.header.start),
+                node.spans.core.end.checked_sub(1),
+            ]
+        }));
+        offsets.push(None);
+
+        let batched = most_specific_nodes_at(result.document.nodes(), &offsets);
+        for (offset, actual) in offsets.into_iter().zip(batched) {
+            let expected =
+                offset.and_then(|offset| most_specific_node_at(result.document.nodes(), offset));
+            assert_eq!(actual, expected, "offset {offset:?}");
         }
     }
 

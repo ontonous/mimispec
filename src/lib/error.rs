@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use serde::Serialize;
+
 use crate::ast::File;
 
 /// Cross-file resolution error.
@@ -109,10 +111,42 @@ impl std::fmt::Display for ErrorCode {
 /// where parsing failed, but the parser continues recovering after each error.
 ///
 /// [`File`]: crate::ast::File
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ParseStatus {
+    Complete,
+    Partial,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParseResult {
     pub file: File,
     pub errors: Vec<ParseError>,
+    pub status: ParseStatus,
+}
+
+impl ParseResult {
+    pub fn new(file: File, errors: Vec<ParseError>) -> Self {
+        let status = if errors.is_empty() {
+            ParseStatus::Complete
+        } else {
+            ParseStatus::Partial
+        };
+        Self {
+            file,
+            errors,
+            status,
+        }
+    }
+
+    pub fn is_partial(&self) -> bool {
+        self.status == ParseStatus::Partial
+    }
+
+    pub fn push_error(&mut self, error: ParseError) {
+        self.errors.push(error);
+        self.status = ParseStatus::Partial;
+    }
 }
 
 /// A single parse error with structured diagnostic information.

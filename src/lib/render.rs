@@ -85,19 +85,7 @@ impl Renderer {
             self.blank_line();
         }
 
-        for rule in &file.rules {
-            self.render_rule(rule);
-        }
-        if !file.rules.is_empty() {
-            self.blank_line();
-        }
-
-        for (i, fragment) in file.fragments.iter().enumerate() {
-            if i > 0 {
-                self.blank_line();
-            }
-            self.render_fragment(fragment);
-        }
+        self.render_items(&file.fragments, true);
     }
 
     fn render_rule(&mut self, rule: &RuleDef) {
@@ -112,6 +100,9 @@ impl Renderer {
     fn render_fragment(&mut self, fragment: &Fragment) {
         self.flush_blank();
         match fragment {
+            Fragment::Desc { desc } => self.render_desc(desc),
+            Fragment::Rule { rule } => self.render_rule(rule),
+            Fragment::Clause { clause } => self.render_clause(clause),
             Fragment::Module { module } => self.render_module(module),
             Fragment::TypeDef { typedef } => self.render_type_def(typedef),
             Fragment::Flow { flow } => self.render_flow(flow),
@@ -119,15 +110,16 @@ impl Renderer {
             Fragment::Ui { ui } => self.render_ui(ui),
             Fragment::Steps {
                 keyword_commitment,
-                steps,
+                items,
             } => {
                 self.write_indent();
                 self.push("steps");
                 self.push(&keyword_commitment.to_string());
                 self.push(":");
                 self.newline();
-                self.render_steps_block(steps);
+                self.render_steps_block(items);
             }
+            Fragment::Step { step } => self.render_step(step),
             Fragment::Expr { expr } => {
                 self.write_indent();
                 self.push(&render_expr(expr));
@@ -135,8 +127,12 @@ impl Renderer {
             }
             Fragment::UiNode { node } => {
                 self.render_ui_node(node);
-                self.newline();
             }
+            Fragment::Math { math } => self.render_math_block(math),
+            Fragment::Field { field } => self.render_field(field),
+            Fragment::Variants { variants } => self.render_variant_line(variants, false),
+            Fragment::FlowEntry { entry } => self.render_flow_entry(entry),
+            Fragment::FlowArm { arm } => self.render_flow_arm(arm),
             Fragment::Placeholder { keyword_commitment } => {
                 self.write_indent();
                 self.push("...");
@@ -146,15 +142,37 @@ impl Renderer {
         }
     }
 
-    /// Render fragment-level rules as a front prelude so reparse keeps them attached.
-    fn render_attached_prelude(&mut self, rules: &[RuleDef]) {
-        for rule in rules {
-            self.render_rule(rule);
+    fn render_items(&mut self, items: &[Fragment], separate_structures: bool) {
+        for (index, item) in items.iter().enumerate() {
+            if index > 0 {
+                let previous = &items[index - 1];
+                let attached_transition = matches!(previous, Fragment::Rule { rule }
+                    if matches!(rule.attachment, RuleAttachment::Attached { target_index } if target_index == index));
+                let consecutive_rules = matches!(previous, Fragment::Rule { .. })
+                    && matches!(item, Fragment::Rule { .. });
+                let current_continues_environment_chain = matches!(item, Fragment::Rule { rule }
+                    if matches!(rule.attachment, RuleAttachment::Environment | RuleAttachment::UnresolvedByRecovery));
+                let environment_boundary = matches!(previous, Fragment::Rule { rule }
+                    if matches!(rule.attachment, RuleAttachment::Environment | RuleAttachment::UnresolvedByRecovery))
+                    && (!consecutive_rules || !current_continues_environment_chain);
+                let structure_boundary = separate_structures
+                    && !matches!(
+                        item,
+                        Fragment::Desc { .. } | Fragment::Clause { .. } | Fragment::Step { .. }
+                    )
+                    && !matches!(
+                        previous,
+                        Fragment::Desc { .. } | Fragment::Clause { .. } | Fragment::Rule { .. }
+                    );
+                if !attached_transition && (environment_boundary || structure_boundary) {
+                    self.blank_line();
+                }
+            }
+            self.render_fragment(item);
         }
     }
 
     fn render_module(&mut self, module: &Module) {
-        self.render_attached_prelude(&module.rules);
         self.write_indent();
         self.push("module");
         self.push(&module.keyword_commitment.to_string());
@@ -163,29 +181,17 @@ impl Renderer {
         self.push(":");
         self.newline();
         self.set_indent(self.indent + 1);
-
-        if let Some(desc) = &module.desc {
-            self.render_desc(desc);
-        }
-        if let Some(math) = &module.math {
-            self.render_math_block(math);
-        }
-        for (i, item) in module.items.iter().enumerate() {
-            if i > 0
-                && !matches!(
-                    item,
-                    Fragment::Steps { .. } | Fragment::Expr { .. } | Fragment::UiNode { .. }
-                )
-            {
-                self.blank_line();
-            }
-            self.render_fragment(item);
+        if module.items.is_empty() {
+            self.write_indent();
+            self.push("...");
+            self.newline();
+        } else {
+            self.render_items(&module.items, true);
         }
         self.set_indent(self.indent - 1);
     }
 
     fn render_type_def(&mut self, typedef: &TypeDef) {
-        self.render_attached_prelude(&typedef.rules);
         self.write_indent();
         self.push("type");
         self.push(&typedef.keyword_commitment.to_string());
@@ -194,57 +200,41 @@ impl Renderer {
         self.push(":");
 
         match &typedef.body {
-            TypeBody::Enum { variants } => {
-                if variants.len() > 4 {
-                    // Multi-line enum (方案A): one variant per line with leading `|`
+            TypeBody::Enum {
+                inline: true,
+                items,
+            } if items.len() == 1 => {
+                if let Fragment::Variants { variants } = &items[0] {
+                    self.push(" ");
+                    self.render_variant_values(variants);
                     self.newline();
-                    self.set_indent(self.indent + 1);
-                    for v in variants {
-                        self.write_indent();
-                        self.push("| ");
-                        self.push(&render_ident(v));
-                        self.newline();
-                    }
-                    self.set_indent(self.indent - 1);
                 } else {
-                    // Inline enum: A | B | C
-                    for (i, v) in variants.iter().enumerate() {
-                        if i > 0 {
-                            self.push(" | ");
-                        } else {
-                            self.push(" ");
-                        }
-                        self.push(&render_ident(v));
-                    }
-                    self.newline();
+                    self.render_type_block(items);
                 }
             }
-            TypeBody::Record { fields } => {
-                if fields.is_empty() && typedef.desc.is_none() && typedef.math.is_none() {
+            TypeBody::Enum { items, .. } | TypeBody::Record { items } => {
+                if items.len() == 1 && matches!(items[0], Fragment::Placeholder { .. }) {
+                    let Fragment::Placeholder { keyword_commitment } = &items[0] else {
+                        unreachable!()
+                    };
                     self.push(" ...");
+                    self.push(&keyword_commitment.to_string());
                     self.newline();
                 } else {
-                    self.newline();
-                    self.set_indent(self.indent + 1);
-                    if let Some(desc) = &typedef.desc {
-                        self.render_desc(desc);
-                    }
-                    for field in fields {
-                        self.render_field(field);
-                    }
-                    if let Some(math) = &typedef.math {
-                        self.render_math_block(math);
-                    }
-                    self.set_indent(self.indent - 1);
+                    self.render_type_block(items);
                 }
             }
         }
     }
 
+    fn render_type_block(&mut self, items: &[Fragment]) {
+        self.newline();
+        self.set_indent(self.indent + 1);
+        self.render_items(items, false);
+        self.set_indent(self.indent - 1);
+    }
+
     fn render_field(&mut self, field: &Field) {
-        for rule in &field.rules {
-            self.render_rule(rule);
-        }
         self.write_indent();
         self.push(&render_ident(&field.name));
         self.push(":");
@@ -256,86 +246,86 @@ impl Renderer {
     }
 
     fn render_flow(&mut self, flow: &FlowDef) {
-        self.render_attached_prelude(&flow.rules);
         self.write_indent();
         self.push("flow");
         self.push(&flow.keyword_commitment.to_string());
-        self.push(" ");
-        self.push(&render_ident(&flow.name));
+        if let Some(name) = &flow.name {
+            self.push(" ");
+            self.push(&render_ident(name));
+        }
         self.push(":");
-        if flow.entries.is_empty() {
+        if flow.items.len() == 1 && matches!(flow.items[0], Fragment::Placeholder { .. }) {
+            let Fragment::Placeholder { keyword_commitment } = &flow.items[0] else {
+                unreachable!()
+            };
             self.push(" ...");
+            self.push(&keyword_commitment.to_string());
             self.newline();
         } else {
             self.newline();
             self.set_indent(self.indent + 1);
-            for entry in &flow.entries {
-                self.render_flow_entry(entry);
-            }
+            self.render_items(&flow.items, false);
             self.set_indent(self.indent - 1);
         }
     }
 
     fn render_flow_entry(&mut self, entry: &FlowEntry) {
-        for rule in &entry.rules {
-            self.render_rule(rule);
-        }
         self.write_indent();
         self.push(&render_ident(&entry.state));
-        if entry.arms.len() == 1 && entry.arms[0].rules.is_empty() {
-            let arm = &entry.arms[0];
-            self.push(" >>>");
-            self.push(&arm.to_keyword_commitment.to_string());
+        if entry.items.len() == 1 {
+            let Fragment::FlowArm { arm } = &entry.items[0] else {
+                self.push(":");
+                self.newline();
+                self.set_indent(self.indent + 1);
+                self.render_items(&entry.items, false);
+                self.set_indent(self.indent - 1);
+                return;
+            };
             self.push(" ");
-            self.push(&render_ident(&arm.to));
-            self.push(":");
-            if let Some(req) = &arm.requires {
-                self.push(" requires");
-                self.push(&arm.requires_keyword_commitment.to_string());
-                self.push(": ");
-                self.push(&render_condition(req));
-            }
-            if let Some(desc) = &arm.desc {
-                self.push(" ");
-                self.push(&render_desc_inline(desc));
-            }
+            self.render_flow_arm_content(arm);
             self.newline();
         } else {
             self.push(":");
             self.newline();
             self.set_indent(self.indent + 1);
-            for arm in &entry.arms {
-                self.render_flow_arm(arm);
-            }
+            self.render_items(&entry.items, false);
             self.set_indent(self.indent - 1);
         }
     }
 
     fn render_flow_arm(&mut self, arm: &FlowArm) {
-        for rule in &arm.rules {
-            self.render_rule(rule);
-        }
         self.write_indent();
+        self.render_flow_arm_content(arm);
+        self.newline();
+    }
+
+    fn render_flow_arm_content(&mut self, arm: &FlowArm) {
+        if let Some(event) = &arm.event {
+            self.push("on");
+            self.push(&event.keyword_commitment.to_string());
+            self.push(" ");
+            match &event.name {
+                EventName::Ident { value } => self.push(&render_ident(value)),
+                EventName::Natural { text } => self.push(&render_fstring(text)),
+            }
+            self.push(" ");
+        }
         self.push(">>>");
         self.push(&arm.to_keyword_commitment.to_string());
         self.push(" ");
         self.push(&render_ident(&arm.to));
         self.push(":");
-        if let Some(req) = &arm.requires {
-            self.push(" requires");
-            self.push(&arm.requires_keyword_commitment.to_string());
-            self.push(": ");
-            self.push(&render_condition(req));
-        }
-        if let Some(desc) = &arm.desc {
+        for item in &arm.items {
             self.push(" ");
-            self.push(&render_desc_inline(desc));
+            match item {
+                Fragment::Clause { clause } => self.push(&render_clause_inline(clause)),
+                Fragment::Desc { desc } => self.push(&render_desc_inline(desc)),
+                _ => {}
+            }
         }
-        self.newline();
     }
 
     fn render_func(&mut self, func: &FuncDef) {
-        self.render_attached_prelude(&func.rules);
         self.write_indent();
         self.push("func");
         self.push(&func.keyword_commitment.to_string());
@@ -351,50 +341,43 @@ impl Renderer {
             self.push(&render_capabilities(&func.capabilities));
         }
         self.push(":");
-        let is_placeholder = func.desc.is_none()
-            && func.requires.is_none()
-            && func.ensures.is_none()
-            && func.math.is_none()
-            && func.steps.is_empty();
-        if is_placeholder {
+        if func.items.len() == 1 && matches!(func.items[0], Fragment::Placeholder { .. }) {
+            let Fragment::Placeholder { keyword_commitment } = &func.items[0] else {
+                unreachable!()
+            };
             self.push(" ...");
+            self.push(&keyword_commitment.to_string());
             self.newline();
             return;
         }
         self.newline();
         self.set_indent(self.indent + 1);
-
-        if let Some(desc) = &func.desc {
-            self.render_desc(desc);
-        }
-        if let Some(req) = &func.requires {
-            self.write_indent();
-            self.push("requires");
-            self.push(&func.requires_keyword_commitment.to_string());
-            self.push(": ");
-            self.push(&render_condition(req));
-            self.newline();
-        }
-        if let Some(ens) = &func.ensures {
-            self.write_indent();
-            self.push("ensures");
-            self.push(&func.ensures_keyword_commitment.to_string());
-            self.push(": ");
-            self.push(&render_condition(ens));
-            self.newline();
-        }
-        if let Some(math) = &func.math {
-            self.render_math_block(math);
-        }
-        if !func.steps.is_empty() {
-            self.write_indent();
-            self.push("steps");
-            self.push(&func.steps_keyword_commitment.to_string());
-            self.push(":");
-            self.newline();
-            self.render_steps_block(&func.steps);
-        }
+        self.render_items(&func.items, false);
         self.set_indent(self.indent - 1);
+    }
+
+    fn render_clause(&mut self, clause: &Clause) {
+        self.write_indent();
+        self.push(&render_clause_inline(clause));
+        self.newline();
+    }
+
+    fn render_variant_line(&mut self, variants: &[Ident], leading_pipe: bool) {
+        self.write_indent();
+        if leading_pipe {
+            self.push("| ");
+        }
+        self.render_variant_values(variants);
+        self.newline();
+    }
+
+    fn render_variant_values(&mut self, variants: &[Ident]) {
+        for (index, variant) in variants.iter().enumerate() {
+            if index > 0 {
+                self.push(" | ");
+            }
+            self.push(&render_ident(variant));
+        }
     }
 
     fn render_desc(&mut self, desc: &Desc) {
@@ -421,11 +404,15 @@ impl Renderer {
         self.set_indent(self.indent - 1);
     }
 
-    fn render_steps_block(&mut self, steps: &[Step]) {
+    fn render_steps_block(&mut self, items: &[Fragment]) {
         self.set_indent(self.indent + 1);
-        for step in steps {
-            self.render_step(step);
-        }
+        self.render_items(items, false);
+        self.set_indent(self.indent - 1);
+    }
+
+    fn render_step_items(&mut self, items: &[Fragment]) {
+        self.set_indent(self.indent + 1);
+        self.render_items(items, false);
         self.set_indent(self.indent - 1);
     }
 
@@ -494,14 +481,14 @@ impl Renderer {
         self.push(&render_condition(&step.cond));
         self.push(":");
         self.newline();
-        self.render_steps_block(&step.then_branch);
+        self.render_step_items(&step.then_branch);
         if let Some(else_branch) = &step.else_branch {
             self.write_indent();
             self.push("else");
             self.push(&step.else_keyword_commitment.to_string());
             self.push(":");
             self.newline();
-            self.render_steps_block(else_branch);
+            self.render_step_items(else_branch);
         }
     }
 
@@ -515,7 +502,7 @@ impl Renderer {
         self.push(&render_atoms(&step.iterable));
         self.push(":");
         self.newline();
-        self.render_steps_block(&step.body);
+        self.render_step_items(&step.body);
     }
 
     fn render_while_step(&mut self, step: &WhileStep) {
@@ -530,7 +517,7 @@ impl Renderer {
         }
         self.push(":");
         self.newline();
-        self.render_steps_block(&step.body);
+        self.render_step_items(&step.body);
     }
 
     fn render_parasteps_step(&mut self, step: &ParastepsStep) {
@@ -543,7 +530,7 @@ impl Renderer {
         }
         self.push(":");
         self.newline();
-        self.render_steps_block(&step.steps);
+        self.render_step_items(&step.steps);
     }
 
     fn render_error_step(&mut self, step: &ErrorStep) {
@@ -567,35 +554,30 @@ impl Renderer {
         self.push(&render_atoms(&on.condition));
         self.push(":");
         self.newline();
-        self.render_steps_block(&on.steps);
+        self.render_step_items(&on.steps);
     }
 
     fn render_ui(&mut self, ui: &UiDef) {
-        self.render_attached_prelude(&ui.rules);
         self.write_indent();
         self.push("ui");
         self.push(&ui.keyword_commitment.to_string());
         self.push(" ");
         self.push(&render_ident(&ui.name));
         if let Some(binds) = &ui.binds {
-            self.push(" binds ");
+            self.push(" binds");
+            self.push(&ui.binds_keyword_commitment.to_string());
+            self.push(" ");
             self.push(&render_ident(binds));
         }
         self.push(":");
-        let root_is_empty = match &ui.root {
-            UiNode::Stack { stack } => stack.children.is_empty() && stack.description.is_none(),
-            UiNode::Parallel { parallel } => {
-                parallel.children.is_empty() && parallel.description.is_none()
-            }
-            _ => false,
-        };
-        if root_is_empty {
+        if let [Fragment::Placeholder { keyword_commitment }] = ui.items.as_slice() {
             self.push(" ...");
+            self.push(&keyword_commitment.to_string());
             self.newline();
         } else {
             self.newline();
             self.set_indent(self.indent + 1);
-            self.render_ui_node(&ui.root);
+            self.render_items(&ui.items, false);
             self.set_indent(self.indent - 1);
         }
     }
@@ -621,8 +603,12 @@ impl Renderer {
         self.push(":");
         self.newline();
         self.set_indent(self.indent + 1);
-        for child in &stack.children {
-            self.render_ui_node(child);
+        if stack.items.is_empty() {
+            self.write_indent();
+            self.push("...");
+            self.newline();
+        } else {
+            self.render_items(&stack.items, false);
         }
         self.set_indent(self.indent - 1);
     }
@@ -864,6 +850,19 @@ fn render_desc_inline(desc: &Desc) -> String {
     out.push(' ');
     out.push_str(&render_fstring(&desc.content));
     out
+}
+
+fn render_clause_inline(clause: &Clause) -> String {
+    let keyword = match clause.clause_kind {
+        ClauseKind::Requires => "requires",
+        ClauseKind::Ensures => "ensures",
+    };
+    format!(
+        "{}{}: {}",
+        keyword,
+        clause.keyword_commitment,
+        render_condition(&clause.condition)
+    )
 }
 
 fn render_expr(expr: &Expr) -> String {

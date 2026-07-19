@@ -15,14 +15,13 @@ pub mod ui;
 pub struct Parser {
     pub(super) tokens: Vec<Token>,
     pub(super) pos: usize,
-    pub(super) pending_rules: Vec<RuleDef>,
-    pub(super) pending_rule_ids: Vec<usize>,
     pub(super) errors: Vec<ParseError>,
     block_depth: u32,
     record_source: bool,
     recorded_commitments: Vec<RecordedCommitmentSlot>,
     recorded_nodes: Vec<RecordedSourceNode>,
     recorded_rules: Vec<RecordedRuleOccurrence>,
+    root_item_tokens: Vec<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,6 +42,7 @@ pub(crate) struct RecordedCommitmentSlot {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RecordedNodeKind {
+    Rule,
     Module,
     TypeDef,
     Flow,
@@ -56,6 +56,9 @@ pub(crate) enum RecordedNodeKind {
     FlowEntry,
     FlowArm,
     Step,
+    Desc,
+    Clause,
+    Math,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,14 +107,13 @@ impl Parser {
         Self {
             tokens,
             pos: 0,
-            pending_rules: Vec::new(),
-            pending_rule_ids: Vec::new(),
             errors: Vec::new(),
             block_depth: 0,
             record_source: false,
             recorded_commitments: Vec::new(),
             recorded_nodes: Vec::new(),
             recorded_rules: Vec::new(),
+            root_item_tokens: Vec::new(),
         }
     }
 
@@ -131,6 +133,10 @@ impl Parser {
 
     pub(crate) fn take_recorded_rules(&mut self) -> Vec<RecordedRuleOccurrence> {
         std::mem::take(&mut self.recorded_rules)
+    }
+
+    pub(crate) fn take_root_item_tokens(&mut self) -> Vec<usize> {
+        std::mem::take(&mut self.root_item_tokens)
     }
 
     pub(super) fn record_rule_occurrence(
@@ -232,7 +238,7 @@ impl Parser {
         }
 
         let mut fragments = Vec::new();
-        let mut global_rules = Vec::new();
+        let mut pending_rules: Vec<(usize, Option<usize>)> = Vec::new();
 
         while !self.is_at_end() {
             while self.check(&TokenKind::Dedent) {
@@ -242,76 +248,72 @@ impl Parser {
                 break;
             }
 
-            self.skip_newlines();
-            let mut rule_errors = self.consume_pending_rules();
-            errors.extend(rule_errors);
-
-            let mut newline_count = self.skip_newlines_and_count();
+            let newline_count = self.skip_newlines_and_count();
             if newline_count >= 3 {
-                let (rules, ids) = self.take_pending_rules_with_ids();
-                self.mark_rule_ids(
-                    &ids,
+                self.resolve_semantic_rules(
+                    &mut fragments,
+                    &mut pending_rules,
+                    RuleAttachment::Environment,
                     RecordedRuleDecision::Environment { scope_token: None },
                 );
-                global_rules.extend(rules);
-            }
-
-            while self.check(&TokenKind::Rule) {
-                rule_errors = self.consume_pending_rules();
-                errors.extend(rule_errors);
-                newline_count = self.skip_newlines_and_count();
-                if newline_count >= 3 {
-                    let (rules, ids) = self.take_pending_rules_with_ids();
-                    self.mark_rule_ids(
-                        &ids,
-                        RecordedRuleDecision::Environment { scope_token: None },
-                    );
-                    global_rules.extend(rules);
-                }
             }
 
             if self.is_at_end() {
                 break;
             }
 
+            if self.check(&TokenKind::Rule) {
+                match self.parse_rule_def() {
+                    Ok((rule, record_id)) => {
+                        let index = fragments.len();
+                        fragments.push(Fragment::Rule { rule });
+                        pending_rules.push((index, record_id));
+                    }
+                    Err(error) => {
+                        errors.push(error);
+                        self.synchronize_to_fragment_start();
+                    }
+                }
+                continue;
+            }
+
+            let target_token = self.pos;
             match self.parse_fragment() {
-                Ok(mut f) => {
-                    let target_token = self
-                        .recorded_nodes
-                        .last()
-                        .map_or(self.pos, |node| node.tokens.start);
-                    let unattached = self.attach_rules_to_fragment(&mut f, target_token);
-                    global_rules.extend(unattached);
-                    fragments.push(f);
+                Ok(fragment) => {
+                    let target_index = fragments.len();
+                    self.resolve_semantic_rules(
+                        &mut fragments,
+                        &mut pending_rules,
+                        RuleAttachment::Attached { target_index },
+                        RecordedRuleDecision::Attached { target_token },
+                    );
+                    self.root_item_tokens.push(target_token);
+                    fragments.push(fragment);
                 }
                 Err(e) => {
                     errors.push(e);
-                    let ids = std::mem::take(&mut self.pending_rule_ids);
-                    self.mark_rule_ids(&ids, RecordedRuleDecision::DroppedByRecovery);
-                    self.pending_rules.clear();
+                    self.resolve_semantic_rules(
+                        &mut fragments,
+                        &mut pending_rules,
+                        RuleAttachment::UnresolvedByRecovery,
+                        RecordedRuleDecision::DroppedByRecovery,
+                    );
                     self.synchronize_to_fragment_start();
                 }
             }
         }
 
-        let (rules, ids) = self.take_pending_rules_with_ids();
-        self.mark_rule_ids(
-            &ids,
+        self.resolve_semantic_rules(
+            &mut fragments,
+            &mut pending_rules,
+            RuleAttachment::Environment,
             RecordedRuleDecision::Environment { scope_token: None },
         );
-        global_rules.extend(rules);
 
         let mut all_errors = self.take_errors();
         all_errors.extend(errors);
 
-        ParseResult {
-            file: File {
-                imports,
-                rules: global_rules,
-                fragments,
-            },
-            errors: all_errors,
-        }
+        ParseResult::new(File { imports, fragments }, all_errors)
     }
 
     // ── token navigation ─────────────────────────────────────────────────────
@@ -533,19 +535,6 @@ impl Parser {
         count
     }
 
-    pub(super) fn peek_newline_count(&self) -> usize {
-        let mut count = 0;
-        let mut lookahead = self.pos;
-        while matches!(
-            self.tokens.get(lookahead).map(|t| &t.kind),
-            Some(TokenKind::Newline)
-        ) {
-            lookahead += 1;
-            count += 1;
-        }
-        count
-    }
-
     pub(super) fn line_will_end(&self) -> bool {
         matches!(
             self.peek_kind(),
@@ -567,6 +556,10 @@ impl Parser {
                 | Some(TokenKind::Func)
                 | Some(TokenKind::Ui)
                 | Some(TokenKind::Steps)
+                | Some(TokenKind::Desc)
+                | Some(TokenKind::Requires)
+                | Some(TokenKind::Ensures)
+                | Some(TokenKind::Math)
                 | Some(TokenKind::Ellipsis)
                 | Some(TokenKind::Dedent) => return,
                 _ => {
@@ -586,6 +579,10 @@ impl Parser {
                 | Some(TokenKind::Func)
                 | Some(TokenKind::Ui)
                 | Some(TokenKind::Steps)
+                | Some(TokenKind::Desc)
+                | Some(TokenKind::Requires)
+                | Some(TokenKind::Ensures)
+                | Some(TokenKind::Math)
                 | Some(TokenKind::Import)
                 | Some(TokenKind::Ellipsis)
                 | Some(TokenKind::If)
@@ -627,6 +624,10 @@ impl Parser {
                 | Some(TokenKind::Func)
                 | Some(TokenKind::Ui)
                 | Some(TokenKind::Steps)
+                | Some(TokenKind::Desc)
+                | Some(TokenKind::Requires)
+                | Some(TokenKind::Ensures)
+                | Some(TokenKind::Math)
                 | Some(TokenKind::Import)
                 | Some(TokenKind::Ellipsis)
                 | Some(TokenKind::If)
@@ -725,94 +726,23 @@ impl Parser {
 
     // ── rule management ──────────────────────────────────────────────────────
 
-    pub(super) fn consume_pending_rules(&mut self) -> Vec<ParseError> {
-        let mut errors = Vec::new();
-        loop {
-            let newline_count = self.peek_newline_count();
-
-            if newline_count >= 3 {
-                break;
-            }
-
-            // Advance past newlines
-            for _ in 0..newline_count {
-                self.advance();
-            }
-
-            if !self.check(&TokenKind::Rule) {
-                break;
-            }
-
-            match self.parse_rule_def() {
-                Ok((rule, id)) => {
-                    self.pending_rules.push(rule);
-                    if let Some(id) = id {
-                        self.pending_rule_ids.push(id);
-                    }
-                }
-                Err(e) => {
-                    errors.push(e);
-                    self.synchronize_to_fragment_start();
-                    break;
-                }
-            }
-        }
-        errors
-    }
-
-    pub(super) fn take_pending_rules_with_ids(&mut self) -> (Vec<RuleDef>, Vec<usize>) {
-        (
-            std::mem::take(&mut self.pending_rules),
-            std::mem::take(&mut self.pending_rule_ids),
-        )
-    }
-
-    pub(super) fn attach_rules_to_fragment(
+    pub(super) fn resolve_semantic_rules(
         &mut self,
-        fragment: &mut Fragment,
-        target_token: usize,
-    ) -> Vec<RuleDef> {
-        let (rules, ids) = self.take_pending_rules_with_ids();
-        let attached = Self::fragment_accepts_rules(fragment);
-        let unattached = Self::attach_rules_to_fragment_from(rules, fragment);
-        self.mark_rule_ids(
-            &ids,
-            if attached {
-                RecordedRuleDecision::Attached { target_token }
-            } else {
-                RecordedRuleDecision::Environment { scope_token: None }
-            },
-        );
-        unattached
-    }
-
-    pub(super) fn fragment_accepts_rules(fragment: &Fragment) -> bool {
-        matches!(
-            fragment,
-            Fragment::Module { .. }
-                | Fragment::TypeDef { .. }
-                | Fragment::Flow { .. }
-                | Fragment::Func { .. }
-                | Fragment::Ui { .. }
-        )
-    }
-
-    pub(super) fn attach_rules_to_fragment_from(
-        rules: Vec<RuleDef>,
-        fragment: &mut Fragment,
-    ) -> Vec<RuleDef> {
-        if rules.is_empty() {
-            return Vec::new();
+        items: &mut [Fragment],
+        pending: &mut Vec<(usize, Option<usize>)>,
+        attachment: RuleAttachment,
+        recorded: RecordedRuleDecision,
+    ) {
+        let record_ids: Vec<usize> = pending
+            .iter()
+            .filter_map(|(_, record_id)| *record_id)
+            .collect();
+        for (item_index, _) in pending.drain(..) {
+            if let Some(rule) = items.get_mut(item_index).and_then(Fragment::rule_mut) {
+                rule.attachment = attachment;
+            }
         }
-        match fragment {
-            Fragment::Module { module } => module.rules.extend(rules),
-            Fragment::TypeDef { typedef } => typedef.rules.extend(rules),
-            Fragment::Flow { flow } => flow.rules.extend(rules),
-            Fragment::Func { func } => func.rules.extend(rules),
-            Fragment::Ui { ui } => ui.rules.extend(rules),
-            _ => return rules,
-        }
-        Vec::new()
+        self.mark_rule_ids(&record_ids, recorded);
     }
 
     // ── desc after keyword ───────────────────────────────────────────────────

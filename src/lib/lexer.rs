@@ -322,6 +322,12 @@ impl<'a> Lexer<'a> {
                         let before = self.col;
                         let before_line = self.line;
                         self.skip_comment();
+                        // A comment-only physical line is trivia, not a blank line.
+                        // Consume its newline here so the next layout iteration does
+                        // not increment `blank_line_count` for it.
+                        if self.peek() == Some('\n') {
+                            self.bump();
+                        }
                         // Ensure progress even if skip_comment is a no-op.
                         if self.line == before_line && self.col == before {
                             self.bump();

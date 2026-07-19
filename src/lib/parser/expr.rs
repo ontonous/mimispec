@@ -302,13 +302,16 @@ impl Parser {
     }
 
     pub(super) fn parse_math_block(&mut self) -> Result<MathBlock, ParseError> {
+        let start = self.pos;
         let keyword_commitment = self.expect_kw(TokenKind::Math, "`math`")?;
         self.expect(TokenKind::Colon, "`:`")?;
         let statements = self.parse_block(|p| p.parse_math_statement());
-        Ok(MathBlock {
+        let math = MathBlock {
             statements,
             keyword_commitment,
-        })
+        };
+        self.record_source_node(start..self.pos, crate::parser::RecordedNodeKind::Math);
+        Ok(math)
     }
 
     pub(super) fn parse_math_statement(&mut self) -> Result<MathStatement, ParseError> {

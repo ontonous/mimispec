@@ -1,6 +1,7 @@
 pub mod ast;
 pub mod cache;
 pub mod collaboration;
+pub mod conformance;
 pub mod diagnostics;
 pub mod error;
 pub mod format;
@@ -8,6 +9,7 @@ pub mod ide;
 pub mod latex;
 pub mod lexer;
 pub mod lossless;
+pub mod lsp;
 pub mod materialize;
 pub mod parser;
 pub mod profile;
@@ -17,6 +19,7 @@ mod render_util;
 pub mod resolver;
 pub mod session;
 pub mod symbol;
+pub mod usability;
 pub mod workflow;
 
 use std::collections::HashMap;
@@ -64,14 +67,13 @@ pub type ParseFileResult = (
 pub fn parse(source: &str) -> ParseResult {
     match Lexer::new(source).tokenize() {
         Ok(tokens) => Parser::new(tokens).parse_file(),
-        Err(e) => ParseResult {
-            file: ast::File {
+        Err(e) => ParseResult::new(
+            ast::File {
                 imports: vec![],
-                rules: vec![],
                 fragments: vec![],
             },
-            errors: vec![e],
-        },
+            vec![e],
+        ),
     }
 }
 
@@ -102,18 +104,19 @@ pub fn parse_lossless(source: &str) -> lossless::LosslessParseResult {
             lossless::LosslessParseResult {
                 document,
                 errors: result.errors,
+                status: result.status,
             }
         }
         Err(error) => {
             let file = ast::File {
                 imports: vec![],
-                rules: vec![],
                 fragments: vec![],
             };
             let document = lossless::build_document(source, file, &[], &[], &[], &[]);
             lossless::LosslessParseResult {
                 document,
                 errors: vec![error],
+                status: error::ParseStatus::Partial,
             }
         }
     }
@@ -135,33 +138,55 @@ pub fn parse_lossless(source: &str) -> lossless::LosslessParseResult {
 pub fn parse_fragment(source: &str) -> ParseResult {
     match Lexer::new(source).tokenize() {
         Ok(tokens) => {
-            let mut parser = Parser::new(tokens);
-            let mut errors = Vec::new();
-            let mut fragments = Vec::new();
-            parser.skip_newlines();
-            match parser.parse_fragment() {
-                Ok(f) => fragments.push(f),
-                Err(e) => errors.push(e),
+            let mut parser = Parser::new_recording(tokens.clone());
+            let mut result = parser.parse_file();
+            let root_items = parser.take_root_item_tokens();
+            let recorded_rules = parser.take_recorded_rules();
+            let mut unit_starts = root_items;
+            let mut environment_rules: Vec<_> = recorded_rules
+                .iter()
+                .filter_map(|rule| match rule.decision {
+                    parser::RecordedRuleDecision::Environment { scope_token: None } => {
+                        Some(rule.tokens.clone())
+                    }
+                    _ => None,
+                })
+                .collect();
+            environment_rules.sort_by_key(|range| range.start);
+            let mut previous_end = None;
+            for range in environment_rules {
+                let begins_new_chain = previous_end.is_none_or(|end| {
+                    tokens[end..range.start]
+                        .iter()
+                        .filter(|token| matches!(token.kind, lexer::TokenKind::Newline))
+                        .count()
+                        >= 3
+                });
+                if begins_new_chain {
+                    unit_starts.push(range.start);
+                }
+                previous_end = Some(range.end);
             }
-            let mut all_errors = parser.take_errors();
-            all_errors.extend(errors);
-            ParseResult {
-                file: ast::File {
-                    imports: vec![],
-                    rules: Vec::new(),
-                    fragments,
-                },
-                errors: all_errors,
+            unit_starts.sort_unstable();
+            unit_starts.dedup();
+            if let Some(offending) = unit_starts.get(1).and_then(|index| tokens.get(*index)) {
+                result.push_error(error::ParseError::unexpected_token(
+                    "additional Context Unit".into(),
+                    "exactly one Context Unit (one item with its rule prelude, or one terminal rule chain)"
+                        .into(),
+                    offending.line,
+                    offending.col,
+                ));
             }
+            result
         }
-        Err(e) => ParseResult {
-            file: ast::File {
+        Err(e) => ParseResult::new(
+            ast::File {
                 imports: vec![],
-                rules: vec![],
                 fragments: vec![],
             },
-            errors: vec![e],
-        },
+            vec![e],
+        ),
     }
 }
 
@@ -226,26 +251,23 @@ pub fn parse_file(path: &Path) -> ParseFileResult {
             .first()
             .map(|(p, e)| format!("{}: {}", p.display(), e))
             .unwrap_or_else(|| "unknown resolve error".into());
-        ParseResult {
-            file: ast::File {
+        ParseResult::new(
+            ast::File {
                 imports: vec![],
-                rules: vec![],
                 fragments: vec![],
             },
-            errors: vec![error::ParseError::internal(msg, 0, 0)],
-        }
+            vec![error::ParseError::internal(msg, 0, 0)],
+        )
     } else {
-        ParseResult {
-            file: file
-                .as_ref()
+        ParseResult::new(
+            file.as_ref()
                 .map(|f| ast::File::clone(f))
                 .unwrap_or_else(|| ast::File {
                     imports: vec![],
-                    rules: vec![],
                     fragments: vec![],
                 }),
-            errors: r_errors,
-        }
+            r_errors,
+        )
     };
     let files = resolver.take_files();
     (result, files, resolve_errors)
@@ -381,13 +403,14 @@ module App:
         let Fragment::Ui { ui } = &module.items[0] else {
             panic!("expected ui")
         };
-        let UiNode::Stack { stack } = &ui.root else {
+        let Some(UiNode::Stack { stack }) = ui.root() else {
             panic!("expected stack")
         };
-        assert_eq!(stack.children.len(), 4);
+        let children = stack.children();
+        assert_eq!(children.len(), 4);
 
         // Check navigation action
-        let UiNode::Leaf { leaf } = &stack.children[0] else {
+        let UiNode::Leaf { leaf } = children[0] else {
             panic!("expected leaf")
         };
         let on = leaf.on.as_ref().unwrap();
@@ -396,21 +419,21 @@ module App:
         );
 
         // Check composite action
-        let UiNode::Leaf { leaf } = &stack.children[1] else {
+        let UiNode::Leaf { leaf } = children[1] else {
             panic!("expected leaf")
         };
         let on = leaf.on.as_ref().unwrap();
         assert_eq!(on.action.actions.len(), 2);
 
         // Check assign action
-        let UiNode::Leaf { leaf } = &stack.children[2] else {
+        let UiNode::Leaf { leaf } = children[2] else {
             panic!("expected leaf")
         };
         let on = leaf.on.as_ref().unwrap();
         assert!(matches!(&on.action.actions[0], Action::Assign { .. }));
 
         // Check natural language action
-        let UiNode::Leaf { leaf } = &stack.children[3] else {
+        let UiNode::Leaf { leaf } = children[3] else {
             panic!("expected leaf")
         };
         let on = leaf.on.as_ref().unwrap();
@@ -434,10 +457,11 @@ module App:
         let Fragment::Ui { ui } = &module.items[0] else {
             panic!("expected ui")
         };
-        let UiNode::Stack { stack } = &ui.root else {
+        let Some(UiNode::Stack { stack }) = ui.root() else {
             panic!("expected stack")
         };
-        let UiNode::Leaf { leaf } = &stack.children[0] else {
+        let children = stack.children();
+        let UiNode::Leaf { leaf } = children[0] else {
             panic!("expected leaf")
         };
         let on = leaf.on.as_ref().unwrap();
@@ -465,8 +489,8 @@ module App:
         let Fragment::Func { func } = &module.items[0] else {
             panic!("expected func")
         };
-        assert_eq!(func.steps.len(), 2);
-        match &func.steps[0] {
+        assert_eq!(func.steps().len(), 2);
+        match func.steps()[0] {
             Step::Parasteps { step: p } => {
                 assert_eq!(p.description.as_ref().unwrap().value, "同时请求多个数据源");
                 assert_eq!(p.steps.len(), 3);
@@ -491,13 +515,28 @@ steps:
         assert!(result.errors.is_empty(), "{:?}", result.errors);
         let file = result.file;
         assert_eq!(file.fragments.len(), 1);
-        let Fragment::Steps { steps, .. } = &file.fragments[0] else {
+        let Fragment::Steps { items, .. } = &file.fragments[0] else {
             panic!("expected steps")
         };
-        assert_eq!(steps.len(), 3);
-        assert!(matches!(&steps[0], Step::Action { .. }));
-        assert!(matches!(&steps[1], Step::If { .. }));
-        assert!(matches!(&steps[2], Step::Action { .. }));
+        assert_eq!(items.len(), 3);
+        assert!(matches!(
+            &items[0],
+            Fragment::Step {
+                step: Step::Action { .. }
+            }
+        ));
+        assert!(matches!(
+            &items[1],
+            Fragment::Step {
+                step: Step::If { .. }
+            }
+        ));
+        assert!(matches!(
+            &items[2],
+            Fragment::Step {
+                step: Step::Action { .. }
+            }
+        ));
     }
 
     #[test]
@@ -510,17 +549,20 @@ module Shop:
             check balance"#;
         let result1 = parse(src1);
         println!("=== 场景1: 顶层 rule 附着给 module ===");
-        println!("file.rules: {}", result1.file.rules.len());
-        let Fragment::Module { module } = &result1.file.fragments[0] else {
+        println!("file.rules: {}", result1.file.rules().len());
+        let Fragment::Module { module } = &result1.file.fragments[1] else {
             panic!()
         };
-        println!("module.rules: {}", module.rules.len());
-        for r in &module.rules {
+        for r in result1.file.rules() {
             println!("  - {}", r.desc.content.value);
         }
-        assert_eq!(result1.file.rules.len(), 0, "顶层 rule 不应留在 file.rules");
-        assert_eq!(module.rules.len(), 1, "rule 应附着给 module");
-        assert_eq!(module.rules[0].desc.content.value, "约束module");
+        assert_eq!(result1.file.rules().len(), 1);
+        assert_eq!(
+            result1.file.rules()[0].attachment,
+            RuleAttachment::Attached { target_index: 1 }
+        );
+        assert_eq!(result1.file.rules()[0].desc.content.value, "约束module");
+        assert!(module.rules().is_empty());
 
         // 场景2: 空行阻断，rule 变为全局
         let src2 = r#"rule "全局约束"
@@ -531,12 +573,16 @@ module Shop:
             check balance"#;
         let result2 = parse(src2);
         println!("\n=== 场景2: 空行阻断 ===");
-        println!("file.rules: {}", result2.file.rules.len());
-        for r in &result2.file.rules {
+        println!("file.rules: {}", result2.file.rules().len());
+        for r in result2.file.rules() {
             println!("  - {}", r.desc.content.value);
         }
-        assert_eq!(result2.file.rules.len(), 1, "空行阻断后 rule 应变为全局");
-        assert_eq!(result2.file.rules[0].desc.content.value, "全局约束");
+        assert_eq!(result2.file.rules().len(), 1, "空行阻断后 rule 应变为全局");
+        assert_eq!(
+            result2.file.rules()[0].attachment,
+            RuleAttachment::Environment
+        );
+        assert_eq!(result2.file.rules()[0].desc.content.value, "全局约束");
 
         // 场景3: module 内 rule 约束 module 本身（不因内部空行中断）
         let src3 = r#"module Shop:
@@ -553,13 +599,18 @@ module Shop:
         let Fragment::Module { module } = &result3.file.fragments[0] else {
             panic!()
         };
-        println!("module.rules: {}", module.rules.len());
-        for r in &module.rules {
+        println!("module.rules(): {}", module.rules().len());
+        for r in module.rules() {
             println!("  - {}", r.desc.content.value);
         }
-        assert_eq!(module.rules.len(), 1);
-        assert_eq!(module.rules[0].desc.content.value, "模块级约束");
-        assert_eq!(module.items.len(), 2, "module 应包含 type 和 func");
+        assert_eq!(module.rules().len(), 1);
+        assert_eq!(module.rules()[0].desc.content.value, "模块级约束");
+        assert_eq!(module.rules()[0].attachment, RuleAttachment::Environment);
+        assert_eq!(
+            module.items.len(),
+            3,
+            "module 应保留 rule、type 和 func 顺序"
+        );
     }
 
     #[test]
@@ -573,15 +624,19 @@ module Agent:
 "#;
         let result = parse(src);
         assert!(result.errors.is_empty(), "{:?}", result.errors);
-        assert_eq!(result.file.rules.len(), 0, "未空行的 rule 不应变为全局约束");
-        assert_eq!(result.file.fragments.len(), 1);
-        let Fragment::Module { module } = &result.file.fragments[0] else {
+        assert_eq!(result.file.rules().len(), 3);
+        assert_eq!(result.file.fragments.len(), 4);
+        let Fragment::Module { module } = &result.file.fragments[3] else {
             panic!("expected module fragment")
         };
-        assert_eq!(module.rules.len(), 3, "三条 rule 应全部附着给 module");
-        assert_eq!(module.rules[0].desc.content.value, "rule A");
-        assert_eq!(module.rules[1].desc.content.value, "rule B");
-        assert_eq!(module.rules[2].desc.content.value, "rule C");
+        assert!(module.rules().is_empty());
+        let rules = result.file.rules();
+        assert!(rules
+            .iter()
+            .all(|rule| { rule.attachment == RuleAttachment::Attached { target_index: 3 } }));
+        assert_eq!(rules[0].desc.content.value, "rule A");
+        assert_eq!(rules[1].desc.content.value, "rule B");
+        assert_eq!(rules[2].desc.content.value, "rule C");
     }
 
     #[test]
@@ -599,13 +654,13 @@ steps:
         let result = parse(src);
         assert!(result.errors.is_empty(), "{:?}", result.errors);
         let file = result.file;
-        // rule 作为前置约束修饰符附着到 steps，所以只有 2 个 fragment
-        assert_eq!(file.fragments.len(), 2);
+        // Rule 作为有序 item 保留；真实空行使其成为 Environment。
+        assert_eq!(file.fragments.len(), 3);
         assert!(matches!(&file.fragments[0], Fragment::TypeDef { .. }));
-        // steps 带有前置 rule
-        assert!(matches!(&file.fragments[1], Fragment::Steps { .. }));
-        // 全局 rule 被收集到 file.rules
-        assert_eq!(file.rules.len(), 1);
+        assert!(matches!(&file.fragments[1], Fragment::Rule { .. }));
+        assert!(matches!(&file.fragments[2], Fragment::Steps { .. }));
+        assert_eq!(file.rules().len(), 1);
+        assert_eq!(file.rules()[0].attachment, RuleAttachment::Environment);
     }
 
     #[test]
@@ -638,8 +693,8 @@ func Pay(order, amount):
         let Fragment::Func { func } = &file.fragments[0] else {
             panic!("expected func")
         };
-        assert_eq!(func.steps.len(), 3);
-        assert!(matches!(&func.steps[1], Step::Placeholder { .. }));
+        assert_eq!(func.steps().len(), 3);
+        assert!(matches!(func.steps()[1], Step::Placeholder { .. }));
     }
 
     #[test]
@@ -684,9 +739,13 @@ func Pay(order, amount):
         };
         assert_eq!(func.name.name, "Pay");
         assert_eq!(func.params.len(), 1);
-        assert!(func.requires.is_none());
-        assert!(func.ensures.is_none());
-        assert!(func.steps.is_empty());
+        assert!(func.requires().is_empty());
+        assert!(func.ensures().is_empty());
+        assert!(func.steps().is_empty());
+        assert!(matches!(
+            func.items.as_slice(),
+            [Fragment::Placeholder { .. }]
+        ));
     }
 
     #[test]
@@ -701,7 +760,7 @@ func Pay(order, amount):
             panic!("expected func")
         };
         assert_eq!(func.name.name, "Pay");
-        assert!(func.steps.is_empty());
+        assert!(func.steps().is_empty());
     }
 
     #[test]
@@ -719,8 +778,8 @@ func Pay(order):
         let Fragment::Func { func } = &file.fragments[0] else {
             panic!("expected func")
         };
-        assert!(func.requires.is_some());
-        let cond = func.requires.as_ref().unwrap();
+        assert_eq!(func.requires().len(), 1);
+        let cond = &func.requires()[0].condition;
         assert!(matches!(
             cond,
             Condition::Structured {
@@ -741,7 +800,11 @@ func Pay(order):
             panic!("expected type")
         };
         assert_eq!(typedef.name.name, "Order");
-        assert!(matches!(&typedef.body, TypeBody::Record { fields } if fields.is_empty()));
+        assert!(matches!(
+            &typedef.body,
+            TypeBody::Record { items }
+                if matches!(items.as_slice(), [Fragment::Placeholder { .. }])
+        ));
     }
 
     #[test]
@@ -755,8 +818,8 @@ func Pay(order):
         let Fragment::Flow { flow } = &file.fragments[0] else {
             panic!("expected flow")
         };
-        assert_eq!(flow.name.name, "Lifecycle");
-        assert!(flow.entries.is_empty());
+        assert_eq!(flow.name.as_ref().unwrap().name, "Lifecycle");
+        assert!(flow.entries().is_empty());
     }
 
     #[test]
@@ -771,7 +834,7 @@ func Pay(order):
             panic!("expected ui")
         };
         assert_eq!(ui.name.name, "View");
-        assert!(matches!(ui.root, UiNode::Stack { .. }));
+        assert!(ui.is_placeholder());
     }
 
     #[test]
@@ -788,8 +851,8 @@ func Pay(order):
         let Fragment::Func { func } = &file.fragments[0] else {
             panic!("expected func")
         };
-        assert_eq!(func.steps.len(), 1);
-        let Step::Assign { step } = &func.steps[0] else {
+        assert_eq!(func.steps().len(), 1);
+        let Step::Assign { step } = &func.steps()[0] else {
             panic!("expected assign")
         };
         assert!(matches!(step.value, SimpleValue::Placeholder { .. }));
@@ -892,7 +955,7 @@ flow Lifecycle:
             .file
             .fragments
             .iter()
-            .any(|f| matches!(f, Fragment::Flow { flow } if flow.name.name == "Lifecycle")));
+            .any(|f| matches!(f, Fragment::Flow { flow } if flow.name.as_ref().is_some_and(|name| name.name == "Lifecycle"))));
     }
 
     #[test]
@@ -933,25 +996,25 @@ type Order:
         let Fragment::TypeDef { typedef } = &file.fragments[0] else {
             panic!("expected type")
         };
-        let TypeBody::Record { fields } = &typedef.body else {
-            panic!("expected record")
-        };
+        let fields = typedef.fields();
         assert_eq!(fields.len(), 3);
 
         assert_eq!(fields[0].name.name, "id");
-        assert_eq!(fields[0].rules.len(), 1);
-        assert_eq!(fields[0].rules[0].desc.content.value, "id 必须大于 0");
+        let id_rules = rules_attached_to(typedef.items(), 1);
+        assert_eq!(id_rules.len(), 1);
+        assert_eq!(id_rules[0].desc.content.value, "id 必须大于 0");
 
         assert_eq!(fields[1].name.name, "status");
-        assert_eq!(fields[1].rules.len(), 2);
-        assert_eq!(fields[1].rules[0].desc.content.value, "status 必须有效");
+        let status_rules = rules_attached_to(typedef.items(), 4);
+        assert_eq!(status_rules.len(), 2);
+        assert_eq!(status_rules[0].desc.content.value, "status 必须有效");
         assert_eq!(
-            fields[1].rules[1].desc.content.value,
+            status_rules[1].desc.content.value,
             "status 不能是 Cancelled"
         );
 
         assert_eq!(fields[2].name.name, "amount");
-        assert_eq!(fields[2].rules.len(), 0);
+        assert!(rules_attached_to(typedef.items(), 5).is_empty());
     }
 
     #[test]
@@ -970,22 +1033,22 @@ type Order:
             result.errors
         );
         let file = result.file;
-        let Fragment::TypeDef { typedef } = &file.fragments[0] else {
+        let Fragment::TypeDef { typedef } = &file.fragments[1] else {
             panic!("expected type")
         };
 
-        assert_eq!(typedef.rules.len(), 1);
-        assert_eq!(typedef.rules[0].desc.content.value, "type-level constraint");
-
-        let TypeBody::Record { fields } = &typedef.body else {
-            panic!("expected record")
-        };
-        assert_eq!(fields.len(), 1);
-        assert_eq!(fields[0].rules.len(), 1);
+        assert_eq!(file.rules().len(), 1);
+        assert_eq!(file.rules()[0].desc.content.value, "type-level constraint");
         assert_eq!(
-            fields[0].rules[0].desc.content.value,
-            "field-level constraint"
+            file.rules()[0].attachment,
+            RuleAttachment::Attached { target_index: 1 }
         );
+
+        let fields = typedef.fields();
+        assert_eq!(fields.len(), 1);
+        let field_rules = rules_attached_to(typedef.items(), 1);
+        assert_eq!(field_rules.len(), 1);
+        assert_eq!(field_rules[0].desc.content.value, "field-level constraint");
     }
 
     #[test]
@@ -1049,12 +1112,12 @@ type Status: A | B
         assert!(func.is_some(), "func Compute should be preserved");
         let func = func.unwrap();
         assert_eq!(
-            func.steps.len(),
+            func.steps().len(),
             1,
             "expected 1 step after skipping invalid 'if :'"
         );
         assert!(
-            matches!(&func.steps[0], Step::Assign { .. }),
+            matches!(&func.steps()[0], Step::Assign { .. }),
             "step should be assignment 'result = x'"
         );
     }
@@ -1080,10 +1143,7 @@ type Status: A | B
         });
         assert!(typedef.is_some(), "type Cat should be preserved");
         let typedef = typedef.unwrap();
-        let fields = match &typedef.body {
-            TypeBody::Record { fields } => fields,
-            _ => panic!("expected record body"),
-        };
+        let fields = typedef.fields();
         assert_eq!(fields.len(), 2, "expected 2 fields: name and color");
         assert_eq!(fields[0].name.name, "name");
         assert_eq!(fields[1].name.name, "color");
@@ -1126,9 +1186,7 @@ module App:
         let Fragment::TypeDef { typedef } = &result.file.fragments[0] else {
             panic!("expected type")
         };
-        let TypeBody::Record { fields } = &typedef.body else {
-            panic!("expected record")
-        };
+        let fields = typedef.fields();
         assert_eq!(fields.len(), 1);
         assert_eq!(fields[0].name.name, "handlers");
         // type_hint: Map [EventType, List[EventHandler]]
@@ -1194,7 +1252,7 @@ func CrossAttention(query, key, value):
         let Fragment::Func { func } = &result.file.fragments[0] else {
             panic!("expected func")
         };
-        let math = func.math.as_ref().expect("expected math block");
+        let math = func.math_blocks()[0];
         assert_eq!(math.statements.len(), 4);
         assert!(matches!(math.statements[0], MathStatement::Define { .. }));
         assert!(matches!(math.statements[1], MathStatement::Define { .. }));
@@ -1216,7 +1274,7 @@ func Compute(x, y):
         let Fragment::Func { func } = &result.file.fragments[0] else {
             panic!("expected func")
         };
-        let math = func.math.as_ref().unwrap();
+        let math = func.math_blocks()[0];
         assert_eq!(math.statements.len(), 5);
     }
 
@@ -1233,8 +1291,8 @@ func MultiHead(Q, num_heads, head_dim):
         let Fragment::Func { func } = &result.file.fragments[0] else {
             panic!("expected func")
         };
-        let requires = func.requires.as_ref().unwrap();
-        let Condition::Structured { expr } = requires else {
+        let requires = func.requires();
+        let Condition::Structured { expr } = &requires[0].condition else {
             panic!("expected structured condition")
         };
         assert!(matches!(expr, Expr::Compare { .. }));
@@ -1254,7 +1312,7 @@ func Last(x):
         let Fragment::Func { func } = &result.file.fragments[0] else {
             panic!("expected func")
         };
-        let math = func.math.as_ref().unwrap();
+        let math = func.math_blocks()[0];
         assert_eq!(math.statements.len(), 3);
     }
 
@@ -1286,7 +1344,7 @@ func Test():
         let Fragment::Func { func } = &result.file.fragments[0] else {
             panic!("expected func")
         };
-        let math = func.math.as_ref().unwrap();
+        let math = func.math_blocks()[0];
         assert_eq!(math.statements.len(), 2);
         let MathStatement::Define { target, .. } = &math.statements[0] else {
             panic!("expected define")
@@ -1321,7 +1379,7 @@ func Configure():
         let Fragment::Func { func } = &result.file.fragments[0] else {
             panic!("expected func")
         };
-        let math = func.math.as_ref().unwrap();
+        let math = func.math_blocks()[0];
         assert_eq!(math.statements.len(), 3);
     }
 
@@ -1341,7 +1399,7 @@ module Physics:
         let Fragment::Module { module } = &result.file.fragments[0] else {
             panic!("expected module")
         };
-        assert!(module.math.is_some());
+        assert_eq!(module.math_blocks().len(), 1);
     }
 
     #[test]
@@ -1358,7 +1416,10 @@ type Rectangle:
         let Fragment::TypeDef { typedef } = &result.file.fragments[0] else {
             panic!("expected type")
         };
-        assert!(typedef.math.is_some());
+        assert!(typedef
+            .items()
+            .iter()
+            .any(|item| matches!(item, Fragment::Math { .. })));
     }
 }
 
@@ -1374,7 +1435,7 @@ mod edge_case_tests {
         let result = parse("");
         assert!(result.errors.is_empty(), "{:?}", result.errors);
         assert!(result.file.imports.is_empty());
-        assert!(result.file.rules.is_empty());
+        assert!(result.file.rules().is_empty());
         assert!(result.file.fragments.is_empty());
     }
 
@@ -1399,13 +1460,10 @@ mod edge_case_tests {
             reparsed.errors,
             rendered
         );
-        let Fragment::Steps { steps, .. } = &reparsed.file.fragments[0] else {
-            panic!("expected steps")
+        let Fragment::Desc { desc } = &reparsed.file.fragments[0] else {
+            panic!("expected root desc")
         };
-        let Step::Desc { content } = &steps[0] else {
-            panic!("expected desc")
-        };
-        assert_eq!(content.content.value, "line1\nline2\ttab\"quote");
+        assert_eq!(desc.content.value, "line1\nline2\ttab\"quote");
     }
 
     #[test]
@@ -1543,8 +1601,10 @@ mod edge_case_tests {
         let Fragment::Flow { flow } = &result.file.fragments[0] else {
             panic!("expected flow")
         };
-        assert_eq!(flow.entries[0].rules.len(), 1);
-        assert_eq!(flow.entries[0].arms[0].rules.len(), 1);
+        assert_eq!(flow.rules().len(), 1);
+        let entry = flow.entries()[0];
+        assert_eq!(entry.rules().len(), 1);
+        assert_eq!(entry.arms().len(), 1);
 
         let rendered = render_file(&result.file);
         let reparsed = parse(&rendered);
@@ -1553,7 +1613,7 @@ mod edge_case_tests {
     }
 
     #[test]
-    fn rules_before_unsupported_fragments_become_environment_rules() {
+    fn rules_before_all_context_items_attach_uniformly() {
         let top_level = parse(
             r#"rule "applies to the file"
 steps:
@@ -1561,7 +1621,10 @@ steps:
 "#,
         );
         assert!(top_level.errors.is_empty(), "{:?}", top_level.errors);
-        assert_eq!(top_level.file.rules.len(), 1);
+        assert_eq!(
+            top_level.file.rules()[0].attachment,
+            RuleAttachment::Attached { target_index: 1 }
+        );
 
         let nested = parse(
             r#"module App:
@@ -1574,7 +1637,11 @@ steps:
         let Fragment::Module { module } = &nested.file.fragments[0] else {
             panic!("expected module")
         };
-        assert_eq!(module.rules.len(), 1);
+        assert_eq!(module.rules().len(), 1);
+        assert_eq!(
+            module.rules()[0].attachment,
+            RuleAttachment::Attached { target_index: 1 }
+        );
     }
 
     #[test]
@@ -1652,7 +1719,7 @@ flow Good: ...
             .file
             .fragments
             .iter()
-            .any(|f| matches!(f, Fragment::Flow { flow } if flow.name.name == "Good")));
+            .any(|f| matches!(f, Fragment::Flow { flow } if flow.name.as_ref().is_some_and(|name| name.name == "Good"))));
     }
 
     #[test]
@@ -1772,9 +1839,9 @@ mod v0_2_tests {
         let Fragment::Func { func } = &result.file.fragments[0] else {
             panic!("expected func")
         };
-        assert_eq!(func.steps.len(), 2);
-        assert!(matches!(&func.steps[0], Step::Placeholder { .. }));
-        assert!(matches!(&func.steps[1], Step::Desc { .. }));
+        assert_eq!(func.steps().len(), 2);
+        assert!(matches!(&func.steps()[0], Step::Placeholder { .. }));
+        assert!(matches!(&func.steps()[1], Step::Desc { .. }));
     }
 
     #[test]
@@ -1789,7 +1856,7 @@ func F:
         let Fragment::Func { func } = &result.file.fragments[0] else {
             panic!("expected func")
         };
-        let Step::Assign { step } = &func.steps[0] else {
+        let Step::Assign { step } = &func.steps()[0] else {
             panic!("expected assign")
         };
         assert!(
@@ -1911,9 +1978,9 @@ module Shop:
         let Fragment::Flow { flow } = &result.file.fragments[0] else {
             panic!("expected flow")
         };
-        assert_eq!(flow.entries.len(), 1);
+        assert_eq!(flow.entries().len(), 1);
         // desc is now on the FlowArm, not FlowDef
-        assert!(flow.entries[0].arms[0].desc.is_some());
+        assert_eq!(flow.entries()[0].arms()[0].descs().len(), 1);
     }
 }
 
@@ -1954,6 +2021,657 @@ mod stress_tests {
         let rendered = render_file(&result.file);
         let reparsed = parse(&rendered);
         assert!(reparsed.errors.is_empty(), "{:?}", reparsed.errors);
+    }
+
+    #[test]
+    fn stress_collect_semantic_slots_large_file() {
+        let src = build_large_module(1000);
+        let result = parse_lossless(&src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+
+        let slots = crate::collaboration::collect_semantic_slot_snapshots(&result.document);
+        assert!(
+            slots.len() >= 5_000,
+            "unexpected slot count: {}",
+            slots.len()
+        );
+        assert!(slots
+            .iter()
+            .all(|slot| result.document.node(slot.node).is_some()));
+    }
+
+    /// 0.3.5 performance budget guard: slot count must scale linearly with
+    /// module size, and every slot must resolve to a live node. This is a
+    /// deterministic regression guard (no wall-clock dependency). Measured
+    /// baseline numbers live in `docs/roadmap-0.3.x.md` §10 and in
+    /// `examples/perf_baseline.rs`.
+    #[test]
+    fn stress_slot_count_scales_linearly_with_module_size() {
+        let counts: Vec<usize> = [250, 500, 1000, 2000]
+            .iter()
+            .map(|&n| {
+                let src = build_large_module(n);
+                let result = parse_lossless(&src);
+                assert!(result.errors.is_empty(), "n={n}: {:?}", result.errors);
+                crate::collaboration::collect_semantic_slot_snapshots(&result.document).len()
+            })
+            .collect();
+
+        // Each func contributes a fixed number of slots (~20). The per-func
+        // yield must not regress: divide through by module size.
+        let per_func: Vec<f64> = counts
+            .iter()
+            .zip([250, 500, 1000, 2000])
+            .map(|(&slots, n)| slots as f64 / n as f64)
+            .collect();
+
+        // Sanity: every size yields a positive, finite per-func slot count.
+        assert!(
+            per_func.iter().all(|x| *x > 0.0 && x.is_finite()),
+            "per-func slot yield must be positive and finite: {per_func:?}"
+        );
+
+        // Linearity guard: doubling module size must double slot count within
+        // ±5%. If this fails, either slot collection gained a quadratic term
+        // or a per-func slot was silently added/removed — both are 0.3.5
+        // release blockers.
+        for window in per_func.windows(2) {
+            let ratio = window[1] / window[0];
+            assert!(
+                (0.95..=1.05).contains(&ratio),
+                "slot-per-func ratio out of linear band: {ratio} (per_func={per_func:?}, counts={counts:?})"
+            );
+        }
+
+        // Absolute floor: 1000 funcs must yield at least 10K slots. If this
+        // drops, a slot category was lost silently.
+        assert!(
+            counts[2] >= 10_000,
+            "1000-func slot count dropped below 10K: {}",
+            counts[2]
+        );
+    }
+}
+
+#[cfg(test)]
+mod v0_3_core_target_tests {
+    use super::*;
+    use crate::ast::{Commitment, Fragment, Step, UiNode};
+    use crate::lossless::RuleAttachment;
+    use crate::render::render_file;
+
+    fn json(file: &crate::ast::File) -> serde_json::Value {
+        serde_json::to_value(file).expect("AST must serialize")
+    }
+
+    fn count_kind(value: &serde_json::Value, expected: &str) -> usize {
+        match value {
+            serde_json::Value::Array(values) => {
+                values.iter().map(|value| count_kind(value, expected)).sum()
+            }
+            serde_json::Value::Object(map) => {
+                usize::from(map.get("kind").and_then(|kind| kind.as_str()) == Some(expected))
+                    + map
+                        .values()
+                        .map(|value| count_kind(value, expected))
+                        .sum::<usize>()
+            }
+            _ => 0,
+        }
+    }
+
+    #[test]
+    fn root_desc_and_clauses_are_first_class_context_items() {
+        let result = parse(
+            r#"desc "提交前确认外部结果"
+requires: amount > 0
+ensures: committed == true
+"#,
+        );
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let value = json(&result.file);
+        assert_eq!(count_kind(&value, "Desc"), 1, "{value:#}");
+        assert_eq!(count_kind(&value, "Clause"), 2, "{value:#}");
+        assert_eq!(count_kind(&value, "Action"), 0, "{value:#}");
+    }
+
+    #[test]
+    fn repeated_descriptions_and_clauses_are_never_overwritten() {
+        let result = parse(
+            r#"func Pay(order, amount):
+    desc "处理支付"
+    desc "订单系统保持提交权威"
+    requires: order.status == Pending
+    requires$: amount > 0
+    ensures: order.status == Paid
+    ensures$: audit.recorded == true
+"#,
+        );
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let value = json(&result.file);
+        assert_eq!(count_kind(&value, "Desc"), 2, "{value:#}");
+        assert_eq!(count_kind(&value, "Clause"), 4, "{value:#}");
+
+        let rendered = render_file(&result.file);
+        assert_eq!(rendered.matches("    desc").count(), 2, "{rendered}");
+        assert_eq!(rendered.matches("    requires").count(), 2, "{rendered}");
+        assert_eq!(rendered.matches("    ensures").count(), 2, "{rendered}");
+    }
+
+    #[test]
+    fn descriptions_before_enum_variants_remain_descriptions() {
+        let result = parse(
+            r#"type FailureScope:
+    desc "传播责任"
+    desc "恢复责任"
+    Local | Peer | External
+"#,
+        );
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let value = json(&result.file);
+        assert_eq!(count_kind(&value, "Desc"), 2, "{value:#}");
+        let rendered = render_file(&result.file);
+        assert_eq!(rendered.matches("    desc").count(), 2, "{rendered}");
+        assert!(rendered.contains("Local | Peer | External"), "{rendered}");
+    }
+
+    #[test]
+    fn flow_accepts_anonymous_name_and_event_labels() {
+        let result = parse(
+            r#"flow$:
+    Pending:
+        on CaptureConfirmed$ >>> Paid$: desc$ "确认后提交"
+        on CancelAccepted >>> Cancelled: requires: allowed == true
+"#,
+        );
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let value = json(&result.file);
+        assert_eq!(count_kind(&value, "Flow"), 1, "{value:#}");
+        let rendered = render_file(&result.file);
+        assert!(rendered.starts_with("flow$:\n"), "{rendered}");
+        assert!(
+            rendered.contains("on CaptureConfirmed$ >>> Paid$"),
+            "{rendered}"
+        );
+        let reparsed = parse(&rendered);
+        assert!(
+            reparsed.errors.is_empty(),
+            "{:?}\n{rendered}",
+            reparsed.errors
+        );
+    }
+
+    #[test]
+    fn every_context_item_can_receive_a_rule_prelude() {
+        let source = r#"rule "约束步骤"
+// comment-only line does not break the paragraph
+steps:
+    do work
+"#;
+        let result = parse_lossless(source);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        assert_eq!(result.document.rules().len(), 1);
+        assert_eq!(
+            result.document.rules()[0].attachment,
+            RuleAttachment::Attached
+        );
+    }
+
+    #[test]
+    fn physical_blank_line_creates_environment_attachment() {
+        let source = r#"rule "当前 Context 约束"
+
+steps:
+    do work
+"#;
+        let result = parse_lossless(source);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        assert_eq!(result.document.rules().len(), 1);
+        assert_eq!(
+            result.document.rules()[0].attachment,
+            RuleAttachment::Environment
+        );
+    }
+
+    #[test]
+    fn parse_fragment_rejects_an_unrelated_trailing_context_unit() {
+        let result = parse_fragment("desc \"one\"\ndesc \"two\"\n");
+        assert!(
+            !result.errors.is_empty(),
+            "trailing input must not be ignored"
+        );
+        assert_eq!((result.errors[0].line, result.errors[0].col), (2, 1));
+        assert!(result.is_partial());
+    }
+
+    #[test]
+    fn parse_fragment_distinguishes_terminal_rule_chains() {
+        let one_chain = parse_fragment("rule \"one\"\nrule \"two\"\n");
+        assert!(one_chain.errors.is_empty(), "{:?}", one_chain.errors);
+
+        let two_chains = parse_fragment("rule \"one\"\n\nrule \"two\"\n");
+        assert!(!two_chains.errors.is_empty());
+        assert_eq!(
+            (two_chains.errors[0].line, two_chains.errors[0].col),
+            (3, 1)
+        );
+    }
+
+    #[test]
+    fn renderer_preserves_environment_then_attached_rule_boundary() {
+        let source = r#"desc "first"
+rule "document environment"
+
+rule "clause prelude"
+requires$: ready
+desc "last"
+"#;
+        let result = parse(source);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let rules = result.file.rules();
+        assert_eq!(rules.len(), 2);
+        assert_eq!(rules[0].attachment, crate::ast::RuleAttachment::Environment);
+        assert!(matches!(
+            rules[1].attachment,
+            crate::ast::RuleAttachment::Attached { .. }
+        ));
+
+        let rendered = render_file(&result.file);
+        assert!(
+            rendered.contains(
+                "rule \"document environment\"\n\nrule \"clause prelude\"\nrequires$: ready"
+            ),
+            "{rendered}"
+        );
+        let reparsed = parse(&rendered);
+        assert!(
+            reparsed.errors.is_empty(),
+            "{:?}\n{rendered}",
+            reparsed.errors
+        );
+        assert_eq!(result.file, reparsed.file);
+    }
+
+    #[test]
+    fn flow_preserves_multiple_inline_tails_and_placeholder_commitment() {
+        let source = r#"flow$?:
+    Pending:
+        on$ Capture?? >>>$? Paid$: requires$: ready ensures?: committed desc$ "first" desc "second"
+"#;
+        let result = parse(source);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let Fragment::Flow { flow } = &result.file.fragments[0] else {
+            panic!("expected flow")
+        };
+        let arm = flow.entries()[0].arms()[0];
+        assert_eq!(arm.items.len(), 4);
+        assert_eq!(arm.clauses().len(), 2);
+        assert_eq!(arm.descs().len(), 2);
+        let rendered = render_file(&result.file);
+        let reparsed = parse(&rendered);
+        assert!(
+            reparsed.errors.is_empty(),
+            "{:?}\n{rendered}",
+            reparsed.errors
+        );
+        assert_eq!(result.file, reparsed.file);
+
+        let placeholder = parse("flow Draft: ...$??\n");
+        assert!(placeholder.errors.is_empty(), "{:?}", placeholder.errors);
+        let rendered = render_file(&placeholder.file);
+        assert_eq!(rendered, "flow Draft: ...$??\n");
+        assert_eq!(placeholder.file, parse(&rendered).file);
+    }
+
+    #[test]
+    fn nested_step_scopes_use_ordered_items_and_rule_attachments() {
+        let source = r#"steps:
+    if ready:
+        rule "attached to work"
+        do work
+        rule "branch environment"
+
+        do later
+"#;
+        let result = parse(source);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let Fragment::Steps { items, .. } = &result.file.fragments[0] else {
+            panic!("expected steps")
+        };
+        let Fragment::Step {
+            step: Step::If { step },
+        } = &items[0]
+        else {
+            panic!("expected if")
+        };
+        assert_eq!(step.then_branch.len(), 4);
+        let Fragment::Rule { rule: attached } = &step.then_branch[0] else {
+            panic!("expected attached rule")
+        };
+        assert_eq!(
+            attached.attachment,
+            crate::ast::RuleAttachment::Attached { target_index: 1 }
+        );
+        let Fragment::Rule { rule: environment } = &step.then_branch[2] else {
+            panic!("expected environment rule")
+        };
+        assert_eq!(
+            environment.attachment,
+            crate::ast::RuleAttachment::Environment
+        );
+
+        let lossless = parse_lossless(source);
+        assert!(lossless.errors.is_empty(), "{:?}", lossless.errors);
+        assert_eq!(lossless.document.rules().len(), 2);
+        assert_eq!(
+            lossless.document.rules()[0].attachment,
+            RuleAttachment::Attached
+        );
+        assert_eq!(
+            lossless.document.rules()[1].attachment,
+            RuleAttachment::Environment
+        );
+
+        let rendered = render_file(&result.file);
+        let reparsed = parse(&rendered);
+        assert!(
+            reparsed.errors.is_empty(),
+            "{:?}\n{rendered}",
+            reparsed.errors
+        );
+        assert_eq!(result.file, reparsed.file);
+    }
+
+    #[test]
+    fn ui_scopes_preserve_rule_items_and_commitment_slots() {
+        let source = r#"ui$ View binds? Model$:
+    rule "root prelude"
+    stack$ "root":
+        rule "child prelude"
+        "button" desc "primary"
+"#;
+        let result = parse(source);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let Fragment::Ui { ui } = &result.file.fragments[0] else {
+            panic!("expected ui")
+        };
+        assert_eq!(ui.binds_keyword_commitment, Commitment::Question);
+        assert_eq!(ui.rules().len(), 1);
+        assert_eq!(
+            ui.rules()[0].attachment,
+            crate::ast::RuleAttachment::Attached { target_index: 1 }
+        );
+        let Some(UiNode::Stack { stack }) = ui.root() else {
+            panic!("expected stack")
+        };
+        assert_eq!(stack.rules().len(), 1);
+        assert_eq!(stack.children().len(), 1);
+
+        let lossless = parse_lossless(source);
+        assert!(lossless.errors.is_empty(), "{:?}", lossless.errors);
+        assert_eq!(lossless.document.rules().len(), 2);
+        assert!(lossless
+            .document
+            .rules()
+            .iter()
+            .all(|rule| rule.attachment == RuleAttachment::Attached));
+        assert!(
+            lossless
+                .document
+                .nodes()
+                .iter()
+                .filter(|node| node.kind == crate::lossless::SourceNodeKind::UiNode)
+                .count()
+                >= 2
+        );
+
+        let rendered = render_file(&result.file);
+        let reparsed = parse(&rendered);
+        assert!(
+            reparsed.errors.is_empty(),
+            "{:?}\n{rendered}",
+            reparsed.errors
+        );
+        assert_eq!(result.file, reparsed.file);
+
+        let placeholder = parse("ui View: ...$$?\n");
+        assert!(placeholder.errors.is_empty(), "{:?}", placeholder.errors);
+        assert_eq!(render_file(&placeholder.file), "ui View: ...$$?\n");
+    }
+
+    #[test]
+    fn comment_trivia_and_real_blank_lines_have_distinct_attachment() {
+        let attached = parse("rule \"attached\"\n// comment-only trivia\ndesc \"target\"\n");
+        assert!(attached.errors.is_empty(), "{:?}", attached.errors);
+        assert!(matches!(
+            attached.file.rules()[0].attachment,
+            crate::ast::RuleAttachment::Attached { .. }
+        ));
+
+        let environment =
+            parse("rule \"environment\"\n// comment-only trivia\n\ndesc \"target\"\n");
+        assert!(environment.errors.is_empty(), "{:?}", environment.errors);
+        assert_eq!(
+            environment.file.rules()[0].attachment,
+            crate::ast::RuleAttachment::Environment
+        );
+    }
+
+    #[test]
+    fn recovery_is_explicitly_partial_and_json_is_versioned() {
+        let source = "rule \"protected\"\nfunc Broken(:\ntype Good: ...\n";
+        let result = parse(source);
+        assert!(result.is_partial());
+        assert_eq!(result.status, crate::error::ParseStatus::Partial);
+        assert!(matches!(
+            result.file.rules()[0].attachment,
+            crate::ast::RuleAttachment::UnresolvedByRecovery
+        ));
+        let value = json(&result.file);
+        assert_eq!(value["schema_version"], crate::ast::AST_SCHEMA_VERSION);
+
+        let lossless = parse_lossless(source);
+        assert!(lossless.is_partial());
+        assert_eq!(lossless.status, crate::error::ParseStatus::Partial);
+        assert_eq!(
+            lossless.document.rules()[0].attachment,
+            RuleAttachment::DroppedByRecovery
+        );
+    }
+
+    #[test]
+    fn recovery_keeps_following_reserved_context_items() {
+        let source = r#"func Broken(:
+desc "preserved"
+requires: ready
+ensures: completed
+math:
+    total = 1
+"#;
+        let result = parse(source);
+        assert!(result.is_partial());
+        let value = json(&result.file);
+        assert_eq!(count_kind(&value, "Desc"), 1, "{value:#}");
+        assert_eq!(count_kind(&value, "Clause"), 2, "{value:#}");
+        assert_eq!(count_kind(&value, "Math"), 1, "{value:#}");
+    }
+
+    #[test]
+    fn context_queries_expose_descriptions_clauses_and_environment_rules() {
+        use std::sync::Arc;
+
+        let result = parse("desc \"context\"\nrequires: ready\nrule \"environment\"\n");
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let query = crate::query::FileQuery::new(Arc::new(result.file));
+        assert_eq!(query.items().count(), 3);
+        assert_eq!(query.descriptions().count(), 1);
+        assert_eq!(query.clauses().count(), 1);
+        assert_eq!(query.environment_rules().count(), 1);
+    }
+}
+
+// ── 0.3.5 Cross-domain acceptance corpus ────────────────────────────────────
+//
+// Closes the 0.3.5 roadmap §10 "Corpus covering: plain-language product
+// intent; state transitions and forbidden behavior; failure and recovery;
+// resource ownership and permissions; ordered communication; external
+// boundaries; multilingual descriptions; and one cohesive real-world product
+// document."
+//
+// The eight corpus files live under `docs/corpora/` and are the canonical
+// cross-domain intent fixtures. This test embeds them with `include_str!`
+// so a syntax change that breaks any corpus fails CI immediately, with the
+// file name in the panic message. Each corpus must:
+//   1. parse cleanly (no errors, Complete status);
+//   2. round-trip through the semantic renderer with an equivalent AST;
+//   3. serialize as valid 0.3 JSON carrying `schema_version`.
+//
+// A regression here is a 0.3.5 release blocker: it means the parser
+// silently lost or rejected a real-world intent pattern.
+#[cfg(test)]
+mod corpus_acceptance_tests {
+    use super::*;
+    use crate::ast::{Fragment, AST_SCHEMA_VERSION};
+    use crate::render::render_file;
+
+    const PLAIN_PRODUCT_INTENT: &str = include_str!("../../docs/corpora/plain-product-intent.mms");
+    const STATE_TRANSITIONS: &str = include_str!("../../docs/corpora/state-transitions.mms");
+    const FAILURE_AND_RECOVERY: &str = include_str!("../../docs/corpora/failure-and-recovery.mms");
+    const RESOURCE_OWNERSHIP: &str = include_str!("../../docs/corpora/resource-ownership.mms");
+    const ORDERED_COMMUNICATION: &str =
+        include_str!("../../docs/corpora/ordered-communication.mms");
+    const EXTERNAL_BOUNDARIES: &str = include_str!("../../docs/corpora/external-boundaries.mms");
+    const MULTILINGUAL: &str = include_str!("../../docs/corpora/multilingual.mms");
+    const REAL_WORLD_FAMILY_LEDGER: &str =
+        include_str!("../../docs/corpora/real-world-family-ledger.mms");
+
+    fn assert_corpus_round_trips(name: &'static str, src: &'static str) {
+        let first = parse(src);
+        assert!(
+            first.errors.is_empty(),
+            "corpus {name} failed to parse: {:?}",
+            first.errors
+        );
+        assert_eq!(
+            first.status,
+            error::ParseStatus::Complete,
+            "corpus {name} returned partial status"
+        );
+
+        let rendered = render_file(&first.file);
+        let reparsed = parse(&rendered);
+        assert!(
+            reparsed.errors.is_empty(),
+            "corpus {name} reparsed with errors: {:?}\nrendered:\n{rendered}",
+            reparsed.errors
+        );
+        assert_eq!(
+            first.file, reparsed.file,
+            "corpus {name} AST diverged after round-trip"
+        );
+
+        let value = serde_json::to_value(&first.file)
+            .unwrap_or_else(|e| panic!("corpus {name} failed to serialize: {e}"));
+        assert_eq!(
+            value
+                .as_object()
+                .and_then(|o| o.get("schema_version"))
+                .and_then(|v| v.as_str()),
+            Some(AST_SCHEMA_VERSION),
+            "corpus {name} missing schema_version"
+        );
+    }
+
+    #[test]
+    fn corpus_plain_product_intent_round_trips() {
+        assert_corpus_round_trips("plain-product-intent", PLAIN_PRODUCT_INTENT);
+    }
+
+    #[test]
+    fn corpus_state_transitions_round_trips() {
+        assert_corpus_round_trips("state-transitions", STATE_TRANSITIONS);
+    }
+
+    #[test]
+    fn corpus_failure_and_recovery_round_trips() {
+        assert_corpus_round_trips("failure-and-recovery", FAILURE_AND_RECOVERY);
+    }
+
+    #[test]
+    fn corpus_resource_ownership_round_trips() {
+        assert_corpus_round_trips("resource-ownership", RESOURCE_OWNERSHIP);
+    }
+
+    #[test]
+    fn corpus_ordered_communication_round_trips() {
+        assert_corpus_round_trips("ordered-communication", ORDERED_COMMUNICATION);
+    }
+
+    #[test]
+    fn corpus_external_boundaries_round_trips() {
+        assert_corpus_round_trips("external-boundaries", EXTERNAL_BOUNDARIES);
+    }
+
+    #[test]
+    fn corpus_multilingual_round_trips() {
+        assert_corpus_round_trips("multilingual", MULTILINGUAL);
+    }
+
+    #[test]
+    fn corpus_real_world_family_ledger_is_usable_end_to_end() {
+        use crate::diagnostics::{analyze_document, DiagnosticClass};
+
+        assert_corpus_round_trips("real-world-family-ledger", REAL_WORLD_FAMILY_LEDGER);
+
+        let lossless = parse_lossless(REAL_WORLD_FAMILY_LEDGER);
+        assert_eq!(
+            lossless.document.render_lossless(),
+            REAL_WORLD_FAMILY_LEDGER
+        );
+        assert_eq!(lossless.status, error::ParseStatus::Complete);
+
+        let all_items = crate::query::collect_fragments(&lossless.document.semantic().fragments);
+        assert_eq!(
+            all_items
+                .iter()
+                .filter(|item| matches!(item, Fragment::TypeDef { .. }))
+                .count(),
+            3
+        );
+        assert_eq!(
+            all_items
+                .iter()
+                .filter(|item| matches!(item, Fragment::Flow { .. }))
+                .count(),
+            1
+        );
+        assert_eq!(
+            all_items
+                .iter()
+                .filter(|item| matches!(item, Fragment::Func { .. }))
+                .count(),
+            3
+        );
+        assert_eq!(
+            all_items
+                .iter()
+                .filter(|item| matches!(item, Fragment::Ui { .. }))
+                .count(),
+            2
+        );
+
+        let report = analyze_document(&lossless.document, &lossless.errors);
+        assert_eq!(report.delegation_queue.len(), 2);
+        assert!(report
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.class != DiagnosticClass::IntentGap));
+        assert!(report.diagnostics.iter().all(|diagnostic| {
+            !matches!(
+                diagnostic.class,
+                DiagnosticClass::Syntax | DiagnosticClass::Attachment
+            )
+        }));
     }
 }
 
@@ -2086,5 +2804,604 @@ mod fuzzy_tests {
         let known = vec!["FOO".into(), "FOOBAR".into()];
         let r = find_suggestion("FOOB", &known, 3);
         assert!(r.is_some());
+    }
+}
+
+// ── 0.3.5 Multilingual / Unicode acceptance tests ──────────────────────────
+//
+// Closes the 0.3.5 roadmap §12 deliverable:
+//   "Multilingual: Unicode descriptions and rules preserve exact content."
+//
+// MimiSpec treats natural language as a first-class citizen. The parser must
+// not silently normalize, transcode, or truncate CJK content, emoji, or
+// combining-mark sequences in `desc` / `rule` / string-literal payloads.
+// Identifier syntax remains ASCII-only by design (see lexer `is_ident_start`),
+// so these tests only exercise string-content invariants.
+#[cfg(test)]
+mod multilingual_tests {
+    use super::*;
+    use crate::ast::Fragment;
+    use crate::lossless::ColumnEncoding;
+    use crate::render::render_file;
+
+    fn desc_text(file: &crate::ast::File) -> &str {
+        let Fragment::Desc { desc } = &file.fragments[0] else {
+            panic!("expected a Desc fragment");
+        };
+        &desc.content.value
+    }
+
+    #[test]
+    fn cjk_description_round_trips_byte_for_byte() {
+        let src = "desc \"老人也可以轻松使用\"";
+        let first = parse(src);
+        assert!(first.errors.is_empty(), "{:?}", first.errors);
+        assert_eq!(desc_text(&first.file), "老人也可以轻松使用");
+
+        let rendered = render_file(&first.file);
+        assert_eq!(rendered, "desc \"老人也可以轻松使用\"\n", "{rendered}");
+
+        let second = parse(&rendered);
+        assert!(second.errors.is_empty(), "{:?}", second.errors);
+        assert_eq!(first.file, second.file, "AST diverged after round-trip");
+    }
+
+    #[test]
+    fn cjk_rule_text_preserves_punctuation_and_emoji() {
+        let src = "rule \"支付必须幂等 💰 — 不允许重复扣款\"";
+        let first = parse(src);
+        assert!(first.errors.is_empty(), "{:?}", first.errors);
+        let Fragment::Rule { rule } = &first.file.fragments[0] else {
+            panic!("expected a Rule fragment");
+        };
+        assert_eq!(rule.desc.content.value, "支付必须幂等 💰 — 不允许重复扣款");
+
+        let rendered = render_file(&first.file);
+        let reparsed = parse(&rendered);
+        assert_eq!(first.file, reparsed.file, "rule text diverged after render");
+    }
+
+    #[test]
+    fn cjk_field_and_value_strings_round_trip() {
+        let src = "type 账户:\n    名称: \"家庭账户\"\n    余额: \"¥1,234\"\n";
+        // Note: `账户`, `名称`, `余额` are type/field NAMES, which lexer
+        // restricts to ASCII. This must parse-fail cleanly rather than panic
+        // or silently mis-tokenize.
+        let result = parse(src);
+        assert!(
+            !result.errors.is_empty(),
+            "CJK identifiers must be rejected, not silently accepted: {:?}",
+            result.errors
+        );
+        // But the parser must not panic and must produce a stable partial AST.
+        assert_eq!(result.status, error::ParseStatus::Partial);
+    }
+
+    #[test]
+    fn combining_marks_are_not_normalized() {
+        // é as a single codepoint vs 'e' + U+0301 combining acute. The parser
+        // must preserve the exact byte sequence the author wrote, not the NFC
+        // form.
+        let composed = "desc \"café\"";
+        let decomposed = "desc \"cafe\u{0301}\"";
+        let parsed_composed = parse(composed);
+        let parsed_decomposed = parse(decomposed);
+        assert!(parsed_composed.errors.is_empty());
+        assert!(parsed_decomposed.errors.is_empty());
+        assert_eq!(desc_text(&parsed_composed.file), "café");
+        assert_eq!(desc_text(&parsed_decomposed.file), "cafe\u{0301}");
+        assert_ne!(
+            desc_text(&parsed_composed.file),
+            desc_text(&parsed_decomposed.file),
+            "parser must not silently normalize Unicode"
+        );
+        // Round-trip preserves the exact form.
+        assert_eq!(render_file(&parsed_composed.file), "desc \"café\"\n");
+        assert_eq!(
+            render_file(&parsed_decomposed.file),
+            "desc \"cafe\u{0301}\"\n"
+        );
+    }
+
+    #[test]
+    fn lossless_column_is_unicode_scalar_for_cjk() {
+        // A CJK char occupies 3 UTF-8 bytes but 1 column. The lexer column
+        // must use Unicode scalar count, not byte count, or downstream span
+        // math would point past the string. This is a 0.3.1 invariant.
+        let src = "desc \"老人也可以轻松使用\"";
+        let result = parse_lossless(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+
+        // Find the string literal token in the token stream and verify its
+        // start column is at scalar offset 6 (after `desc `).
+        let string_token = tokenize(src)
+            .expect("tokenize must succeed")
+            .into_iter()
+            .find(|t| matches!(t.kind, lexer::TokenKind::String(_)))
+            .expect("a String token must exist");
+        assert_eq!(
+            string_token.col, 6,
+            "CJK description string must start at Unicode-scalar column 6, got {}",
+            string_token.col
+        );
+
+        // The lossless document must render back the exact source, including
+        // multi-byte CJK content, without truncation or replacement.
+        assert_eq!(
+            result.document.render_lossless(),
+            src,
+            "lossless render must byte-match CJK source"
+        );
+
+        // Smoke-check that span queries don't panic on CJK input.
+        assert!(!result.document.nodes().is_empty());
+        let _ = ColumnEncoding::UnicodeScalar;
+    }
+
+    #[test]
+    fn multilingual_corpus_round_trips() {
+        let cases = &[
+            // Simplified Chinese
+            "desc \"我想做一个帮助家庭记录日常开销的应用\"",
+            // Traditional Chinese
+            "desc \"我想做一個幫助家庭記錄日常開銷的應用\"",
+            // Japanese (hiragana, katakana, kanji)
+            "desc \"家族の日常の出費を記録するアプリを作りたい\"",
+            // Korean (Hangul)
+            "desc \"가족의 일상 지출을 기록하는 앱을 만들고 싶어요\"",
+            // Arabic (RTL)
+            "desc \"أريد إنشاء تطبيق يساعد العائلة في تتبع المصاريف اليومية\"",
+            // Cyrillic
+            "desc \"хочу создать приложение для учёта семейных расходов\"",
+            // Mixed emoji + Latin
+            "rule \"all payments must be idempotent 🔒💵\"",
+        ];
+        for &src in cases {
+            let first = parse(src);
+            assert!(
+                first.errors.is_empty(),
+                "multilingual case failed to parse: {:?}\nsrc: {src}",
+                first.errors
+            );
+            let rendered = render_file(&first.file);
+            let reparsed = parse(&rendered);
+            assert_eq!(
+                first.file, reparsed.file,
+                "multilingual round-trip diverged\nsrc: {src}\nrendered: {rendered}"
+            );
+        }
+    }
+}
+
+// ── 0.3.5 Property and fuzz tests ───────────────────────────────────────────
+//
+// These tests close the 0.3.5 "Parser/formatter fuzzing and property tests"
+// deliverable without pulling in external proptest/quickcheck dependencies
+// (the crate intentionally stays zero-dev-dependency). They use a deterministic
+// linear congruential generator so failures are reproducible from the seed
+// printed in the panic message.
+//
+// Invariants covered:
+//   1. Idempotent render — for any cleanly-parsed source S,
+//      `parse(render(parse(S))).file == parse(S).file`.
+//   2. Render determinism — the same AST renders to byte-identical output.
+//   3. AST JSON serializes and carries the 0.3 schema version.
+//   4. Lossless no-panic — arbitrary byte input never panics `parse_lossless`.
+//   5. Error containment — `errors.is_empty()` agrees with `status == Complete`
+//      and disagrees with `status == Partial`.
+//   6. Tokenizer-then-parser equivalence — `parse(S)` and the explicit
+//      `Lexer::new(S).tokenize()` + `Parser::new(t).parse_file()` path produce
+//      the same `File` on the OK branch.
+//
+// These are CI gates: a regression in any of these invariants is a silent
+// intent-loss bug, which 0.3.5 explicitly forbids.
+#[cfg(test)]
+mod property_tests {
+    use super::*;
+    use crate::ast::AST_SCHEMA_VERSION;
+    use crate::render::render_file;
+
+    /// Deterministic, seedable pseudo-random generator.
+    ///
+    /// PCG-style LCG with odd increment: cheap, good distribution for test
+    /// generation, and fully reproducible from `seed`. The seed is printed in
+    /// every assertion message so any failure can be replayed locally.
+    struct Lcg {
+        state: u64,
+    }
+
+    impl Lcg {
+        fn new(seed: u64) -> Self {
+            // Avoid the all-zero state, which would otherwise stay at 0.
+            Self {
+                state: seed.wrapping_add(0x9e37_79b9_7f4a_7c15),
+            }
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            // Numerical Recipes LCG constants, with a permutation mix.
+            self.state = self
+                .state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            // xorshift mix for better low-bit entropy.
+            let mut x = self.state;
+            x ^= x >> 33;
+            x = x.wrapping_mul(0xff51_afd7_ed55_8ccd);
+            x ^= x >> 33;
+            x
+        }
+
+        fn range(&mut self, lo: usize, hi_inclusive: usize) -> usize {
+            assert!(hi_inclusive >= lo, "invalid range");
+            if hi_inclusive == lo {
+                return lo;
+            }
+            lo + (self.next_u64() as usize) % (hi_inclusive - lo + 1)
+        }
+
+        /// Pick a `&str` from a slice of string literals. Returns the borrowed
+        /// string directly to avoid the `&&str` double-reference that a fully
+        /// generic `pick<T>` would produce on `&[&str]`.
+        fn pick_str<'a>(&mut self, slice: &'a [&'a str]) -> &'a str {
+            assert!(!slice.is_empty(), "pick_str from empty slice");
+            let idx = self.range(0, slice.len() - 1);
+            slice[idx]
+        }
+
+        fn bool(&mut self) -> bool {
+            self.next_u64() & 1 == 1
+        }
+    }
+
+    // A pool of independently-valid Context Items. Each entry parses cleanly
+    // on its own. The generator concatenates a random subset of these (with
+    // blank-line separators) to exercise the cross-item boundary handling.
+    const VALID_ITEMS: &[&str] = &[
+        "desc \"记录家庭日常开销\"",
+        "desc?? \"辅助 AI 完成方案设计\"",
+        "rule \"老人也可以轻松使用\"",
+        "rule \"财务数据默认只保存在本地\"",
+        "rule$ \"支付必须幂等\"",
+        "type Status: Pending | Paid | Cancelled",
+        "type Account:\n    id: Int\n    balance: Int\n",
+        "func Pay(order, amount):\n    requires: amount > 0\n    ensures: order.paid\n    steps:\n        charge card\n        return receipt >>> done\n",
+        "func Hello: ...",
+        "flow:\n    Pending:\n        on Confirm >>> Paid:\n        on Cancel >>> Cancelled:\n",
+        "ui Summary:\n    stack:\n        \"余额\"",
+        "steps:\n    prepare data\n    commit",
+        "requires: amount > 0\nensures: committed",
+        "...",
+    ];
+
+    // A pool of fragment prefixes that take a rule prelude, exercising the
+    // attached-vs-environment rule attachment distinction.
+    const RULE_PRELUDE_TARGETS: &[&str] = &[
+        "steps:\n    do work",
+        "type Color: Red | Green | Blue",
+        "func Hello: ...",
+        "ui Card:\n    stack:\n        \"hi\"",
+    ];
+
+    fn gen_valid_source(rng: &mut Lcg) -> String {
+        let n_items = rng.range(1, 5);
+        let mut src = String::new();
+        for i in 0..n_items {
+            if i > 0 {
+                // Physical blank line separates top-level Context Items.
+                src.push('\n');
+            }
+            // Occasionally prepend a rule prelude to the next item.
+            if rng.bool() {
+                let prelude_count = rng.range(1, 3);
+                for _ in 0..prelude_count {
+                    src.push_str(rng.pick_str(&[
+                        "rule \"前置约束\"",
+                        "rule$ \"锁定约束\"",
+                        "rule?? \"待确认约束\"",
+                    ]));
+                    src.push('\n');
+                }
+                // 50% of the time, follow with a blank line so the prelude
+                // becomes an environment rule rather than attached.
+                if rng.bool() {
+                    src.push('\n');
+                }
+            }
+            let item = if rng.bool() {
+                rng.pick_str(VALID_ITEMS)
+            } else {
+                rng.pick_str(RULE_PRELUDE_TARGETS)
+            };
+            src.push_str(item);
+            src.push('\n');
+        }
+        src
+    }
+
+    /// Any byte slice the caller cares to throw at the parser. We build these
+    /// from a small alphabet that stresses indentation, string boundaries,
+    /// suffix characters, and CJK content without producing invalid UTF-8.
+    fn gen_arbitrary_bytes(rng: &mut Lcg) -> String {
+        let alphabet: &[&str] = &[
+            "desc ",
+            "rule ",
+            "func ",
+            "type ",
+            "flow ",
+            "ui ",
+            "steps ",
+            "  ",
+            "    ",
+            "\n",
+            "\"",
+            ":",
+            "|",
+            "$",
+            "?",
+            "??",
+            "(",
+            ")",
+            ".",
+            ">",
+            "<",
+            "=",
+            "+",
+            "-",
+            "*",
+            "/",
+            "and",
+            "or",
+            "not",
+            "on",
+            ">>>",
+            "requires",
+            "ensures",
+            "x",
+            "y",
+            "1",
+            "0",
+            "中文",
+            "支付",
+            "记录",
+            "余额",
+            "老人",
+            "财务",
+            "🔐",
+            "\n\n",
+            "Pending",
+            "Paid",
+            "{",
+            "}",
+            "[",
+            "]",
+            "@",
+            "#",
+            "// comment",
+            "/* block */",
+        ];
+        let n = rng.range(0, 40);
+        let mut s = String::new();
+        for _ in 0..n {
+            s.push_str(rng.pick_str(alphabet));
+        }
+        s
+    }
+
+    fn assert_parse_entry_does_not_panic<F>(seed: u64, src: &str, name: &str, f: F)
+    where
+        F: FnOnce() + std::panic::UnwindSafe,
+    {
+        match std::panic::catch_unwind(f) {
+            Ok(()) => {}
+            Err(payload) => {
+                let msg = payload
+                    .downcast_ref::<String>()
+                    .map(String::as_str)
+                    .or_else(|| payload.downcast_ref::<&str>().copied())
+                    .unwrap_or("<non-string panic payload>");
+                panic!(
+                    "seed {seed}: parse entry `{name}` panicked on arbitrary input \
+                     (this is a 0.3.5 release blocker)\nsrc: {src:?}\npayload: {msg}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn property_idempotent_render_across_seeds() {
+        for seed in 0u64..64 {
+            let mut rng = Lcg::new(seed);
+            for _ in 0..8 {
+                let src = gen_valid_source(&mut rng);
+                let first = parse(&src);
+                if !first.errors.is_empty() {
+                    // Generator produced something the parser rejected —
+                    // surface it loudly so we can either fix the generator
+                    // or the parser, but never silently accept it.
+                    panic!(
+                        "seed {seed} produced parse errors: {:?}\nsrc:\n{src}",
+                        first.errors
+                    );
+                }
+                let rendered = render_file(&first.file);
+                let second = parse(&rendered);
+                assert!(
+                    second.errors.is_empty(),
+                    "seed {seed}: reparsed rendered output had errors: {:?}\nrendered:\n{rendered}",
+                    second.errors
+                );
+                assert_eq!(
+                    first.file, second.file,
+                    "seed {seed}: round-trip altered AST\nrendered:\n{rendered}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn property_render_is_deterministic() {
+        for seed in 0u64..32 {
+            let mut rng = Lcg::new(seed.wrapping_mul(101));
+            let src = gen_valid_source(&mut rng);
+            let result = parse(&src);
+            // The generator is supposed to produce clean input; a parse error
+            // here means either the generator or the parser rotted. Surface
+            // it loudly — never `continue` past it.
+            assert!(
+                result.errors.is_empty(),
+                "seed {seed}: generator produced unparseable source: {:?}\nsrc:\n{src}",
+                result.errors
+            );
+            let r1 = render_file(&result.file);
+            let r2 = render_file(&result.file);
+            assert_eq!(r1, r2, "seed {seed}: render is not deterministic");
+        }
+    }
+
+    #[test]
+    fn property_ast_json_is_serializable_and_versioned() {
+        for seed in 0u64..32 {
+            let mut rng = Lcg::new(seed.wrapping_mul(202));
+            let src = gen_valid_source(&mut rng);
+            let result = parse(&src);
+            // Even on partial parse the AST must serialize — partial AST is
+            // still a valid 0.3 document.
+            let value = serde_json::to_value(&result.file).expect("AST must serialize");
+            let obj = value
+                .as_object()
+                .expect("serialized File must be a JSON object");
+            assert_eq!(
+                obj.get("schema_version").and_then(|v| v.as_str()),
+                Some(AST_SCHEMA_VERSION),
+                "seed {seed}: missing or wrong schema_version"
+            );
+        }
+    }
+
+    #[test]
+    fn fuzz_lossless_never_panics_on_arbitrary_input() {
+        for seed in 0u64..128 {
+            let mut rng = Lcg::new(seed.wrapping_mul(303));
+            for _ in 0..4 {
+                let src = gen_arbitrary_bytes(&mut rng);
+                // The invariant: this call must never panic, regardless of
+                // input. Errors are fine; aborts are not. We MUST assert
+                // `is_ok()` — silently dropping the `Err` with `let _` turns
+                // this into a test that can only pass, never fail.
+                let s = src.clone();
+                assert_parse_entry_does_not_panic(seed, &src, "parse_lossless", || {
+                    let _ = parse_lossless(&s);
+                });
+                let s = src.clone();
+                assert_parse_entry_does_not_panic(seed, &src, "parse", || {
+                    let _ = parse(&s);
+                });
+                let s = src.clone();
+                assert_parse_entry_does_not_panic(seed, &src, "parse_fragment", || {
+                    let _ = parse_fragment(&s);
+                });
+                let s = src.clone();
+                assert_parse_entry_does_not_panic(seed, &src, "tokenize", || {
+                    let _ = tokenize(&s);
+                });
+            }
+        }
+    }
+
+    #[test]
+    fn property_error_status_is_consistent() {
+        for seed in 0u64..64 {
+            let mut rng = Lcg::new(seed.wrapping_mul(404));
+            // Mix valid and arbitrary input.
+            let src = if rng.bool() {
+                gen_valid_source(&mut rng)
+            } else {
+                gen_arbitrary_bytes(&mut rng)
+            };
+            let result = parse(&src);
+            let errors_empty = result.errors.is_empty();
+            let complete = result.status == error::ParseStatus::Complete;
+            assert_eq!(
+                errors_empty,
+                complete,
+                "seed {seed}: status {:?} inconsistent with errors.len() = {}",
+                result.status,
+                result.errors.len()
+            );
+            // Same invariant for the lossless path.
+            let lossless = parse_lossless(&src);
+            let lerrors_empty = lossless.errors.is_empty();
+            let lcomplete = lossless.status == error::ParseStatus::Complete;
+            assert_eq!(
+                lerrors_empty,
+                lcomplete,
+                "seed {seed}: lossless status {:?} inconsistent with errors.len() = {}",
+                lossless.status,
+                lossless.errors.len()
+            );
+        }
+    }
+
+    #[test]
+    fn property_lossless_semantics_match_parse() {
+        for seed in 0u64..64 {
+            let mut rng = Lcg::new(seed.wrapping_mul(454));
+            let src = if rng.bool() {
+                gen_valid_source(&mut rng)
+            } else {
+                gen_arbitrary_bytes(&mut rng)
+            };
+            let semantic = parse(&src);
+            let lossless = parse_lossless(&src);
+            assert_eq!(
+                lossless.document.semantic(),
+                &semantic.file,
+                "seed {seed}: parse_lossless semantic AST diverged from parse()\nsrc: {src:?}"
+            );
+            assert_eq!(
+                lossless.errors, semantic.errors,
+                "seed {seed}: parse_lossless diagnostics diverged from parse()\nsrc: {src:?}"
+            );
+            assert_eq!(
+                lossless.status, semantic.status,
+                "seed {seed}: parse_lossless status diverged from parse()\nsrc: {src:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn property_tokenize_then_parse_matches_parse() {
+        for seed in 0u64..32 {
+            let mut rng = Lcg::new(seed.wrapping_mul(505));
+            let src = gen_valid_source(&mut rng);
+            let direct = parse(&src);
+            // The generator is supposed to produce clean input. A parse error
+            // here means generator or parser rot; never silently `continue`.
+            assert!(
+                direct.errors.is_empty(),
+                "seed {seed}: generator produced unparseable source: {:?}\nsrc:\n{src}",
+                direct.errors
+            );
+            let tokens = tokenize(&src).unwrap_or_else(|err| {
+                panic!("seed {seed}: tokenize failed on parseable source: {err}")
+            });
+            let via_tokens = {
+                let mut parser = parser::Parser::new(tokens);
+                parser.parse_file()
+            };
+            assert_eq!(
+                direct.file, via_tokens.file,
+                "seed {seed}: tokenize-then-parse diverged from direct parse (File)"
+            );
+            assert_eq!(
+                direct.errors, via_tokens.errors,
+                "seed {seed}: tokenize-then-parse diverged from direct parse (errors)"
+            );
+            assert_eq!(
+                direct.status, via_tokens.status,
+                "seed {seed}: tokenize-then-parse diverged from direct parse (status)"
+            );
+        }
     }
 }

@@ -1,4 +1,8 @@
-use serde::Serialize;
+use serde::ser::SerializeStruct;
+use serde::{Serialize, Serializer};
+
+/// JSON schema carried by every serialized 0.3 semantic document.
+pub const AST_SCHEMA_VERSION: &str = "mimispec.ast/0.3";
 
 /// 意图后缀：附加在关键字、标识符或字符串上，表示作者对该节点的锁定与不确定程度。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
@@ -111,6 +115,13 @@ impl Commitment {
         matches!(self, Self::Locked | Self::StrongLocked)
     }
 
+    /// 当前意图是否已经由 Human 最终确认。
+    ///
+    /// 这是 0.3 的规范名称；`is_commit_ready()` 仅作为兼容别名保留。
+    pub fn is_confirmed(self) -> bool {
+        matches!(self, Self::Locked | Self::StrongLocked)
+    }
+
     /// `??` 表示委托，不论它讨论内容、普通锁还是强锁。
     pub fn is_delegated(self) -> bool {
         self.review_intent() == ReviewIntent::Delegate
@@ -179,21 +190,50 @@ pub struct FString {
     pub commitment: Commitment,
 }
 
-/// 源文件根节点（v0.3: fragments 而非 modules，含 imports）。
-#[derive(Debug, Clone, PartialEq, Serialize)]
+/// 源文件根节点。
+///
+/// `fragments` 是兼容保留的 Rust 字段名；从 0.3 起它表示 Document Context 内
+/// 唯一、跨类型有序的 Context Item 序列，而不只是具名 Fragment。
+#[derive(Debug, Clone, PartialEq)]
 pub struct File {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub imports: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub rules: Vec<RuleDef>,
     pub fragments: Vec<Fragment>,
 }
 
-/// 顶层 Fragment（v0.3 新架构）。任何 Fragment 都可以作为合法顶层存在。
+impl Serialize for File {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut state =
+            serializer.serialize_struct("File", if self.imports.is_empty() { 2 } else { 3 })?;
+        state.serialize_field("schema_version", AST_SCHEMA_VERSION)?;
+        if !self.imports.is_empty() {
+            state.serialize_field("imports", &self.imports)?;
+        }
+        state.serialize_field("items", &self.fragments)?;
+        state.end()
+    }
+}
+
+/// 0.3 Context Item / Fragment。
+///
+/// 同一个 enum 同时用于 Document、module、func、type、flow 和 steps 的有序
+/// body；各 parser 只接受对应 scope 合法的 variant。`ContextItem` 是它的公开
+/// 语义别名。
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind")]
 #[non_exhaustive]
 pub enum Fragment {
+    Desc {
+        desc: Desc,
+    },
+    Rule {
+        rule: RuleDef,
+    },
+    Clause {
+        clause: Clause,
+    },
     Module {
         module: Module,
     },
@@ -210,36 +250,76 @@ pub enum Fragment {
         ui: UiDef,
     },
     Steps {
-        // v0.3 新增：独立 steps 块
         #[serde(default)]
         keyword_commitment: Commitment,
-        steps: Vec<Step>,
+        items: Vec<Fragment>,
+    },
+    Step {
+        step: Step,
     },
     Expr {
         expr: Expr,
-    }, // v0.3 新增：裸表达式
+    },
     UiNode {
         node: UiNode,
-    }, // v0.3 新增：裸 UI 节点
+    },
+    Math {
+        math: MathBlock,
+    },
+    Field {
+        field: Field,
+    },
+    Variants {
+        variants: Vec<Ident>,
+    },
+    FlowEntry {
+        entry: FlowEntry,
+    },
+    FlowArm {
+        arm: FlowArm,
+    },
     Placeholder {
-        // v0.3 新增：... 占位符
         #[serde(default)]
         keyword_commitment: Commitment,
     },
+}
+
+pub type ContextItem = Fragment;
+
+pub fn rules_attached_to(items: &[Fragment], target_index: usize) -> Vec<&RuleDef> {
+    items
+        .iter()
+        .filter_map(Fragment::rule)
+        .filter(|rule| {
+            matches!(
+                rule.attachment,
+                RuleAttachment::Attached {
+                    target_index: target
+                } if target == target_index
+            )
+        })
+        .collect()
+}
+
+impl File {
+    pub fn rules(&self) -> Vec<&RuleDef> {
+        self.fragments.iter().filter_map(Fragment::rule).collect()
+    }
+
+    pub fn environment_rules(&self) -> Vec<&RuleDef> {
+        self.rules()
+            .into_iter()
+            .filter(|rule| rule.attachment == RuleAttachment::Environment)
+            .collect()
+    }
 }
 
 /// 模块或子模块。
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Module {
     pub name: Ident,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub desc: Option<Desc>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub rules: Vec<RuleDef>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub math: Option<MathBlock>,
     #[serde(default)]
-    pub items: Vec<Fragment>, // v0.3: Vec<Item> → Vec<Fragment>
+    pub items: Vec<Fragment>,
     #[serde(default)]
     pub keyword_commitment: Commitment,
 }
@@ -247,12 +327,6 @@ pub struct Module {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct TypeDef {
     pub name: Ident,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub desc: Option<Desc>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub rules: Vec<RuleDef>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub math: Option<MathBlock>,
     pub body: TypeBody,
     #[serde(default)]
     pub keyword_commitment: Commitment,
@@ -262,15 +336,19 @@ pub struct TypeDef {
 #[serde(tag = "kind")]
 #[non_exhaustive]
 pub enum TypeBody {
-    Enum { variants: Vec<Ident> },
-    Record { fields: Vec<Field> },
+    Enum {
+        #[serde(default)]
+        inline: bool,
+        items: Vec<Fragment>,
+    },
+    Record {
+        items: Vec<Fragment>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Field {
     pub name: Ident,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub rules: Vec<RuleDef>,
     pub type_hint: Vec<Atom>,
 }
 
@@ -279,14 +357,41 @@ pub struct RuleDef {
     pub desc: Desc,
     #[serde(default)]
     pub keyword_commitment: Commitment,
+    pub attachment: RuleAttachment,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RuleAttachment {
+    #[default]
+    Pending,
+    Attached {
+        target_index: usize,
+    },
+    Environment,
+    UnresolvedByRecovery,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClauseKind {
+    Requires,
+    Ensures,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Clause {
+    pub clause_kind: ClauseKind,
+    pub condition: Condition,
+    #[serde(default)]
+    pub keyword_commitment: Commitment,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct FlowDef {
-    pub name: Ident,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub rules: Vec<RuleDef>,
-    pub entries: Vec<FlowEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<Ident>,
+    pub items: Vec<Fragment>,
     #[serde(default)]
     pub keyword_commitment: Commitment,
 }
@@ -294,53 +399,239 @@ pub struct FlowDef {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct FlowEntry {
     pub state: Ident,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub rules: Vec<RuleDef>,
-    pub arms: Vec<FlowArm>,
+    pub items: Vec<Fragment>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct FlowArm {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event: Option<FlowEvent>,
     pub to: Ident,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub requires: Option<Condition>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub desc: Option<Desc>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub rules: Vec<RuleDef>,
+    pub items: Vec<Fragment>,
     #[serde(default)]
     pub to_keyword_commitment: Commitment,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct FlowEvent {
     #[serde(default)]
-    pub requires_keyword_commitment: Commitment,
+    pub keyword_commitment: Commitment,
+    pub name: EventName,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct FuncDef {
     pub name: Ident,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub desc: Option<Desc>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub rules: Vec<RuleDef>,
     pub params: Vec<Param>,
     #[serde(default)]
     pub capabilities: Vec<Capability>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub requires: Option<Condition>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ensures: Option<Condition>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub math: Option<MathBlock>,
-    pub steps: Vec<Step>,
+    pub items: Vec<Fragment>,
     #[serde(default)]
     pub keyword_commitment: Commitment,
     #[serde(default)]
-    pub requires_keyword_commitment: Commitment,
-    #[serde(default)]
-    pub ensures_keyword_commitment: Commitment,
-    #[serde(default)]
     pub with_keyword_commitment: Commitment,
-    #[serde(default)]
-    pub steps_keyword_commitment: Commitment,
+}
+
+impl Fragment {
+    pub fn rule(&self) -> Option<&RuleDef> {
+        match self {
+            Self::Rule { rule } => Some(rule),
+            _ => None,
+        }
+    }
+
+    pub fn rule_mut(&mut self) -> Option<&mut RuleDef> {
+        match self {
+            Self::Rule { rule } => Some(rule),
+            _ => None,
+        }
+    }
+
+    pub fn desc(&self) -> Option<&Desc> {
+        match self {
+            Self::Desc { desc } => Some(desc),
+            _ => None,
+        }
+    }
+
+    pub fn clause(&self) -> Option<&Clause> {
+        match self {
+            Self::Clause { clause } => Some(clause),
+            _ => None,
+        }
+    }
+}
+
+impl Module {
+    pub fn descs(&self) -> impl Iterator<Item = &Desc> {
+        self.items.iter().filter_map(Fragment::desc)
+    }
+
+    pub fn rules(&self) -> Vec<&RuleDef> {
+        self.items.iter().filter_map(Fragment::rule).collect()
+    }
+
+    pub fn math_blocks(&self) -> Vec<&MathBlock> {
+        self.items
+            .iter()
+            .filter_map(|item| match item {
+                Fragment::Math { math } => Some(math),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
+impl TypeDef {
+    pub fn items(&self) -> &[Fragment] {
+        match &self.body {
+            TypeBody::Enum { items, .. } | TypeBody::Record { items } => items,
+        }
+    }
+
+    pub fn items_mut(&mut self) -> &mut Vec<Fragment> {
+        match &mut self.body {
+            TypeBody::Enum { items, .. } | TypeBody::Record { items } => items,
+        }
+    }
+
+    pub fn descs(&self) -> impl Iterator<Item = &Desc> {
+        self.items().iter().filter_map(Fragment::desc)
+    }
+
+    pub fn rules(&self) -> Vec<&RuleDef> {
+        self.items().iter().filter_map(Fragment::rule).collect()
+    }
+
+    pub fn fields(&self) -> Vec<&Field> {
+        self.items()
+            .iter()
+            .filter_map(|item| match item {
+                Fragment::Field { field } => Some(field),
+                _ => None,
+            })
+            .collect()
+    }
+
+    pub fn variants(&self) -> Vec<&Ident> {
+        self.items()
+            .iter()
+            .flat_map(|item| match item {
+                Fragment::Variants { variants } => variants.as_slice(),
+                _ => &[],
+            })
+            .collect()
+    }
+}
+
+impl FuncDef {
+    pub fn descs(&self) -> impl Iterator<Item = &Desc> {
+        self.items.iter().filter_map(Fragment::desc)
+    }
+
+    pub fn rules(&self) -> Vec<&RuleDef> {
+        self.items.iter().filter_map(Fragment::rule).collect()
+    }
+
+    pub fn clauses(&self) -> Vec<&Clause> {
+        self.items.iter().filter_map(Fragment::clause).collect()
+    }
+
+    pub fn requires(&self) -> Vec<&Clause> {
+        self.clauses()
+            .into_iter()
+            .filter(|clause| clause.clause_kind == ClauseKind::Requires)
+            .collect()
+    }
+
+    pub fn ensures(&self) -> Vec<&Clause> {
+        self.clauses()
+            .into_iter()
+            .filter(|clause| clause.clause_kind == ClauseKind::Ensures)
+            .collect()
+    }
+
+    pub fn step_refs(&self) -> Vec<&Step> {
+        let mut out = Vec::new();
+        collect_step_refs(&self.items, &mut out);
+        out
+    }
+
+    pub fn steps(&self) -> Vec<&Step> {
+        self.step_refs()
+    }
+
+    pub fn math_blocks(&self) -> Vec<&MathBlock> {
+        self.items
+            .iter()
+            .filter_map(|item| match item {
+                Fragment::Math { math } => Some(math),
+                _ => None,
+            })
+            .collect()
+    }
+
+    pub fn has_math(&self) -> bool {
+        self.items
+            .iter()
+            .any(|item| matches!(item, Fragment::Math { .. }))
+    }
+}
+
+fn collect_step_refs<'a>(items: &'a [Fragment], out: &mut Vec<&'a Step>) {
+    for item in items {
+        match item {
+            Fragment::Step { step } => out.push(step),
+            Fragment::Steps { items, .. } => collect_step_refs(items, out),
+            _ => {}
+        }
+    }
+}
+
+impl FlowDef {
+    pub fn entries(&self) -> Vec<&FlowEntry> {
+        self.items
+            .iter()
+            .filter_map(|item| match item {
+                Fragment::FlowEntry { entry } => Some(entry),
+                _ => None,
+            })
+            .collect()
+    }
+
+    pub fn rules(&self) -> Vec<&RuleDef> {
+        self.items.iter().filter_map(Fragment::rule).collect()
+    }
+}
+
+impl FlowEntry {
+    pub fn arms(&self) -> Vec<&FlowArm> {
+        self.items
+            .iter()
+            .filter_map(|item| match item {
+                Fragment::FlowArm { arm } => Some(arm),
+                _ => None,
+            })
+            .collect()
+    }
+
+    pub fn rules(&self) -> Vec<&RuleDef> {
+        self.items.iter().filter_map(Fragment::rule).collect()
+    }
+}
+
+impl FlowArm {
+    pub fn clauses(&self) -> Vec<&Clause> {
+        self.items.iter().filter_map(Fragment::clause).collect()
+    }
+
+    pub fn descs(&self) -> Vec<&Desc> {
+        self.items.iter().filter_map(Fragment::desc).collect()
+    }
+
+    pub fn rules(&self) -> Vec<&RuleDef> {
+        self.items.iter().filter_map(Fragment::rule).collect()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -591,9 +882,9 @@ pub enum SimpleValue {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct IfStep {
     pub cond: Condition,
-    pub then_branch: Vec<Step>,
+    pub then_branch: Vec<Fragment>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub else_branch: Option<Vec<Step>>,
+    pub else_branch: Option<Vec<Fragment>>,
     #[serde(default)]
     pub if_keyword_commitment: Commitment,
     #[serde(default)]
@@ -604,7 +895,7 @@ pub struct IfStep {
 pub struct ForStep {
     pub var: Ident,
     pub iterable: Vec<Atom>,
-    pub body: Vec<Step>,
+    pub body: Vec<Fragment>,
     #[serde(default)]
     pub keyword_commitment: Commitment,
 }
@@ -614,7 +905,7 @@ pub struct WhileStep {
     pub cond: Condition,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub desc: Option<Desc>,
-    pub body: Vec<Step>,
+    pub body: Vec<Fragment>,
     #[serde(default)]
     pub keyword_commitment: Commitment,
 }
@@ -623,7 +914,7 @@ pub struct WhileStep {
 pub struct ParastepsStep {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<FString>,
-    pub steps: Vec<Step>,
+    pub steps: Vec<Fragment>,
     #[serde(default)]
     pub keyword_commitment: Commitment,
 }
@@ -640,7 +931,7 @@ pub struct ErrorStep {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct OnBlock {
     pub condition: Vec<Atom>,
-    pub steps: Vec<Step>,
+    pub steps: Vec<Fragment>,
     #[serde(default)]
     pub keyword_commitment: Commitment,
 }
@@ -678,11 +969,28 @@ pub struct UiDef {
     pub name: Ident,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub binds: Option<Ident>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub rules: Vec<RuleDef>,
-    pub root: UiNode,
+    #[serde(default)]
+    pub binds_keyword_commitment: Commitment,
+    pub items: Vec<Fragment>,
     #[serde(default)]
     pub keyword_commitment: Commitment,
+}
+
+impl UiDef {
+    pub fn rules(&self) -> Vec<&RuleDef> {
+        self.items.iter().filter_map(Fragment::rule).collect()
+    }
+
+    pub fn root(&self) -> Option<&UiNode> {
+        self.items.iter().find_map(|item| match item {
+            Fragment::UiNode { node } => Some(node),
+            _ => None,
+        })
+    }
+
+    pub fn is_placeholder(&self) -> bool {
+        matches!(self.items.as_slice(), [Fragment::Placeholder { .. }])
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -708,9 +1016,25 @@ pub struct UiErrorNode {
 pub struct StackNode {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<FString>,
-    pub children: Vec<UiNode>,
+    pub items: Vec<Fragment>,
     #[serde(default)]
     pub keyword_commitment: Commitment,
+}
+
+impl StackNode {
+    pub fn children(&self) -> Vec<&UiNode> {
+        self.items
+            .iter()
+            .filter_map(|item| match item {
+                Fragment::UiNode { node } => Some(node),
+                _ => None,
+            })
+            .collect()
+    }
+
+    pub fn rules(&self) -> Vec<&RuleDef> {
+        self.items.iter().filter_map(Fragment::rule).collect()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

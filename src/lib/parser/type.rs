@@ -3,6 +3,12 @@ use crate::error::ParseError;
 use crate::lexer::TokenKind;
 use crate::parser::{Parser, RecordedRuleDecision};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ParsedTypeShape {
+    Enum,
+    Record,
+}
+
 impl Parser {
     pub(super) fn parse_type_def(&mut self) -> Result<TypeDef, ParseError> {
         let scope_token = self.pos;
@@ -11,167 +17,148 @@ impl Parser {
         self.expect(TokenKind::Colon, "`:`")?;
 
         if self.check(&TokenKind::Ellipsis) {
-            self.advance();
+            let placeholder = self.parse_placeholder_item()?;
             return Ok(TypeDef {
                 name,
-                desc: None,
-                rules: Vec::new(),
-                math: None,
-                body: TypeBody::Record { fields: vec![] },
-                keyword_commitment,
-            });
-        }
-
-        if self.is_inline_enum() {
-            return Ok(TypeDef {
-                name,
-                desc: None,
-                rules: Vec::new(),
-                math: None,
-                body: TypeBody::Enum {
-                    variants: self.parse_variant_list()?,
+                body: TypeBody::Record {
+                    items: vec![placeholder],
                 },
                 keyword_commitment,
             });
         }
 
-        // Multi-line enum (方案A): check if indented block contains enum variants
-        self.skip_newlines();
-        if self.check(&TokenKind::Indent) {
-            let save = self.pos;
-            let source_checkpoint = self.source_checkpoint();
-            self.advance(); // consume Indent for scanning
-            let is_block_enum = self.peek_block_is_enum();
-            self.pos = save; // restore back to Indent
-            self.restore_source_checkpoint(source_checkpoint);
-
-            if is_block_enum {
-                self.advance(); // consume Indent
-                let variants = self.parse_block_enum_variants()?;
-                return Ok(TypeDef {
-                    name,
-                    desc: None,
-                    rules: Vec::new(),
-                    math: None,
-                    body: TypeBody::Enum { variants },
-                    keyword_commitment,
-                });
-            }
-            // Fall through to record parsing, but keep Indent unconsumed
+        if self.is_inline_enum() {
+            let variants = self.parse_variant_line()?;
+            return Ok(TypeDef {
+                name,
+                body: TypeBody::Enum {
+                    inline: true,
+                    items: vec![Fragment::Variants { variants }],
+                },
+                keyword_commitment,
+            });
         }
 
         self.skip_newlines();
         self.expect(TokenKind::Indent, "indented block")?;
         self.enter_block()?;
 
-        let mut desc = None;
-        let mut math = None;
-        let mut rules: Vec<RuleDef> = Vec::new();
-        let mut fields = Vec::new();
-        let mut pending_field_rules: Vec<RuleDef> = Vec::new();
-        let mut pending_field_ids = Vec::new();
+        let mut items = Vec::new();
+        let mut pending_rules: Vec<(usize, Option<usize>)> = Vec::new();
+        let mut shape = None;
 
         loop {
-            self.skip_newlines();
+            let newline_count = self.skip_newlines_and_count();
+            if newline_count >= 3 {
+                self.resolve_semantic_rules(
+                    &mut items,
+                    &mut pending_rules,
+                    RuleAttachment::Environment,
+                    RecordedRuleDecision::Environment {
+                        scope_token: Some(scope_token),
+                    },
+                );
+            }
+
             if self.check(&TokenKind::Dedent) || self.is_at_end() {
+                self.resolve_semantic_rules(
+                    &mut items,
+                    &mut pending_rules,
+                    RuleAttachment::Environment,
+                    RecordedRuleDecision::Environment {
+                        scope_token: Some(scope_token),
+                    },
+                );
                 break;
             }
 
             if self.check(&TokenKind::Rule) {
-                let mut had_error = false;
-                while self.check(&TokenKind::Rule) && !had_error {
-                    match self.parse_rule_def() {
-                        Ok((rule, id)) => {
-                            let newline_count = self.skip_newlines_and_count();
-                            if newline_count >= 3 && fields.is_empty() {
-                                if let Some(id) = id {
-                                    self.mark_rule_ids(
-                                        &[id],
-                                        RecordedRuleDecision::Environment {
-                                            scope_token: Some(scope_token),
-                                        },
-                                    );
-                                }
-                                rules.push(rule);
-                            } else {
-                                pending_field_rules.push(rule);
-                                if let Some(id) = id {
-                                    pending_field_ids.push(id);
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            self.emit_error(e);
-                            had_error = true;
-                        }
+                match self.parse_rule_def() {
+                    Ok((rule, record_id)) => {
+                        let index = items.len();
+                        items.push(Fragment::Rule { rule });
+                        pending_rules.push((index, record_id));
                     }
-                }
-                if had_error {
-                    self.synchronize_to_next_item_in_block();
-                    if self.check(&TokenKind::Dedent) || self.is_at_end() {
-                        break;
+                    Err(error) => {
+                        self.emit_error(error);
+                        self.try_sync(|parser| parser.synchronize_to_next_item_in_block());
                     }
                 }
                 continue;
             }
 
-            if self.check(&TokenKind::Desc) {
-                let d = self.parse_desc_entity()?;
-                if desc.is_none() {
-                    desc = Some(d);
-                }
+            let target_token = self.pos;
+            let parsed = if self.check(&TokenKind::Desc) {
+                self.parse_desc_entity()
+                    .map(|desc| (Fragment::Desc { desc }, None))
             } else if self.check(&TokenKind::Math) {
-                math = Some(self.parse_math_block()?);
+                self.parse_math_block()
+                    .map(|math| (Fragment::Math { math }, None))
             } else if self.check(&TokenKind::Ellipsis) {
-                self.advance();
+                self.parse_placeholder_item()
+                    .map(|placeholder| (placeholder, None))
+            } else if self.type_line_is_field() {
+                self.parse_field()
+                    .map(|field| (Fragment::Field { field }, Some(ParsedTypeShape::Record)))
             } else {
-                let target_token = self.pos;
-                match self.parse_field() {
-                    Ok(mut field) => {
-                        field.rules = std::mem::take(&mut pending_field_rules);
-                        self.mark_rule_ids(
-                            &pending_field_ids,
-                            RecordedRuleDecision::Attached { target_token },
-                        );
-                        pending_field_ids.clear();
-                        fields.push(field);
-                    }
-                    Err(e) => {
-                        self.mark_rule_ids(
-                            &pending_field_ids,
-                            RecordedRuleDecision::DroppedByRecovery,
-                        );
-                        pending_field_rules.clear();
-                        pending_field_ids.clear();
-                        self.emit_error(e);
-                        self.synchronize_to_next_item_in_block();
-                        if self.check(&TokenKind::Dedent) || self.is_at_end() {
-                            break;
+                self.parse_variant_line()
+                    .map(|variants| (Fragment::Variants { variants }, Some(ParsedTypeShape::Enum)))
+            };
+
+            match parsed {
+                Ok((item, item_shape)) => {
+                    if let Some(item_shape) = item_shape {
+                        if let Some(existing) = shape {
+                            if existing != item_shape {
+                                let (line, col) = self.current_pos();
+                                self.emit_error(ParseError::unexpected_token(
+                                    "mixed enum variant and record field".into(),
+                                    "a type body containing only variants or only fields".into(),
+                                    line,
+                                    col,
+                                ));
+                            }
+                        } else {
+                            shape = Some(item_shape);
                         }
                     }
+                    let target_index = items.len();
+                    self.resolve_semantic_rules(
+                        &mut items,
+                        &mut pending_rules,
+                        RuleAttachment::Attached { target_index },
+                        RecordedRuleDecision::Attached { target_token },
+                    );
+                    items.push(item);
+                }
+                Err(error) => {
+                    self.resolve_semantic_rules(
+                        &mut items,
+                        &mut pending_rules,
+                        RuleAttachment::UnresolvedByRecovery,
+                        RecordedRuleDecision::DroppedByRecovery,
+                    );
+                    self.emit_error(error);
+                    self.try_sync(|parser| parser.synchronize_to_next_item_in_block());
                 }
             }
         }
-
-        self.mark_rule_ids(
-            &pending_field_ids,
-            RecordedRuleDecision::Environment {
-                scope_token: Some(scope_token),
-            },
-        );
-        rules.append(&mut pending_field_rules);
 
         if self.check(&TokenKind::Dedent) {
             self.advance();
         }
         self.leave_block();
 
+        let body = match shape.unwrap_or(ParsedTypeShape::Record) {
+            ParsedTypeShape::Enum => TypeBody::Enum {
+                inline: false,
+                items,
+            },
+            ParsedTypeShape::Record => TypeBody::Record { items },
+        };
         Ok(TypeDef {
             name,
-            desc,
-            rules,
-            math,
-            body: TypeBody::Record { fields },
+            body,
             keyword_commitment,
         })
     }
@@ -180,8 +167,8 @@ impl Parser {
         let save = self.pos;
         let mut depth = 0usize;
         let mut found_pipe = false;
-        while let Some(tok) = self.tokens.get(self.pos) {
-            match &tok.kind {
+        while let Some(token) = self.tokens.get(self.pos) {
+            match &token.kind {
                 TokenKind::Newline | TokenKind::Eof => break,
                 TokenKind::Pipe if depth == 0 => found_pipe = true,
                 TokenKind::LParen | TokenKind::LBracket | TokenKind::Lt => depth += 1,
@@ -196,79 +183,52 @@ impl Parser {
         found_pipe
     }
 
-    fn parse_variant_list(&mut self) -> Result<Vec<Ident>, ParseError> {
-        let mut variants = Vec::new();
-        variants.push(self.fuzzy_ident()?);
+    fn type_line_is_field(&self) -> bool {
+        let mut index = self.pos;
+        if matches!(
+            self.tokens.get(index).map(|token| &token.kind),
+            Some(TokenKind::Pipe)
+        ) {
+            return false;
+        }
+        if self.tokens.get(index).is_none() {
+            return false;
+        }
+        index += 1;
+        while matches!(
+            self.tokens.get(index).map(|token| &token.kind),
+            Some(
+                TokenKind::Question
+                    | TokenKind::QuestionQuestion
+                    | TokenKind::Dollar
+                    | TokenKind::DollarDollar
+            )
+        ) {
+            index += 1;
+        }
+        matches!(
+            self.tokens.get(index).map(|token| &token.kind),
+            Some(TokenKind::Colon)
+        )
+    }
+
+    fn parse_variant_line(&mut self) -> Result<Vec<Ident>, ParseError> {
+        self.matches(&TokenKind::Pipe);
+        let mut variants = vec![self.fuzzy_ident()?];
         while self.matches(&TokenKind::Pipe) {
             variants.push(self.fuzzy_ident()?);
         }
-        Ok(variants)
-    }
-
-    /// Pre-scan the indented block (past Indent) to determine if it's a multi-line enum
-    /// or a record. Returns true if the block content looks like enum variants.
-    fn peek_block_is_enum(&mut self) -> bool {
-        let mut scan = self.pos;
-        // Skip newlines
-        while let Some(TokenKind::Newline) = self.tokens.get(scan).map(|t| &t.kind) {
-            scan += 1;
-        }
-
-        match self.tokens.get(scan).map(|t| &t.kind) {
-            // Leading `|` on a line → enum block
-            Some(TokenKind::Pipe) => true,
-            // desc / rule / math / ... → record block
-            Some(TokenKind::Desc)
-            | Some(TokenKind::Rule)
-            | Some(TokenKind::Math)
-            | Some(TokenKind::Ellipsis) => false,
-            // Identifier or keyword variant name → check what follows
-            Some(_kind) => {
-                scan += 1;
-                // Skip commitment
-                while let Some(tok) = self.tokens.get(scan) {
-                    match &tok.kind {
-                        TokenKind::Question
-                        | TokenKind::QuestionQuestion
-                        | TokenKind::Dollar
-                        | TokenKind::DollarDollar => {
-                            scan += 1;
-                        }
-                        _ => break,
-                    }
-                }
-                // After the ident + commitment: `:` means record field
-                match self.tokens.get(scan).map(|t| &t.kind) {
-                    Some(TokenKind::Colon) => false,
-                    // bare identifier or `|` continuation → enum variant
-                    _ => true,
-                }
-            }
-            _ => false,
-        }
-    }
-
-    /// Parse variants inside a multi-line enum block.
-    /// Each line may start with optional `|`, and inline `A | B` per line is allowed.
-    fn parse_block_enum_variants(&mut self) -> Result<Vec<Ident>, ParseError> {
-        let mut variants = Vec::new();
-        loop {
-            self.skip_newlines();
-            if self.check(&TokenKind::Dedent) || self.is_at_end() {
-                break;
-            }
-            // Optional leading `|`
-            if self.check(&TokenKind::Pipe) {
-                self.advance();
-            }
-            variants.push(self.fuzzy_ident()?);
-            // Allow inline `|` on the same line for compactness
-            while self.matches(&TokenKind::Pipe) {
-                variants.push(self.fuzzy_ident()?);
-            }
-        }
-        if self.check(&TokenKind::Dedent) {
-            self.advance();
+        if !self.line_will_end() {
+            let (found, line, col) = match self.peek() {
+                Some(token) => (token.kind.to_string(), token.line, token.col),
+                None => ("EOF".into(), 0, 0),
+            };
+            return Err(ParseError::unexpected_token(
+                found,
+                "`|` or end of enum variant line".into(),
+                line,
+                col,
+            ));
         }
         Ok(variants)
     }
@@ -280,10 +240,6 @@ impl Parser {
         let type_hint =
             self.parse_atoms_until(&[TokenKind::Newline, TokenKind::Dedent, TokenKind::Eof])?;
         self.record_source_node(start..self.pos, crate::parser::RecordedNodeKind::Field);
-        Ok(Field {
-            name,
-            rules: Vec::new(),
-            type_hint,
-        })
+        Ok(Field { name, type_hint })
     }
 }

@@ -7,6 +7,15 @@ impl Parser {
     pub(crate) fn parse_fragment(&mut self) -> Result<Fragment, ParseError> {
         let start = self.pos;
         let fragment = match self.peek_kind() {
+            Some(TokenKind::Desc) => Ok(Fragment::Desc {
+                desc: self.parse_desc_entity()?,
+            }),
+            Some(TokenKind::Requires) => Ok(Fragment::Clause {
+                clause: self.parse_clause(ClauseKind::Requires)?,
+            }),
+            Some(TokenKind::Ensures) => Ok(Fragment::Clause {
+                clause: self.parse_clause(ClauseKind::Ensures)?,
+            }),
             Some(TokenKind::Module) => Ok(Fragment::Module {
                 module: self.parse_module()?,
             }),
@@ -23,16 +32,16 @@ impl Parser {
                 ui: self.parse_ui()?,
             }),
             Some(TokenKind::Steps) => self.parse_steps_fragment(),
+            Some(TokenKind::Math) => Ok(Fragment::Math {
+                math: self.parse_math_block()?,
+            }),
             Some(TokenKind::Stack) | Some(TokenKind::Parallel) => Ok(Fragment::UiNode {
                 node: self.parse_ui_node()?,
             }),
             Some(TokenKind::String(_)) => Ok(Fragment::UiNode {
                 node: self.parse_ui_node()?,
             }),
-            Some(TokenKind::Ellipsis) => {
-                let keyword_commitment = self.expect_kw(TokenKind::Ellipsis, "`...`")?;
-                Ok(Fragment::Placeholder { keyword_commitment })
-            }
+            Some(TokenKind::Ellipsis) => self.parse_placeholder_item(),
             Some(TokenKind::If)
             | Some(TokenKind::For)
             | Some(TokenKind::While)
@@ -40,7 +49,7 @@ impl Parser {
                 let step = self.parse_step()?;
                 Ok(Fragment::Steps {
                     keyword_commitment: Self::step_keyword_commitment(&step),
-                    steps: vec![step],
+                    items: vec![Fragment::Step { step }],
                 })
             }
             _ => {
@@ -56,11 +65,13 @@ impl Parser {
                 let step = self.parse_step()?;
                 Ok(Fragment::Steps {
                     keyword_commitment: Self::step_keyword_commitment(&step),
-                    steps: vec![step],
+                    items: vec![Fragment::Step { step }],
                 })
             }
         }?;
         let kind = match &fragment {
+            Fragment::Desc { .. } => RecordedNodeKind::Desc,
+            Fragment::Clause { .. } => RecordedNodeKind::Clause,
             Fragment::Module { .. } => RecordedNodeKind::Module,
             Fragment::TypeDef { .. } => RecordedNodeKind::TypeDef,
             Fragment::Flow { .. } => RecordedNodeKind::Flow,
@@ -69,19 +80,39 @@ impl Parser {
             Fragment::Steps { .. } => RecordedNodeKind::Steps,
             Fragment::Expr { .. } => RecordedNodeKind::Expr,
             Fragment::UiNode { .. } => RecordedNodeKind::UiNode,
+            Fragment::Math { .. } => RecordedNodeKind::Math,
             Fragment::Placeholder { .. } => RecordedNodeKind::Placeholder,
+            Fragment::Rule { .. }
+            | Fragment::Step { .. }
+            | Fragment::Field { .. }
+            | Fragment::Variants { .. }
+            | Fragment::FlowEntry { .. }
+            | Fragment::FlowArm { .. } => {
+                unreachable!("body-only item dispatched as a root fragment")
+            }
         };
-        self.record_source_node(start..self.pos, kind);
+        if !matches!(
+            fragment,
+            Fragment::Desc { .. }
+                | Fragment::Clause { .. }
+                | Fragment::UiNode { .. }
+                | Fragment::Math { .. }
+                | Fragment::Placeholder { .. }
+        ) {
+            self.record_source_node(start..self.pos, kind);
+        }
         Ok(fragment)
     }
 
-    fn parse_steps_fragment(&mut self) -> Result<Fragment, ParseError> {
+    pub(super) fn parse_steps_fragment(&mut self) -> Result<Fragment, ParseError> {
+        let scope_token = self.pos;
         let keyword_commitment = self.expect_kw(TokenKind::Steps, "`steps`")?;
         self.expect(TokenKind::Colon, "`:`")?;
-        let steps = self.parse_block(|p| p.parse_step());
+        let items = self.parse_step_block(scope_token);
+
         Ok(Fragment::Steps {
             keyword_commitment,
-            steps,
+            items,
         })
     }
 
@@ -96,6 +127,19 @@ impl Parser {
     }
 
     pub(super) fn parse_desc_entity(&mut self) -> Result<Desc, ParseError> {
+        let start = self.pos;
+        self.expect(TokenKind::Desc, "`desc`")?;
+        let need_commitment = self.commitment_after_previous(RecordedSlotKind::Keyword)?;
+        let content = self.fuzzy_string()?;
+        let desc = Desc {
+            need_commitment,
+            content,
+        };
+        self.record_source_node(start..self.pos, RecordedNodeKind::Desc);
+        Ok(desc)
+    }
+
+    pub(super) fn parse_desc_step_entity(&mut self) -> Result<Desc, ParseError> {
         self.expect(TokenKind::Desc, "`desc`")?;
         let need_commitment = self.commitment_after_previous(RecordedSlotKind::Keyword)?;
         let content = self.fuzzy_string()?;
@@ -103,5 +147,66 @@ impl Parser {
             need_commitment,
             content,
         })
+    }
+
+    pub(super) fn parse_placeholder_item(&mut self) -> Result<Fragment, ParseError> {
+        let start = self.pos;
+        let keyword_commitment = self.expect_kw(TokenKind::Ellipsis, "`...`")?;
+        self.record_source_node(start..self.pos, RecordedNodeKind::Placeholder);
+        Ok(Fragment::Placeholder { keyword_commitment })
+    }
+
+    pub(super) fn parse_clause(&mut self, clause_kind: ClauseKind) -> Result<Clause, ParseError> {
+        self.parse_clause_with_flow_tail(clause_kind, false)
+    }
+
+    pub(super) fn parse_flow_tail_clause(
+        &mut self,
+        clause_kind: ClauseKind,
+    ) -> Result<Clause, ParseError> {
+        self.parse_clause_with_flow_tail(clause_kind, true)
+    }
+
+    fn parse_clause_with_flow_tail(
+        &mut self,
+        clause_kind: ClauseKind,
+        allow_following_flow_tail: bool,
+    ) -> Result<Clause, ParseError> {
+        let start = self.pos;
+        let token = match clause_kind {
+            ClauseKind::Requires => TokenKind::Requires,
+            ClauseKind::Ensures => TokenKind::Ensures,
+        };
+        let label = match clause_kind {
+            ClauseKind::Requires => "`requires`",
+            ClauseKind::Ensures => "`ensures`",
+        };
+        let keyword_commitment = self.expect_kw(token, label)?;
+        self.expect(TokenKind::Colon, "`:`")?;
+        let condition = self.parse_condition()?;
+        let followed_by_flow_tail = allow_following_flow_tail
+            && matches!(
+                self.peek_kind(),
+                Some(TokenKind::Requires | TokenKind::Ensures | TokenKind::Desc)
+            );
+        if !self.line_will_end() && !followed_by_flow_tail {
+            let (found, line, col) = match self.peek() {
+                Some(token) => (token.kind.to_string(), token.line, token.col),
+                None => ("EOF".into(), 0, 0),
+            };
+            return Err(ParseError::unexpected_token(
+                found,
+                format!("newline after {} condition", label),
+                line,
+                col,
+            ));
+        }
+        let clause = Clause {
+            clause_kind,
+            condition,
+            keyword_commitment,
+        };
+        self.record_source_node(start..self.pos, RecordedNodeKind::Clause);
+        Ok(clause)
     }
 }
