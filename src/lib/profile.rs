@@ -391,7 +391,7 @@ fn annotate_partial(mut slot: MaterializationSlot) -> MaterializationSlot {
 fn func_has_contracts(document: &LosslessDocument, header: &str) -> bool {
     document.semantic().fragments.iter().any(|fragment| {
         if let Fragment::Func { func } = fragment {
-            header.contains(&func.name.name)
+            header_name_matches(header, &func.name.name)
                 && (!func.requires().is_empty()
                     || !func.ensures().is_empty()
                     || !func.rules().is_empty())
@@ -399,6 +399,23 @@ fn func_has_contracts(document: &LosslessDocument, header: &str) -> bool {
             false
         }
     })
+}
+
+/// Extract the identifier after `func ` in a lossless header and compare it
+/// against a semantic function name.  This avoids false positives from the
+/// substring check `header.contains(name)` (e.g. "CreateUser" matching "User").
+fn header_name_matches(header: &str, name: &str) -> bool {
+    let after_keyword = header
+        .trim_start()
+        .strip_prefix("func")
+        .unwrap_or(header)
+        .trim_start();
+    let extracted = after_keyword
+        .trim_start()
+        .split(['$', '?', ':', ' ', '\t', '\n', '('])
+        .next()
+        .unwrap_or("");
+    !extracted.is_empty() && extracted == name
 }
 
 fn document_level_gaps(

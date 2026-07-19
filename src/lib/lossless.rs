@@ -22,6 +22,10 @@ pub struct ByteSpan {
 
 impl ByteSpan {
     pub fn new(start: usize, end: usize) -> Self {
+        assert!(
+            start <= end,
+            "ByteSpan::new: start ({start}) must not exceed end ({end})"
+        );
         Self {
             start: u32::try_from(start).expect("MimiSpec documents must be smaller than 4 GiB"),
             end: u32::try_from(end).expect("MimiSpec documents must be smaller than 4 GiB"),
@@ -1497,7 +1501,11 @@ fn looks_like_field_or_flow_entry(text: &str) -> bool {
 }
 
 fn document_text(source: &str, span: ByteSpan) -> &str {
-    &source[span.as_range()]
+    let range = span.start as usize..span.end as usize;
+    if range.end > source.len() {
+        return "";
+    }
+    &source[range]
 }
 
 fn is_word_start(ch: char) -> bool {
