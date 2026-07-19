@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/ontonous/mimispec/docs/schemas/collaboration-report.schema.json",
   "title": "MimiSpec Collaboration Report",
-  "description": "Versioned JSON shape for diagnose/workflow/materialize/profile outputs under development for 0.3.x.",
+  "description": "Provisional development summary for diagnose/workflow/materialize/profile outputs. Materialize/profile/workflow protocols are outside the MimiSpec 0.3 Core roadmap, and this schema is not a durable derivation or evidence ledger.",
   "type": "object",
   "required": ["schema_version", "kind"],
   "properties": {
@@ -15,7 +15,10 @@
       "enum": ["diagnose", "workflow", "materialize", "profile"]
     },
     "path": { "type": "string" },
-    "release_scope": { "type": "string" },
+    "release_scope": {
+      "type": "string",
+      "description": "Provisional CLI label outside the MimiSpec 0.3 Core contract."
+    },
     "summary": {
       "type": "object",
       "additionalProperties": true
@@ -40,11 +43,44 @@
   "$defs": {
     "queueItem": {
       "type": "object",
-      "required": ["state", "header"],
+      "required": ["slot", "node", "state", "anchor", "footprint", "header", "span"],
       "properties": {
-        "node": { "type": "integer", "minimum": 0 },
+        "slot": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Revision-local CommitmentSlotId; independent suffixes on one node have different IDs."
+        },
+        "node": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Revision-local SourceNodeId for this report only; not a durable project identity."
+        },
         "state": { "type": "string" },
+        "anchor": { "type": "string" },
+        "footprint": {
+          "type": "string",
+          "enum": [
+            "entity_kind",
+            "name_or_reference",
+            "value",
+            "clause",
+            "event",
+            "transition",
+            "expression_operator",
+            "placeholder",
+            "unknown"
+          ]
+        },
         "header": { "type": "string" },
+        "span": {
+          "type": "object",
+          "required": ["start", "end"],
+          "properties": {
+            "start": { "type": "integer", "minimum": 0 },
+            "end": { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": false
+        },
         "review_target": { "type": "string" }
       },
       "additionalProperties": true

@@ -1,0 +1,16 @@
+{
+  "schema_version": "mimispec.conformance/0.3",
+  "status": "complete",
+  "ast": {
+    "schema_version": "mimispec.ast/0.3",
+    "items": [
+      { "kind": "Flow" }
+    ]
+  },
+  "error_codes": [],
+  "lossless": {
+    "source_exact": true,
+    "all_spans_valid": true,
+    "rule_attachments": []
+  }
+}

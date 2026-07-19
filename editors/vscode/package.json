@@ -2,7 +2,7 @@
   "name": "mimispec-vscode",
   "displayName": "MimiSpec",
   "description": "MimiSpec (.mms) language support for VS Code",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "publisher": "ontonous",
   "license": "Apache-2.0",
   "repository": {
@@ -10,7 +10,7 @@
     "url": "https://github.com/ontonous/mimispec"
   },
   "engines": {
-    "vscode": "^1.74.0"
+    "vscode": "^1.82.0"
   },
   "categories": [
     "Programming Languages",
@@ -73,6 +73,15 @@
           "type": "boolean",
           "default": true,
           "description": "Run mimispec validation when opening .mms files."
+        },
+        "mimispec.collaborationMode": {
+          "type": "string",
+          "enum": [
+            "advisory",
+            "strict"
+          ],
+          "default": "advisory",
+          "description": "Collaboration enforcement mode used by the MimiSpec 0.3 language server."
         }
       }
     },
@@ -101,5 +110,7 @@
     "@types/vscode": "^1.74.0",
     "typescript": "^5.3.0"
   },
-  "dependencies": {}
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  }
 }

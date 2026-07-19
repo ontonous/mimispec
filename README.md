@@ -16,6 +16,11 @@
 
 ---
 
+> Release status: crates.io, Cargo and the latest release tag remain `0.2.1`.
+> The main line contains the consolidated, unreleased 0.3 Core, stdio language
+> server, conformance suite, and a release-blocking usability gate. Published
+> facts stay at 0.2.1 until the independent trial and an authorized release.
+
 MimiSpec embeds a **progressive workflow** — from uncertainty to structured to fully locked — directly into the syntax. Every phase of design is a **syntactically valid `.mms` file**.
 
 ```
@@ -47,14 +52,15 @@ module$ Shop:
 
 | Feature | Description |
 |---------|-------------|
-| 🧩 **Fragment Architecture** | Multiple meaningful local structures are valid top-level Fragments — `module`, `type`, `flow`, `func`, `ui`, `steps`, expressions, UI nodes |
+| 🧩 **Anonymous Context + Fragments** | Root `desc`/`rule`/clauses and ordinary Fragments share one ordered Context Item model |
 | 📈 **Progressive Precision** | `desc` → `requires`/`ensures` → `math:` blocks, step by step |
 | 🔒 **Commitment System** | `$`/`$$` for confirmed, `?`/`??` for uncertainty — 9 combinations |
 | ⛓️ **Constraint Chains** | `rule` front-attachment from file-level to function-level |
 | ➗ **Structured Math** | `math:` blocks with tensor ops, linear algebra, calculus |
-| 🎯 **State Machine** | `flow` definitions with `>>>` transition operator |
+| 🎯 **Open-world Flow** | Named/anonymous `flow`, optional `on Event`, and `>>>` transitions |
 | 🖼️ **UI Views** | `stack`/`parallel` layouts, `on` event bindings, Saga compensation |
 | 🛡️ **Error Recovery** | Multi-level synchronization preserves successfully recovered nodes; callers must check diagnostics before treating a partial AST as complete |
+| 🛰️ **0.3 Language Service** | Long-lived stdio LSP with advisory/strict revisions, semantic tokens, hover, navigation, and actor-declared edits |
 | 🦀 **Pure Rust** | Zero runtime dependencies, single binary CLI |
 
 ---
@@ -85,17 +91,22 @@ mimispec path/to/file.mms --render        # render back to source
 mimispec path/to/file.mms --latex         # render math to LaTeX
 mimispec diagnose path/to/file.mms        # decision/delegation queues + intent diagnostics
 mimispec path/to/file.mms --diagnostics   # same as diagnose
-mimispec materialize path/to/file.mms --scope payments-v1  # commit-ready materialization plan
+mimispec materialize path/to/file.mms --scope payments-v1  # provisional confirmed-slot plan
 mimispec profile path/to/file.mms --target mimi --scope payments-v1
 mimispec profile path/to/file.mms --target rust|typescript|generic
 mimispec workflow path/to/file.mms --scope payments-v1
+mimispec lsp --stdio                       # long-lived LSP 3.17 server
+mimispec conformance check                # verify mimispec.conformance/0.3
+mimispec usability check                  # report independent RC trial progress
 echo "func Hello: steps:\n    say hi" | mimispec - --ast  # stdin
 mimispec *.mms --json                     # multiple files
 ```
 
 > Note: the current crates.io release is still `0.2.1`. Lossless parsing,
 > collaboration validation, and `diagnose` are under development on `main` for
-> the `0.3.x` series and are not yet a published release contract.
+> the `0.3.x` series and are not yet a published release contract. The
+> main-only `materialize`, `profile`, and `workflow` commands are provisional
+> research surfaces outside the 0.3 Core-language roadmap.
 
 ### Library Usage
 
@@ -181,11 +192,11 @@ mimispec/
 │   ├── roadmap-0.3.x.md         # 0.3.x development roadmap
 │   ├── commitment-state-machine.md
 │   ├── migration-0.2-to-0.3.md  # Draft migration guide
-│   ├── schemas/                 # Draft collaboration JSON schemas
+│   ├── schemas/                 # Versioned parse JSON + draft collaboration schemas
 │   ├── advanced-usage.md        # Advanced usage
 │   ├── version-management.md    # Version management
 │   └── stdlib-api.md            # Stdlib API reference
-├── mimispec-parser-mms/         # Reference parser in MimiSpec
+├── tests/conformance/0.3/       # Canonical parser golden conformance suite
 ├── editors/
 │   ├── vscode/                  # VS Code extension
 │   └── monaco/                  # Monaco reference integration
@@ -201,9 +212,11 @@ mimispec/
 
 | Document | Description |
 |----------|-------------|
-| [Syntax Specification Draft](docs/specification.md) | Current syntax plus staged 0.3.x design; released implementation remains 0.2.1 |
-| [0.3.x Roadmap](docs/roadmap-0.3.x.md) | Version plan from collaboration semantics to the native Mimi profile |
-| [0.3.x Chinese Design Overview](docs/0.3.x-design-zh.md) | Chinese architecture baseline for states, paragraphs, materialization, evidence, and Mimi |
+| [Syntax Specification Draft](docs/specification.md) | Implemented main-line 0.3 Core draft; released package remains 0.2.1 |
+| [0.3.x Roadmap](docs/roadmap-0.3.x.md) | Core-language plan from semantic reset through lossless parsing and stabilization |
+| [0.3.x Usability Report](docs/0.3-usability-report.md) | Real-world family-ledger trial, verified behavior, and remaining completion gaps |
+| [0.3 Language Service Protocol](docs/language-service-protocol-0.3.md) | Frozen stdio LSP custom methods, collaboration modes, and error codes |
+| [0.3.x Chinese Design Overview](docs/0.3.x-design-zh.md) | Formal Core baseline for Context, descriptions, rules, clauses, Flow, and commitment |
 | [Commitment State Machine](docs/commitment-state-machine.md) | Normative `$`/`?` transitions, actor permissions, and lock challenges |
 | [Advanced Usage](docs/advanced-usage.md) | Modular design, contracts, Saga, ML specs |
 | [Version Management](docs/version-management.md) | SemVer, branching model, CI/CD |
@@ -261,10 +274,10 @@ A: MimiSpec targets **human-AI collaboration**, not just API contracts. Its prog
 A: Yes. MimiSpec is a fully self-contained specification language. AI tooling is an optional layer.
 
 **Q: What is the difference between `.mms` and `.mimi`?**  
-A: MimiSpec and Mimi are separate languages with independent syntax, ASTs, toolchains, and release cycles. `.mms` is a progressive, natural-language-friendly intent format; `.mimi` is an independently usable Typestate/Flow systems language. Mimi is the first-party native materialization target, not a mandatory backend for every MMS. Mimi's `mms {}` block is a historical super-comment skipped by the production compiler pipeline, not a production-grade embedded MimiSpec system.
+A: MimiSpec and Mimi are separate languages with independent syntax, ASTs, toolchains, and release cycles. `.mms` is a progressive, natural-language-friendly intent format; `.mimi` is an independently usable Typestate/Flow systems language. An external language or document container may pass MMS text to the canonical MimiSpec parser, but that wrapper does not redefine MimiSpec syntax or semantics.
 
 **Q: What is the current released version?**
-A: The current release is `v0.2.1`. Parsing, cross-file resolution, symbol tables, incremental caching, and the CLI are available. The `0.3.x` series will implement the commitment collaboration protocol, IDE services, materialization evidence, and the native Mimi profile; forward-looking specification text is not yet released behavior.
+A: The current release is `v0.2.1`. Parsing, cross-file resolution, symbol tables, incremental caching, and the CLI are available. The `0.3.x` series will correct Context/`desc`/clause/Flow semantics, add a lossless document model, and make the commitment protocol enforceable; forward-looking specification text is not yet released behavior.
 
 **Q: How do I contribute?**  
 A: See [CONTRIBUTING.md](CONTRIBUTING.md). All contributions — code, docs, issues — are welcome.

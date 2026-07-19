@@ -1,0 +1,22 @@
+{
+  "schema_version": "mimispec.conformance/0.3",
+  "cases": [
+    { "name": "human-open", "actor": "human", "from": "none", "to": "none", "allowed": true },
+    { "name": "human-content-review", "actor": "human", "from": "none", "to": "?", "allowed": true },
+    { "name": "human-content-delegated", "actor": "human", "from": "none", "to": "??", "allowed": true },
+    { "name": "human-lock", "actor": "human", "from": "none", "to": "$", "allowed": true },
+    { "name": "human-lock-review", "actor": "human", "from": "none", "to": "$?", "allowed": true },
+    { "name": "human-lock-delegated", "actor": "human", "from": "none", "to": "$??", "allowed": true },
+    { "name": "human-strong-lock", "actor": "human", "from": "none", "to": "$$", "allowed": true },
+    { "name": "human-strong-lock-review", "actor": "human", "from": "none", "to": "$$?", "allowed": true },
+    { "name": "human-strong-lock-delegated", "actor": "human", "from": "none", "to": "$$??", "allowed": true },
+    { "name": "ai-delegated-to-review", "actor": "ai", "from": "??", "to": "?", "allowed": true },
+    { "name": "ai-delegated-to-open", "actor": "ai", "from": "??", "to": "none", "allowed": true },
+    { "name": "ai-lock-challenge", "actor": "ai", "from": "$", "to": "$?", "challenge_reason": "new failure evidence", "allowed": true },
+    { "name": "ai-lock-challenge-needs-reason", "actor": "ai", "from": "$", "to": "$?", "allowed": false, "violation": "challenge_reason_required" },
+    { "name": "ai-cannot-enter-strong", "actor": "ai", "from": "none", "to": "$$", "allowed": false, "violation": "ai_transition_forbidden" },
+    { "name": "ai-cannot-edit-protected", "actor": "ai", "from": "$", "to": "$?", "challenge_reason": "review", "effects": { "content_changed": true }, "allowed": false, "violation": "protected_content_changed" },
+    { "name": "human-strong-unlock-needs-authorization", "actor": "human", "from": "$$", "to": "$", "allowed": false, "violation": "strong_unlock_authorization_required" },
+    { "name": "human-strong-unlock-authorized", "actor": "human", "from": "$$", "to": "$", "authorization": { "unlock_strong_lock": true }, "allowed": true }
+  ]
+}

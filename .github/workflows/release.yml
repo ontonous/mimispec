@@ -12,6 +12,12 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - run: cargo build --release
       - run: cargo test --lib
+      - run: cargo test --release property_tests
+      - run: cargo test --release stress_tests
+      - run: cargo run -- conformance check
+      - run: cargo run -- usability check --require-complete
+      - run: cargo test --test lsp_stdio
+      - run: cargo package --locked --allow-dirty
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:

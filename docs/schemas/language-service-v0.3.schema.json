@@ -1,0 +1,155 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mimispec.dev/schemas/language-service-v0.3.schema.json",
+  "title": "MimiSpec 0.3 language-service custom wire values",
+  "$defs": {
+    "position": {
+      "type": "object",
+      "required": ["line", "character"],
+      "properties": {
+        "line": { "type": "integer", "minimum": 0 },
+        "character": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "range": {
+      "type": "object",
+      "required": ["start", "end"],
+      "properties": {
+        "start": { "$ref": "#/$defs/position" },
+        "end": { "$ref": "#/$defs/position" }
+      },
+      "additionalProperties": false
+    },
+    "edit": {
+      "type": "object",
+      "required": ["range", "text"],
+      "properties": {
+        "range": { "oneOf": [{ "$ref": "#/$defs/range" }, { "type": "null" }] },
+        "text": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "violation": {
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": {
+        "code": { "type": "string", "pattern": "^C-" },
+        "message": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "documentEditRequest": {
+      "type": "object",
+      "required": ["uri", "base_version", "actor", "edits", "authorization", "unlock_tokens"],
+      "properties": {
+        "uri": { "type": "string" },
+        "base_version": { "type": "integer", "minimum": 1 },
+        "actor": { "enum": ["human", "ai"] },
+        "edits": { "type": "array", "items": { "$ref": "#/$defs/edit" } },
+        "authorization": {
+          "type": "object",
+          "required": ["modify_protected"],
+          "properties": { "modify_protected": { "type": "boolean" } },
+          "additionalProperties": false
+        },
+        "unlock_tokens": { "type": "array", "items": { "type": "string" } },
+        "challenge_reason": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "documentEditResponse": {
+      "type": "object",
+      "required": ["schema_version", "accepted", "authoritative_version", "violations"],
+      "properties": {
+        "schema_version": { "const": "mimispec.ls/0.3" },
+        "accepted": { "type": "boolean" },
+        "authoritative_version": { "type": "integer", "minimum": 1 },
+        "candidate_hash": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" },
+        "transaction_id": { "type": ["string", "null"] },
+        "violations": { "type": "array", "items": { "$ref": "#/$defs/violation" } },
+        "workspace_edit": { "type": "object" }
+      },
+      "additionalProperties": false
+    },
+    "snapshotRequest": {
+      "type": "object",
+      "required": ["uri"],
+      "properties": { "uri": { "type": "string" } },
+      "additionalProperties": false
+    },
+    "unlockTokenRequest": {
+      "type": "object",
+      "required": ["uri", "base_version", "actor", "slot"],
+      "properties": {
+        "uri": { "type": "string" },
+        "base_version": { "type": "integer", "minimum": 1 },
+        "actor": { "const": "human" },
+        "slot": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "adoptObservedRequest": {
+      "type": "object",
+      "required": ["uri", "base_version", "actor", "authorization", "unlock_tokens"],
+      "properties": {
+        "uri": { "type": "string" },
+        "base_version": { "type": "integer", "minimum": 1 },
+        "actor": { "const": "human" },
+        "authorization": {
+          "type": "object",
+          "required": ["modify_protected"],
+          "properties": { "modify_protected": { "type": "boolean" } },
+          "additionalProperties": false
+        },
+        "unlock_tokens": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "restoreAuthoritativeRequest": {
+      "type": "object",
+      "required": ["uri", "base_version", "actor"],
+      "properties": {
+        "uri": { "type": "string" },
+        "base_version": { "type": "integer", "minimum": 1 },
+        "actor": { "const": "human" }
+      },
+      "additionalProperties": false
+    },
+    "slotNavigationRequest": {
+      "type": "object",
+      "required": ["uri", "position"],
+      "properties": {
+        "uri": { "type": "string" },
+        "position": { "$ref": "#/$defs/position" }
+      },
+      "additionalProperties": false
+    },
+    "operationResponse": {
+      "type": "object",
+      "required": ["schema_version", "accepted", "authoritative_version", "violations"],
+      "properties": {
+        "schema_version": { "const": "mimispec.ls/0.3" },
+        "accepted": { "type": "boolean" },
+        "authoritative_version": { "type": "integer", "minimum": 1 },
+        "candidate_hash": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" },
+        "transaction_id": { "type": ["string", "null"] },
+        "violations": { "type": "array", "items": { "$ref": "#/$defs/violation" } },
+        "token": { "type": "object" },
+        "session": { "type": "object" },
+        "workspace_edit": { "type": "object" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "anyOf": [
+    { "$ref": "#/$defs/documentEditRequest" },
+    { "$ref": "#/$defs/documentEditResponse" },
+    { "$ref": "#/$defs/snapshotRequest" },
+    { "$ref": "#/$defs/unlockTokenRequest" },
+    { "$ref": "#/$defs/adoptObservedRequest" },
+    { "$ref": "#/$defs/restoreAuthoritativeRequest" },
+    { "$ref": "#/$defs/slotNavigationRequest" },
+    { "$ref": "#/$defs/operationResponse" }
+  ]
+}

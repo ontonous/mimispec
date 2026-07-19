@@ -1,0 +1,15 @@
+{
+  "schema_version": "mimispec.conformance/0.3",
+  "status": "partial",
+  "ast": {
+    "schema_version": "mimispec.ast/0.3",
+    "items": [
+      { "kind": "TypeDef" }
+    ]
+  },
+  "error_codes": ["E0010"],
+  "lossless": {
+    "source_exact": true,
+    "all_spans_valid": true
+  }
+}

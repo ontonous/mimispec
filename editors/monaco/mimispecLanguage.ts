@@ -51,7 +51,7 @@ export const mimispecLanguage = {
 
       [/>>>/, 'operator'],
 
-      [/\$\$?\??|\?\??/, 'annotation'],
+      [/\$\$\?\?|\$\$\?|\$\$|\$\?\?|\$\?|\$|\?\?|\?/, 'annotation'],
 
       [/@/, 'operator'],
 
@@ -91,7 +91,7 @@ export const mimispecLanguageConfiguration: monaco.languages.LanguageConfigurati
   ],
   indentationRules: {
     increaseIndentPattern:
-      /^\s*(module|type|flow|func|ui|steps|if|else|for|while|parasteps|math|requires|ensures|stack|parallel|on|error)\b.*:\s*$/,
+      /^\s*(module|type|flow|func|ui|steps|if|else|for|while|parasteps|math|stack|parallel|on)\b.*:\s*$/,
     decreaseIndentPattern: /^\s*\}\s*$/,
   },
   wordPattern: /([a-zA-Z_][a-zA-Z0-9_]*)|\?\??|\$\$?\??|\.\.\./,

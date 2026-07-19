@@ -1,0 +1,27 @@
+{
+  "schema_version": "mimispec.conformance/0.3",
+  "status": "complete",
+  "ast": {
+    "schema_version": "mimispec.ast/0.3",
+    "items": [
+      { "kind": "Desc" },
+      {
+        "kind": "Rule",
+        "rule": { "attachment": { "kind": "attached", "target_index": 2 } }
+      },
+      { "kind": "Func" }
+    ]
+  },
+  "error_codes": [],
+  "lossless": {
+    "source_exact": true,
+    "all_spans_valid": true,
+    "rule_attachments": [
+      [
+        "rule$ \"所有记录先保存到本地\"",
+        "attached",
+        "Func"
+      ]
+    ]
+  }
+}

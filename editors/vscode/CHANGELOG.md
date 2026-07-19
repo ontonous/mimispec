@@ -1,5 +1,17 @@
 # Change Log
 
+## [Unreleased]
+
+- Replaced spawn-on-save validation with the long-lived MimiSpec 0.3 stdio
+  language server while retaining an explicit 0.2.1 fallback.
+- Added workspace-level `advisory`/`strict` collaboration configuration.
+
+- Accept and verify the `mimispec.parse/0.3` CLI JSON envelope while retaining
+  compatibility with unversioned 0.2.1 output.
+- Read explicit complete/partial parse status instead of inferring only from a
+  legacy success flag.
+- Keep indentation rules aligned with actual block constructs.
+
 ## [0.2.0]
 
 - Sync syntax highlighting and validation with MimiSpec v0.3.1.

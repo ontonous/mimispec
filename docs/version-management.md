@@ -88,17 +88,19 @@ main ── v1.0.0 ── v1.0.1 ── v1.1.0 ── ...
 
 ## 3. 发布流程
 
+0.3 的历史 `0.3.0`-`0.3.5` 名称只是未发布的内部里程碑 M0-M5。
+它们不会被伪造为补丁发布历史；首个候选版本统一为 `0.3.0-rc.1`。
+
 ### 3.1 标准化发布步骤
 
 ```
-1. 从 main 创建 release/vX.Y.Z 分支
-2. 更新 CHANGELOG.md
-3. 更新 Cargo.toml 中的 version 字段
-4. 运行完整测试套件：cargo test --lib && cargo clippy
-5. 运行压力测试：cargo test --release stress_tests
-6. 创建 Git Tag：git tag -a vX.Y.Z -m "vX.Y.Z"
-7. 发布到 GitHub Releases
-8. 合并回 main（如有必要）
+1. 保持 main 全部门禁为绿色
+2. 运行 conformance、真实 stdio LSP、property、stress 和 package 门禁
+3. 通过 5 名独立作者 / 25 份文档的 usability release gate
+4. 更新 CHANGELOG、迁移指南和 Cargo 版本为 `0.3.0-rc.N`
+5. 仅在用户明确授权后提交、创建 annotated tag 和发布
+6. RC 观察至少 14 天；wire breaking change 必须递增 rc.N 并重新计时
+7. 无 P0/P1 后以同一门禁准备正式 `0.3.0`
 ```
 
 ### 3.2 标签规范
@@ -158,7 +160,8 @@ git push origin v1.0.0-rc.1
 
 ## 5. CI/CD 管道（建议方案）
 
-当前项目**尚未配置 CI/CD**。以下是推荐的最低配置：
+当前项目已配置 CI 与 tag-triggered release workflow；release workflow
+还会用未完成的独立 usability manifest 阻断过早 RC。
 
 ### 5.1 GitHub Actions 工作流
 
@@ -217,10 +220,10 @@ jobs:
 
 | 评估项 | 当前状态 | 等级 |
 |--------|----------|------|
-| 版本号 | `Cargo.toml` 中定义 `0.1.0`，符合 SemVer | ✅ |
-| Git Tag | **无任何 tag**，无法追溯发布历史 | ❌ |
-| CHANGELOG | 完整记录 v0.1.0 变更，Keep a Changelog 格式 | ✅ |
-| 发布流程 | **无**，靠手动操作 | ❌ |
+| 版本号 | 已发布/Cargo 仍为 `0.2.1`；0.3 尚未满足 RC gate | ✅ |
+| Git Tag | 发布基线为 `v0.2.1` | ✅ |
+| CHANGELOG | 已记录未发布的合并版 0.3 开发内容 | ✅ |
+| 发布流程 | tag workflow 已存在，但 tag/publish 必须明确授权 | ✅ |
 
 ### 6.2 分支管理 / Branch Management
 
@@ -235,9 +238,9 @@ jobs:
 | 评估项 | 当前状态 | 等级 |
 |--------|----------|------|
 | 持续集成 (CI) | `.github/workflows/ci.yml` 已配置（clippy + test + release build） | ✅ |
-| 持续发布 (CD) | **不存在**。发布需手动构建、手动上传 | ❌ |
+| 持续发布 (CD) | tag-triggered workflow；受 conformance/usability/package gate 约束 | ✅ |
 | PR 自动检查 | CI 自动触发 | ✅ |
-| 自动发布 | **不存在**。tag 推送后无任何自动化 | ❌ |
+| 自动发布 | tag 触发；创建 tag 本身保持人工明确授权 | ✅ |
 
 ### 6.4 文档与规范现状
 

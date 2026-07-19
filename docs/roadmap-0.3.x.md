@@ -1,496 +1,428 @@
-# MimiSpec 0.3.x Development Roadmap
+# MimiSpec 0.3.0 Consolidated Development Roadmap
 
-> Status: planning
->
 > Current released version: `0.2.1`
 >
-> Scope: `0.3.0` through the final `0.3.x` stabilization release
+> This roadmap covers the MimiSpec language, canonical parser, document model,
+> collaboration semantics, diagnostics, and language-service protocol only.
+>
+> Main development status (2026-07-19): Core milestones M0-M3, the M4 stdio
+> language service, and the technical M5 stabilization gates are implemented
+> in the working tree. The independent 5-author/25-document usability gate is
+> still incomplete, so Cargo and published release facts remain `0.2.1`.
 
 ## 1. Series Goal
 
-MimiSpec 0.3.x turns the existing commitment suffixes from parseable metadata
-into a documented and enforceable human-AI collaboration protocol.
+MimiSpec 0.3.x makes small, independent intent fragments reliable enough for
+humans and AI to read, edit, and preserve without requiring a named wrapper or
+target-language knowledge.
 
-The series does not turn MimiSpec into a programming language. The five-minute
-entry point remains unchanged:
+The series closes five language-level gaps:
 
-```mimispec
-desc?? "我想做一个帮助家庭记录日常开销的应用"
+1. an anonymous Document Context that accepts descriptions, rules, clauses,
+   and ordinary Fragments;
+2. `desc` semantics that do not imply delegation and never change by ordinal
+   position;
+3. repeatable `requires` / `ensures` clauses with no silent overwrite;
+4. intent-level Flow events and explicit open-world semantics;
+5. a lossless document and enforceable commitment state machine.
 
-rule "老人也可以轻松使用"
-rule "财务数据默认只保存在本地"
-```
+The normative Core design is
+[`0.3.x-design-zh.md`](0.3.x-design-zh.md). The surface grammar is
+[`specification.md`](specification.md), and suffix transitions are specified in
+[`commitment-state-machine.md`](commitment-state-machine.md).
 
-The defining model of 0.3.x is:
+## 2. Scope Boundary
+
+0.3.x includes:
+
+- surface grammar and semantic AST;
+- canonical parsing of a Document Context and individual Context Items;
+- source-preserving document representation;
+- rule attachment and paragraph semantics;
+- commitment slots, actor transitions, lock challenges, and patch validation;
+- versioned diagnostics and language-service data.
+
+0.3.x does not include:
+
+- target-language syntax or AST nodes;
+- external wrapper syntax such as another language's embedded block;
+- code generation or automatic implementation checking;
+- Materialization, Target Profile, Evidence, Release Scope, or OSE workflow
+  protocols;
+- automatic formalization of natural-language rules.
+
+External systems may call the canonical parser with MMS text, but they do not
+change how that text is parsed.
+
+## 3. Non-Negotiable Invariants
+
+Every 0.3.x release must preserve these invariants:
+
+1. Natural language is first-class.
+2. A file containing only `desc` and/or `rule` is useful and valid.
+3. No suffix is required for an ordinary draft.
+4. `desc` without `?` or `??` does not delegate content to AI.
+5. Repeated descriptions and clauses are never ignored or overwritten.
+6. Reserved Context Items never silently degrade into Action Steps.
+7. A trailing or paragraph-separated rule is an environment rule, not a
+   dangling error.
+8. Flow is open-world unless an explicit rule states closure.
+9. Flow completeness is independent of `$` / `$$`.
+10. All states containing `$` protect current content.
+11. AI cannot enter, remove, or weaken `$$` without human authorization.
+12. Formatting preserves suffix targets, clause order, and rule attachment.
+13. Commitment means intent confirmation only.
+14. Partial AST is never described as a complete document.
+15. Valid 0.2.1 surface syntax remains parseable unless a separately approved
+    migration documents a safety-critical exception.
+16. Every semantic scope has one authoritative ordered item sequence; typed
+    collections are derived queries, not competing storage.
+17. Only a physical blank line creates a ParagraphBreak; a comment-only line
+    cannot silently change rule attachment.
+
+## 4. Milestone Structure and One Published Version
+
+The historical `0.3.0`-`0.3.5` labels were never published. They are internal
+milestones M0-M5, consolidated into one future public version: `0.3.0`.
+
+| Milestone | Theme | Main status | Required outcome |
+|---------|-------|-------------|------------------|
+| `M0` | Core semantic reset | Implemented | Context root, corrected `desc`/`rule`, repeated clauses, Flow events/open-world semantics, frozen suffix meanings |
+| `M1` | Lossless document | Implemented | ParagraphBreak, exact spans, comments, attachment decisions, stable revision-local slots |
+| `M2` | Collaboration validation | Implemented | Actor transition matrix, semantic footprints, SHA-256 revisions, lock challenges, structured patch validation |
+| `M3` | Parser and diagnostic contract | Implemented | Context Item API, versioned JSON, non-loss diagnostics, semantic queries |
+| `M4` | Language-service protocol | Implemented, release-gated | advisory/strict session state, UTF-16 sync, stdio LSP, navigation, hover, semantic tokens, actor-declared edits |
+| `M5` | Compatibility and stabilization | External trial pending | conformance suite, corpus, performance, fuzzing, API/wire freeze, 5-author/25-document trial, release candidate |
+
+`0.3.0-rc.1` may be prepared only after M5's external trial passes. The final
+`0.3.0` requires a 14-day RC observation window with no unresolved P0/P1.
+
+The dependency order is strict:
 
 ```text
-natural-language intent
-    + Fragment/slot structure
-    + paragraph-scoped constraints
-    + commitment state transitions
-    = an evolving human-AI specification
+Core semantics
+-> lossless source and attachment
+-> protected transitions
+-> diagnostics and public parser contract
+-> language-service protocol
+-> stabilization
 ```
 
-Mimi remains the native and first-party production target. MimiSpec Core stays
-target-language independent so the same `.mms` can constrain Rust, TypeScript,
-Python, and other implementation languages through target profiles.
-
-## 2. Non-Negotiable Invariants
-
-Every 0.3.x release must preserve these invariants.
-
-1. Five-minute usability: a non-programmer can begin with `desc`, `rule`, and
-   `??` without learning modules, types, functions, or formal contracts.
-2. Fragment-first legality: an individual Fragment or meaningful partial tree
-   remains a valid file.
-3. Natural language is first-class intent, not a degraded fallback.
-4. Blank lines retain their paragraph meaning for `rule` attachment.
-5. Without a lock suffix, `?`/`??` describe the content. After `$`/`$$`, they
-   describe whether the lock itself is ready.
-6. `$?`, `$??`, `$$?`, and `$$??` continue to protect their content.
-7. AI may challenge `$` as `$?`, and `$$` as `$$?`, only when content is
-   unchanged and a reason is supplied.
-8. AI cannot remove or weaken `$`/`$$`; strong lock confirmation and unlock are
-   human-only operations.
-9. Lock state and implementation evidence remain separate concepts.
-10. A target profile must report unsupported intent instead of silently
-    dropping it.
-
-## 3. Version Structure
-
-The series is deliberately ordered from language semantics to tooling. Later
-releases must not invent workflow behavior before earlier releases freeze its
-meaning.
-
-| Version | Theme | Primary Result |
-|---------|-------|----------------|
-| `0.3.0` | Semantic foundation | Freeze the commitment state machine and paragraph constraint semantics |
-| `0.3.1` | Lossless document model | Preserve suffix locations, paragraph boundaries, attachments, and source spans |
-| `0.3.2` | Transition and patch validation | Enforce actor permissions and content-preserving lock challenges |
-| `0.3.3` | Intent diagnostics | Report collaboration states, attachment risks, conflicts, and unresolved decisions |
-| `0.3.4` | IDE protocol | Expose semantic tokens, code actions, decision queues, and incremental document state |
-| `0.3.5` | Materialization core | Define commit-ready selection, provenance, partial materialization, and evidence records |
-| `0.3.6` | Native Mimi profile | Add first-party Mimi gap analysis, generation planning, validation, and evidence ingestion |
-| `0.3.7` | Generic target profiles | Stabilize a language-neutral profile API and capability reporting |
-| `0.3.8` | OSE workflow integration | Drive collaboration by slot states instead of a single document phase |
-| `0.3.9` | Compatibility and release candidate | Migration, corpus freeze, performance, security, and API stabilization |
-
-Patch releases may be inserted when a milestone needs stabilization. The
-semantic dependency order must remain intact.
-
-## 4. v0.3.0: Semantic Foundation
+## 5. M0: Core Semantic Reset
 
 ### Goal
 
-Publish the normative meaning of the nine suffix combinations and make it the
-single source of truth for parser, IDE, OSE, and AI agents.
+Freeze what MMS text means before expanding tooling.
 
 ### Deliverables
 
-- `docs/commitment-state-machine.md` as the normative collaboration model.
-- Correct definitions for `$?`, `$??`, `$$?`, and `$$??`.
-- Actor transition matrix for Human and AI; tooling must proxy one of those
-  actors with the corresponding authorization context.
-- Definition of content-preserving lock challenge:
-  - `$ -> $?`
-  - `$$ -> $$?`
-- Definition of keyword, identifier, and value suffix slots.
-- Definition of ordinary lock versus strong lock propagation.
-- Definition of commit-ready state: only `$` and `$$` without `?`.
-- Explicit separation of commitment from implementation evidence.
-- Specification version labels corrected to distinguish released and draft
-  behavior.
+#### Anonymous Document Context
 
-### Implementation
+- `parse(source)` treats every file as an anonymous Intent Context.
+- Root `desc`, `rule`, `requires`, and `ensures` are first-class Context Items.
+- Context Items remain in one cross-kind source order.
+- External callers do not need to synthesize `func`, `module`, or `flow` names.
+- Root `requires` / `ensures` cannot enter generic Action fallback.
 
-- Keep the serialized nine-value `Commitment` representation compatible.
-- Add semantic decomposition APIs without breaking current JSON:
+#### Description semantics
 
-```rust
-commitment.lock_intent()
-commitment.review_intent()
-commitment.review_target()
-commitment.protects_content()
-commitment.is_commit_ready()
-```
+- `desc` is a natural-language intent description.
+- Only `?` / `??` express review or delegation.
+- All direct descriptions in a descriptive scope remain descriptions.
+- `desc` inside `steps` remains a natural-language Step.
+- AST and JSON retain every description independently.
 
-- Correct `has_question_question()` so `$??` and `$$??` are represented by the
-  public semantic API instead of being treated as plain `??` only.
-- Add exhaustive table-driven tests for all nine states.
+#### Rule semantics
+
+- A contiguous rule prelude attaches to the following same-scope non-rule
+  semantic item.
+- Paragraph-separated, targetless, and scope-terminal rules become environment
+  rules.
+- Every rule gets one explicit attachment decision.
+- Valid documents have only Attached/Environment; recovery uncertainty is an
+  explicitly diagnosed partial-document status, not a third valid attachment.
+- Every same-scope non-rule semantic item is attachable; there is no hidden
+  AST-kind allowlist.
+- Comment-only lines preserve the chain; only a physical blank line ends it.
+
+#### Repeatable clauses
+
+- `requires` and `ensures` are ordered lists.
+- Each clause has independent condition, commitment, span, and attached rules.
+- Repeated clauses mean conjunction.
+- Parser and renderer tests prove that no clause is lost.
+
+#### Flow semantics
+
+- `flow Name:` and anonymous `flow:` are both valid.
+- `on Event >>> Target` is an optional event-labelled edge.
+- Existing `>>> Target` syntax remains valid.
+- Flow is open-world by default.
+- Source, event, target, guard, description, and attachment remain separate
+  semantic slots.
+
+#### Commitment foundation
+
+- Nine-state suffix table and lock-before-question composition.
+- Keyword, identifier, value, clause, event, and attachment slots.
+- `is_confirmed()` as the preferred semantic API.
+- `is_commit_ready()` retained only as a compatibility alias if required.
 
 ### Acceptance
 
-- Every suffix has one normative interpretation across specification, README,
-  CLI JSON, OSE prompts, and editor hover text.
-- All 9 x actor transition cases are tested.
-- No existing valid `0.2.1` source becomes syntactically invalid.
-- `cargo test`, release stress tests, clippy, and round-trip tests pass.
+- A root Context with multiple descriptions, rules, requires, and ensures
+  preserves their cross-kind order and round-trips without information loss.
+- Two requires and two ensures remain four clauses in AST and JSON.
+- A type containing three descriptions retains all three as descriptions.
+- A root `requires:` is never emitted as an Action Step.
+- Named, anonymous, labelled, and unlabelled Flows parse and render.
+- Missing Flow edges never trigger an implicit closed-world diagnostic.
+- All nine suffix states have normative table tests.
+- Existing 0.2.1 grammar corpus remains parseable.
 
-## 5. v0.3.1: Lossless Document Model
-
-> Implementation status: the first opt-in source layer is now under development.
-> `parse_lossless()` preserves exact source pieces, comments, whitespace,
-> LF/CRLF/CR, physical blank-line paragraph breaks, explicit suffix occurrence
-> spans, parser-proven suffix slots including zero-width insertion ranges,
-> source-derived rule group candidates, and revision-local source nodes with
-> movable spans that carry attached rule preludes. Nested Field, FlowEntry,
-> FlowArm, and Step nodes now receive revision-local IDs so rule targets and
-> comments can resolve beyond top-level Fragments. Parser-authoritative rule
-> occurrences expose unique IDs, exact spans, attachment decisions, target
-> anchors, scope anchors, and nested target IDs when available. Line comments
-> are classified as trailing, leading, or free with optional target node IDs.
-> Structured Fragment moves (`move_fragment` / `move_fragment_reparse`) carry
-> attached rule preludes, and formatter attachment fingerprints check that
-> semantic render does not reattach or drop rules.
+## 6. M1: Lossless Document Model
 
 ### Goal
 
-Represent the document semantics needed by collaboration tools without relying
-on newline-count heuristics or lossy rendering.
+Make paragraph, attachment, comments, and suffix position authoritative rather
+than inferred from a lossy semantic AST.
 
 ### Deliverables
 
-- Explicit `BlankLine` or `ParagraphBreak` representation in the token or
-  lossless syntax layer.
-- Stable rule attachment information.
-- Source spans for:
-  - keyword commitment;
-  - identifier commitment;
-  - string/value commitment;
-  - attached rule groups;
-  - paragraph boundaries.
-- Lossless syntax tree or source map alongside the semantic AST.
-- Formatter guarantee that rule attachment and suffix targets do not change.
-
-### Compatibility
-
-The existing semantic AST remains available. New lossless structures are added
-as an opt-in API for IDE and collaboration clients.
+- Lossless token stream or concrete syntax tree.
+- Explicit `BlankLine` / `ParagraphBreak` representation.
+- One ordered semantic body sequence per scope plus explicit rule-attachment
+  edges; typed item collections are query views.
+- Exact spans for:
+  - Context Items;
+  - every description and clause;
+  - rule text and rule attachment;
+  - keyword, identifier, value, event, target, guard, and suffix slots;
+  - nested Field, FlowEntry, FlowArm, and Step nodes.
+- Deterministic semantic lowering with recorded attachment decisions.
+- Structured moves that carry attached rule preludes.
+- Formatter attachment fingerprint.
+- Clear distinction between normalization render and lossless edit.
 
 ### Acceptance
 
-- Parse-render-parse preserves semantic AST and rule attachment.
-- Formatting cannot attach or detach a rule.
-- Moving a Fragment through the structured edit API carries its attached rule
-  prelude.
-- Comments and blank lines survive lossless round trips.
+- Parse-render-parse preserves semantic AST, clause order, and attachment.
+- Lossless no-op edit preserves source bytes.
+- Moving a Fragment with attached rules preserves its prelude.
+- Adding/removing a blank line changes only the intended attachment decision.
+- Comments cannot accidentally join or split rule chains.
+- Formatter cannot move a suffix between keyword/name/value/event slots.
 
-## 6. v0.3.2: Transition and Patch Validation
-
-> Implementation status: early foundation is landing. Protected node hashes,
-> `LockChallenge` construction, identical-challenge deduplication, and
-> before/after AI document patch validation (`validate_ai_document_patch`) are
-> available on top of the 0.3.0 transition validator. Human-only `UnlockToken`
-> issuance and parent/child lock propagation checks are also available. Richer
-> multi-slot patch provenance remains in progress.
+## 7. M2: Collaboration and Patch Validation
 
 ### Goal
 
-Make the suffix state machine enforceable rather than prompt-only convention.
+Turn suffix meanings into enforceable Human/AI edit permissions.
 
 ### Deliverables
 
-- Stable slot identity within a document revision.
-- Content hashes for protected slots and subtrees.
-- `TransitionRequest` and `TransitionDecision` APIs.
-- Actor-aware transition validation.
-- Structured edit validation for AI patches.
-- Strong-lock explicit unlock tokens or user-authorized operations.
-- `LockChallenge` record with reason, evidence, affected targets, and content
-  hash.
-
-### Hard Rules
-
-- `$ -> $?` and `$$ -> $$?` are allowed for AI only if protected content is
-  byte-for-byte or semantically unchanged according to the selected edit mode.
-- A suffix-only challenge cannot move, rename, reorder, or reattach the node.
-- AI cannot transition into final `$$` or out of any strong-lock state.
-- Human decisions remain auditable but do not require Git to function.
+- Human and AI actor transition validator.
+- Protected slot and subtree hashes.
+- Ordinary-lock and strong-lock inheritance.
+- Explicit open descendants inside strong-locked containers.
+- `LockChallenge` with reason, basis, affected slots, and content-preservation
+  proof.
+- Human-authorized strong-lock weakening/unlock operation.
+- Structured patch validator covering content, name, kind, order, attachment,
+  clause position, and Flow event identity.
+- Challenge replay suppression until relevant new information exists.
 
 ### Acceptance
 
-- Malicious or accidental lock-bypass patches are rejected.
-- Valid suffix-only challenges are accepted and explained.
-- Parent/child lock propagation has exhaustive tests.
-- Challenge deduplication prevents repeated identical objections without new
-  evidence.
+- `$ -> $?` and `$$ -> $$?` preserve protected source and attachment.
+- AI cannot perform `$$ -> $`, `$$ -> none`, or any transition into `$$`.
+- AI cannot bypass a lock by moving a rule, clause, event, or Fragment.
+- A strong-locked scope may still contain explicitly delegated descendants.
+- Adversarial raw-text and structured-edit test suites agree.
 
-## 7. v0.3.3: Intent Diagnostics
-
-> Implementation status: first wave is available via `diagnostics::analyze_document`
-> and `mimispec diagnose` / `--diagnostics`. It builds Decision/Delegation queues,
-> a commitment-state summary, syntax/attachment diagnostics, rule-commitment
-> conflict heuristics, Flow/Func intent-gap hints, and stable codes such as
-> `I-DECISION` / `W-INTENT-CONFLICT` / `H-INTENT-GAP`. Versioned JSON schema and
-> deeper semantic conflict analysis remain later work.
+## 8. M3: Parser and Diagnostic Contract
 
 ### Goal
 
-Shift diagnostics from parser-only errors toward useful specification guidance.
-
-### Diagnostic Classes
-
-1. Syntax: source cannot be parsed.
-2. Attachment: a `rule` is attached differently than likely intended.
-3. Collaboration: an edit violates a lock or actor transition rule.
-4. Decision: `?`, `$?`, or `$$?` is awaiting human review.
-5. Delegation: `??`, `$??`, or `$$??` is awaiting AI work.
-6. Intent conflict: rules, flows, steps, or UI behavior contradict each other.
-7. Intent gap: an important success, failure, permission, or state case is not
-   described.
-8. Target gap: a selected implementation profile cannot satisfy an intent.
+Expose the Core model through stable library and JSON interfaces without
+turning heuristic analysis into language semantics.
 
 ### Deliverables
 
-- Stable diagnostic codes and JSON schema.
-- Human-readable fixes and machine-readable code actions.
-- Commitment-state summaries per document and project.
-- Better fuzzy suggestions wired into real diagnostics.
+- Public Context Item queries for descriptions, environment rules, clauses,
+  and Fragments.
+- Public `parse_lossless(source)` contract whose classification and attachment
+  decisions agree with `parse(source)`.
+- `parse_fragment(source)` defined as one Context Unit (optional rule prelude
+  plus one item, or one terminal environment-rule chain) with no ignored tail.
+- Versioned AST/diagnostic JSON schema.
+- Diagnostic categories for:
+  - invalid suffix order;
+  - reserved Context Item misclassification;
+  - attachment ambiguity or recovery loss;
+  - repeated-clause conflicts;
+  - malformed event-labelled Flow edges;
+  - protected-content violations;
+  - partial AST status.
+- Source-map-safe recovery.
+- Semantic diff that distinguishes content, state, and attachment changes.
 
 ### Acceptance
 
-- Diagnostics preserve code, severity, span, help, suggestion, and related
-  Fragment IDs.
-- Syntax-valid but unresolved documents produce guidance, not false errors.
-- The five-minute workflow never requires advanced syntax to clear a warning.
+- CLI and library consumers receive the same AST shape and diagnostic codes.
+- No diagnostic claims that a natural-language rule has been formally proven.
+- Recovery never reports success while silently dropping a description or
+  clause.
+- JSON consumers can distinguish 0.2 and 0.3 shapes.
+- `parse_fragment` retains its prelude and rejects an unrelated trailing unit.
 
-## 8. v0.3.4: IDE Protocol
-
-> Implementation status: library-level protocol helpers are landing in
-> `ide::{semantic_tokens, hover_at, code_actions_for_node, ide_snapshot}` and
-> `session::DocumentSession` for versioned full-text document state. They reuse
-> the same transition validator and diagnostics queues as Core. A long-running
-> LSP server and editor wiring remain later work.
+## 9. M4: Language-Service Protocol
 
 ### Goal
 
-Provide the language services required by OSE, VS Code, and Monaco without
-embedding product-specific policy in the parser.
+Provide one target-neutral protocol for editors and AI clients to inspect and
+edit the same language state.
 
 ### Deliverables
 
-- LSP or equivalent long-running language service.
-- Incremental document updates based on the existing cache.
-- Semantic tokens for suffix states and rule attachment.
-- Hover explanations for the exact suffix slot.
-- Code actions:
-  - ask AI for content candidates;
-  - mark content as `?` or `??`;
-  - propose `$?` or `$$?`;
-  - accept lock as `$` or `$$`;
-  - challenge a lock without changing content;
-  - show rule scope.
-- APIs for Decision Queue and Delegation Queue.
+- Incremental Document Context state.
+- Semantic tokens for Context Item kind and commitment state.
+- Hover information for suffix target and effective protection.
+- Navigation between rule and attachment target.
+- Navigation among Flow source/event/target/guard slots.
+- Human/AI actor-aware code actions.
+- Decision, delegation, confirmed-intent, and lock-challenge views.
+- Workspace-level `advisory`/`strict` collaboration modes, default advisory.
+- SHA-256 observed/authoritative/pending revisions and single-use Human unlock
+  tokens.
+- LSP 3.17 over stdio with a frozen `mimispec.ls/0.3` custom wire contract.
 
 ### Acceptance
 
-- Editor behavior uses the same transition validator as the library.
-- No editor can bypass strong-lock policy through raw structured edits.
-- Rule scope and lock scope are visually inspectable.
+- Every edit request declares Human or AI authority.
+- No language-service action can bypass the 0.3.2 validator.
+- Multiple descriptions and clauses remain independently addressable.
+- Protocol behavior is target-language neutral.
+- A real stdio child-process transcript passes on Linux; Windows and macOS are
+  experimental build/test targets.
 
-## 9. v0.3.5: Materialization Core
-
-> Implementation status: core library types and planning APIs are landing in
-> `materialize::{select_commit_ready, plan_materialization, detect_drift,
-> validate_plan, EvidenceRecord}` plus `mimispec materialize`. Target adapters
-> and profile-specific generation remain later work.
+## 10. M5: Compatibility and Stabilization
 
 ### Goal
 
-Define how confirmed intent becomes target artifacts without coupling Core to a
-specific programming language.
+Freeze the 0.3 language and public API only after real intent corpora exercise
+the corrected semantics.
 
 ### Deliverables
 
-- `CommitSelection`: which locked slots are in the current materialization
-  scope.
-- Partial materialization rules.
-- Provenance categories:
-  - human locked;
-  - human strong-locked;
-  - target-derived;
-  - implementation choice;
-  - unresolved;
-  - generated test.
-- `EvidenceRecord` schema.
-- Drift detection between locked intent and generated artifacts.
-- Release scope separate from whole-document lock percentage.
+- 0.2.1-to-0.3 semantic migration report. ✅ `docs/migration-0.2-to-0.3.md`
+  covers syntax compatibility, corrected semantics, commitment migration,
+  parser/AST shape changes, renderer/lossless behavior, a tooling-and-tests
+  section, and a 13-item migration checklist.
+- AST/JSON compatibility adapters where practical. ✅ `File.fragments` remains
+  the Rust field name (legacy alias for the `items` JSON key); `success`/
+  `partial` booleans ride alongside the versioned `status` field in CLI
+  envelopes; `is_commit_ready()` remains as a compatibility alias for
+  `is_confirmed()`.
+- Corpus covering: ✅ Eight cross-domain acceptance corpora under
+  `docs/corpora/`, each gated by `corpus_acceptance_tests` in
+  `src/lib/mod.rs`:
+  - plain-language product intent (`plain-product-intent.mms`);
+  - state transitions and forbidden behavior (`state-transitions.mms`);
+  - failure and recovery (`failure-and-recovery.mms`);
+  - resource ownership and permissions (`resource-ownership.mms`);
+  - ordered communication (`ordered-communication.mms`);
+  - external boundaries (`external-boundaries.mms`);
+  - multilingual descriptions (`multilingual.mms`);
+  - cohesive real-world product usability (`real-world-family-ledger.mms`).
+- Parser/formatter fuzzing and property tests. ✅ Implemented in
+  `src/lib/mod.rs::property_tests` with a seed-deterministic LCG and seven
+  invariants: idempotent render, render determinism, AST JSON versioning,
+  lossless no-panic on arbitrary bytes, error-status consistency,
+  lossless/semantic parser equivalence, and tokenize-then-parse equivalence.
+  Gated in CI as the `Property & Fuzz Tests` job.
+- Large-file performance and memory baseline. ✅ Measured on release builds
+  with `examples/perf_baseline.rs`; deterministic slot-linearity guard added
+  as `stress_tests::stress_slot_count_scales_linearly_with_module_size`.
+
+  | Module size | Source bytes | parse | render | reparse | parse_lossless | slots |
+  |-------------|-------------:|------:|-------:|--------:|---------------:|------:|
+  | 500 funcs   | 74 KB       | 2.8 ms | 0.8 ms | 2.8 ms | 4.6 ms | 10,002 |
+  | 1,000 funcs | 149 KB      | 3.4 ms | 1.4 ms | 4.1 ms | 9.3 ms | 20,002 |
+  | 2,000 funcs | 299 KB      | 6.8 ms | 3.4 ms | 8.5 ms | 22.8 ms | 40,002 |
+
+  Each func yields ~20 commitment slots; slot count is linear in module size
+  within ±5%. Parsing is linear in source bytes. These numbers are the
+  published M5 regression budget — a future commit that regresses them
+  by more than 2× on the same hardware class is a release blocker.
+- Public API and diagnostic-code freeze. ✅ Documented in
+  [`api-stability-0.3.md`](api-stability-0.3.md). Tier 1 (parser entry
+  points, result types, AST shape, `AST_SCHEMA_VERSION`, and `ErrorCode`
+  assignments) is frozen for the remainder of 0.3.x. Tier 3 experimental
+  modules (materialize, profile, workflow, session, ide, diagnostics) are
+  explicitly excluded from the freeze.
+- Language-neutral conformance suite. ✅ `mimispec conformance check` validates
+  parse/AST goldens, lossless attachment/span facts, the commitment transition
+  matrix, and an LSP transcript under `mimispec.conformance/0.3`.
+- Independent usability gate. ⏳ The release workflow requires five independent
+  authors, 25 final documents across five domains, four successful five-minute
+  entries, exact lossless/semantic round-trip, and zero open P0/P1. The
+  machine-readable manifest is currently `in_progress`; this intentionally
+  blocks an RC.
 
 ### Acceptance
 
-- Unlocked intent never appears as confirmed target behavior.
-- Target-derived scaffolding is distinguishable from authored requirements.
-- Code changes can propose new MMS candidates but cannot auto-lock them.
+- No known silent intent-loss bug remains.
+- `cargo test`, clippy, fmt check, fuzz/property gates, and stress corpus pass.
+- Parser performance regression is within the published budget.
+- Migration documentation distinguishes syntax compatibility from corrected
+  semantic interpretation.
+- Five-minute entry still requires only `desc`, `rule`, and optionally `??`.
 
-## 10. v0.3.6: Native Mimi Profile
+## 11. Features Deferred Beyond 0.3.x
 
-> Implementation status: capability probing and gap reporting land in
-> `profile::{analyze_mimi_profile, analyze_generic_profile}` and
-> `mimispec profile`. Actual `.mimi` generation remains an external adapter.
+The following may consume the stable 0.3 parser later, but do not participate
+in the 0.3 language freeze:
 
-### Goal
+- target profiles and target capability matrices;
+- code generation or implementation synchronization;
+- materialization and release planning;
+- Evidence and provenance protocols;
+- OSE product workflow;
+- target-specific formal verification;
+- target-language-specific Flow, Fault, Actor, Session, or FFI syntax.
 
-Make Mimi the first-party, deepest target while keeping MimiSpec Core generic.
+No deferred feature may require reinterpreting `desc`, `rule`, Flow openness,
+or commitment suffixes.
 
-### Profile Responsibilities
+## 12. Required Test Families
 
-- Map modules, type hints, functions, conditions, steps, flows, and capabilities
-  into Mimi implementation candidates.
-- Use Mimi's Flow, Fault, recovery, capability, protocol, session, and contract
-  model to identify missing decisions.
-- Ask natural-language clarification questions rather than requiring users to
-  write Mimi-level mechanics.
-- Generate a materialization plan and `.mimi` source through a separate target
-  tool or adapter.
-- Ingest evidence from Mimi check, verify, run, build, and tests.
+| Family | Required property |
+|--------|-------------------|
+| Context | root desc/rule/requires/ensures classify correctly and retain cross-kind order |
+| Description | repeated descriptions retain order and state |
+| Clause | repeated clauses never overwrite and default to conjunction |
+| Rule | every item kind is attachable; only physical blank lines split chains; environment attachment is stable |
+| Flow | anonymous/named and labelled/unlabelled forms round-trip |
+| Commitment | nine states, actor matrix, inheritance, challenge |
+| Lossless | comments, blank lines, spans, no-op edit |
+| Recovery | partial AST explicitly marked; no silent loss |
+| Compatibility | 0.2.1 valid corpus still parses |
+| Adversarial | formatter/patch cannot move or bypass protected slots |
+| Multilingual | Unicode descriptions and rules preserve exact content. ✅ Covered by `src/lib/mod.rs::multilingual_tests` (CJK byte-exact round-trip, emoji/punctuation, NFC/NFD non-normalization, Unicode-scalar columns, seven-script corpus). |
 
-### Boundary
+## 13. Documentation Synchronization
 
-Mimi-specific mechanics remain profile output. They do not become mandatory
-MimiSpec surface syntax.
+Every normative language change must update together:
 
-The profile is an external bridge between two independent toolchains. It must
-not be implemented by routing through Mimi's `mms {}` super-comment block.
+- `docs/specification.md`;
+- `docs/0.3.x-design-zh.md`;
+- `docs/commitment-state-machine.md` when suffix footprint changes;
+- `docs/migration-0.2-to-0.3.md`;
+- parser/AST tests and versioned JSON schema;
+- README syntax summaries only after implementation is available;
+- CHANGELOG only when behavior lands or a formal design decision must be
+  recorded as draft.
 
-### Acceptance
-
-- Every generated Mimi construct records its source MMS slots or its
-  target-derived origin.
-- Unsupported or ambiguous intent is reported before generation.
-- Generated source passes the configured Mimi gates or returns structured
-  evidence explaining why it does not.
-
-## 11. v0.3.7: Generic Target Profile API
-
-> Implementation status: `TargetProfile` trait, built-in mimi/generic/rust/
-> typescript profiles, and `profile_conformance` are available. Deeper
-> language-specific adapters remain later work.
-
-### Goal
-
-Open materialization to other programming languages without reducing MimiSpec
-to a lowest-common-denominator model.
-
-### Deliverables
-
-- Stable target profile trait/protocol.
-- Capability declaration for structure, contracts, behavior, concurrency,
-  resource safety, formal verification, runtime evidence, and round-trip sync.
-- Conformance tests.
-- At least one non-Mimi reference profile, preferably TypeScript or Rust.
-
-### Acceptance
-
-- A profile must explicitly report partial support.
-- The same locked rule can yield different target obligations while preserving
-  its original natural-language meaning.
-
-## 12. v0.3.8: OSE Workflow Integration
-
-> Implementation status: `workflow::{build_workflow_board, semantic_diff,
-> filter_active_challenges}` and `mimispec workflow` provide the first
-> state-driven board over decision/delegation/materialization queues. Full OSE
-> product integration remains external.
-
-### Goal
-
-Replace the single linear Draft/Review/Lock model with a state-driven queue over
-all slots while retaining simple product-level milestones.
-
-### Deliverables
-
-- Decision Queue for `?`, `$?`, and `$$?`.
-- Delegation Queue for `??`, `$??`, and `$$??`.
-- Lock Challenge review.
-- Semantic diff that separates content changes from state transitions.
-- Materialization and evidence view.
-- Release-scope readiness instead of mandatory whole-document closure.
-
-### Acceptance
-
-- OSE schedules work from slot states.
-- An AI lock challenge appears as a review task, not an unauthorized content
-  edit.
-- Human rejection of a challenge is remembered until new evidence appears.
-
-## 13. v0.3.9: Stabilization
-
-> Implementation status: draft migration guide
-> (`docs/migration-0.2-to-0.3.md`) and an initial collaboration JSON schema
-> (`docs/schemas/collaboration-report.schema.json`) are available. Golden corpus
-> packaging, performance baselines, and a formal security review remain open.
-
-### Goal
-
-Freeze the 0.3 semantic and API surface before considering 0.4.
-
-### Deliverables
-
-- `0.2.1 -> 0.3.x` migration guide.
-- Golden corpus covering beginner, advanced, malformed, multilingual, and
-  large-project inputs.
-- JSON schema versioning.
-- Performance and memory baselines.
-- Security review of resolver, patch validation, lock bypass, and profile
-  execution boundaries.
-- API deprecation report.
-- Documentation consistency audit.
-
-### Acceptance
-
-- Existing 0.2.1 corpus parses with documented compatibility behavior.
-- No known content-changing AI path bypasses `$` or `$$`.
-- All public examples are verified by CI.
-- Specification, tutorial, README, CLI, editor, and OSE use the same suffix
-  semantics.
-
-## 14. Features Explicitly Deferred Beyond 0.3.x
-
-- Adding target-specific MIMI Flow/Fault/Session syntax to MimiSpec Core.
-- Treating natural-language rules as automatically proven formulas.
-- Requiring a fully locked document before any local materialization.
-- Automatic locking of AI-generated content.
-- Making production code a competing source of truth.
-- Freezing a `1.0` grammar before the collaboration protocol is validated in
-  real OSE workflows.
-
-## 15. Testing Strategy
-
-0.3.x adds four invariant layers to the existing parser tests.
-
-| Layer | Invariant |
-|-------|-----------|
-| S1 Syntax | Valid 0.2.1 source remains parseable |
-| S2 Document | Round trips preserve suffix targets and rule attachment |
-| S3 Collaboration | Actor transitions and protected-content hashes are enforced |
-| S4 Materialization | Only selected locked intent is emitted as confirmed behavior |
-
-Required test families:
-
-- exhaustive nine-state suffix tables;
-- all Human/AI transition pairs;
-- blank-line and comment attachment corpus;
-- formatter semantic-equivalence property tests;
-- parent/child lock propagation;
-- adversarial patch and lock-bypass tests;
-- profile capability and unsupported-intent tests;
-- beginner five-minute examples;
-- multilingual natural-language content;
-- OSE end-to-end state evolution.
-
-## 16. Documentation Plan
-
-The following documents are normative or required before the corresponding
-release:
-
-| Document | Purpose | Target |
-|----------|---------|--------|
-| `commitment-state-machine.md` | Normative suffix and actor-transition semantics | `0.3.0` |
-| `specification.md` | Surface grammar and current/draft status | every release |
-| `migration-0.2-to-0.3.md` | Compatibility and API migration | `0.3.9` |
-| `target-profile-api.md` | Generic target integration contract | `0.3.7` |
-| `mimi-profile.md` | First-party Mimi mapping and evidence model | `0.3.6` |
-| `ose-integration.md` | Decision/delegation/materialization workflow | `0.3.8` |
-
-Every implemented feature must update the specification, README, changelog,
-tests, and editor-facing JSON schema in the same release.
+Planning documents, local evaluation material, tutorials, editor UI, and
+external target documents cannot be the sole normative source of Core meaning.

@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mimispec.dev/schemas/usability-trial-v0.3.schema.json",
+  "title": "MimiSpec 0.3 independent usability trial",
+  "type": "object",
+  "required": ["schema_version", "status", "authors", "documents", "issues"],
+  "properties": {
+    "schema_version": { "const": "mimispec.usability/0.3" },
+    "status": { "enum": ["in_progress", "complete"] },
+    "authors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "independent", "first_valid_minutes"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "independent": { "type": "boolean" },
+          "first_valid_minutes": { "type": ["integer", "null"], "minimum": 0 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "documents": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "author", "domain", "source"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "author": { "type": "string", "minLength": 1 },
+          "domain": { "type": "string", "minLength": 1 },
+          "source": { "type": "string", "minLength": 1 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "severity", "status", "regression_fixture"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "severity": { "enum": ["p0", "p1", "p2", "p3"] },
+          "status": { "enum": ["open", "closed", "accepted"] },
+          "regression_fixture": { "type": ["string", "null"] }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

@@ -14,29 +14,29 @@ export type BlockContext = 'module' | 'func' | 'type' | 'rule' | 'flow' | 'ui' |
 function inferBlockContext(line: string): BlockContext {
   if (line.match(/^\s*$/)) return 'unknown';
   if (line.match(/^@import\b/)) return 'root';
-  if (line.match(/^module\s+/)) return 'module';
-  if (line.match(/^func\s+/)) return 'func';
-  if (line.match(/^type\s+/)) return 'type';
-  if (line.match(/^rule\s+/)) return 'rule';
-  if (line.match(/^flow\s+/)) return 'flow';
-  if (line.match(/^ui\s+/)) return 'ui';
-  if (line.match(/^steps:/)) return 'steps';
-  if (line.match(/^parasteps/)) return 'steps';
-  if (line.match(/^(if|else|for|while|error)\b/)) return 'steps';
-  if (line.match(/^(requires|ensures|desc|on|with|done|exit)\b/)) return 'steps';
+  if (line.match(/^module[?$]*\s+/)) return 'module';
+  if (line.match(/^func[?$]*\s+/)) return 'func';
+  if (line.match(/^type[?$]*\s+/)) return 'type';
+  if (line.match(/^rule[?$]*\s+/)) return 'rule';
+  if (line.match(/^flow[?$]*(?:\s+|:)/)) return 'flow';
+  if (line.match(/^ui[?$]*\s+/)) return 'ui';
+  if (line.match(/^steps[?$]*:/)) return 'steps';
+  if (line.match(/^parasteps[?$]*/)) return 'steps';
+  if (line.match(/^(if|else|for|while|error)[?$]*\b/)) return 'steps';
+  if (line.match(/^(requires|ensures|desc|on|with|done|exit)[?$]*\b/)) return 'steps';
   return 'unknown';
 }
 
 function filterKeywordsByContext(keyword: string, context: BlockContext): boolean {
   const keywordsByContext: Record<BlockContext, string[]> = {
     root: ['@import'],
-    module: ['type', 'rule', 'flow', 'func', 'ui', 'module', 'desc', 'math', 'and', 'or', 'not', 'in', 'true', 'false'],
+    module: ['type', 'rule', 'flow', 'func', 'ui', 'module', 'steps', 'requires', 'ensures', 'desc', 'math', 'and', 'or', 'not', 'in', 'true', 'false'],
     func: ['requires', 'ensures', 'steps', 'parasteps', 'desc', 'math', 'if', 'else', 'for', 'while', 'error', 'on', 'done', 'exit', 'and', 'or', 'not', 'in', 'true', 'false'],
     type: ['desc', 'math', 'rule', 'and', 'or', 'not', 'in', 'true', 'false'],
     rule: ['desc', 'requires', 'and', 'or', 'not', 'in', 'true', 'false'],
-    flow: ['desc', 'requires', 'and', 'or', 'not', 'in', 'true', 'false'],
+    flow: ['rule', 'desc', 'on', 'requires', 'ensures', 'and', 'or', 'not', 'in', 'true', 'false'],
     ui: ['stack', 'parallel', 'binds', 'desc', 'on', 'requires', 'with', 'and', 'or', 'not', 'in', 'true', 'false'],
-    steps: ['desc', 'if', 'else', 'for', 'while', 'parasteps', 'error', 'on', 'done', 'exit', 'and', 'or', 'not', 'in', 'true', 'false'],
+    steps: ['rule', 'desc', 'if', 'else', 'for', 'while', 'parasteps', 'error', 'on', 'done', 'exit', 'and', 'or', 'not', 'in', 'true', 'false'],
     unknown: ['@import', 'module', 'type', 'rule', 'flow', 'func', 'ui', 'steps', 'parasteps', 'requires', 'ensures', 'math', 'desc', 'if', 'else', 'for', 'while', 'on', 'with', 'error', 'done', 'exit', 'and', 'or', 'not', 'in', 'true', 'false', 'parallel', 'stack', 'binds'],
   };
   return (keywordsByContext[context] || keywordsByContext.unknown).includes(keyword);
@@ -82,8 +82,14 @@ const SNIPPETS: Record<string, { label: string; detail: string; insertText: stri
   flow: {
     label: 'flow',
     detail: '状态机',
-    insertText: 'flow ${1:Lifecycle}:\n    ${2:A} >>> ${3:B}: desc "${4:转移说明}"',
-    documentation: '状态机：描述合法状态转移路径',
+    insertText: 'flow ${1:Lifecycle}:\n    ${2:A}:\n        on ${3:Event} >>> ${4:B}: desc "${5:转移说明}"',
+    documentation: '开放世界 Flow：用可选事件标签描述当前已知状态转移',
+  },
+  flowAnonymous: {
+    label: 'flow (anonymous)',
+    detail: '匿名状态意图',
+    insertText: 'flow:\n    ${1:A}:\n        on ${2:Event} >>> ${3:B}: desc "${4:转移说明}"',
+    documentation: '匿名 Context Flow：无需伪造或重复外部名称',
   },
   ui: {
     label: 'ui',
@@ -130,8 +136,8 @@ const SNIPPETS: Record<string, { label: string; detail: string; insertText: stri
   flowState: {
     label: 'flow state block',
     detail: '多出口状态',
-    insertText: '${1:State}:\n    >>> ${2:NextState1}: desc "${3:分支1}"\n    >>> ${4:NextState2}: desc "${5:分支2}"',
-    documentation: '多出口状态块：缩进成块的多条转移',
+    insertText: '${1:State}:\n    on ${2:Event1} >>> ${3:NextState1}: desc "${4:分支1}"\n    on ${5:Event2} >>> ${6:NextState2}: desc "${7:分支2}"',
+    documentation: '多出口状态块：事件与目标保持为独立意图槽位',
   },
   module: {
     label: 'module',
@@ -143,19 +149,19 @@ const SNIPPETS: Record<string, { label: string; detail: string; insertText: stri
     label: 'requires',
     detail: '前置条件',
     insertText: 'requires: ${1:condition}',
-    documentation: '前置条件：函数调用前必须满足的约束',
+    documentation: '可重复前置条款；同类多条按逻辑合取保留',
   },
   ensures: {
     label: 'ensures',
     detail: '后置条件',
     insertText: 'ensures: ${1:condition}',
-    documentation: '后置条件：函数结束后保证成立的约束',
+    documentation: '可重复后置条款；同类多条按逻辑合取保留',
   },
   desc: {
     label: 'desc',
     detail: '描述',
     insertText: 'desc "${1:描述}"',
-    documentation: '自然语言描述，是给 AI 的意图提示',
+    documentation: '自然语言一等意图；无后缀不表示委托给 AI',
   },
   math: {
     label: 'math',
@@ -203,7 +209,7 @@ export function createMimiSpecCompletionProvider(monacoInstance: typeof monaco):
         if (context === 'steps' && !['if', 'for', 'while', 'on', 'steps', 'parasteps', 'desc'].includes(key)) continue;
         if (context === 'func' && !['func', 'funcSimple', 'requires', 'ensures', 'math', 'steps', 'desc'].includes(key)) continue;
         if (context === 'type' && !['type', 'typeRecord', 'rule', 'math'].includes(key)) continue;
-        if (context === 'flow' && !['flow', 'flowState', 'desc', 'requires'].includes(key)) continue;
+        if (context === 'flow' && !['flow', 'flowAnonymous', 'flowState', 'rule', 'desc', 'requires', 'ensures'].includes(key)) continue;
         if (context === 'ui' && !['ui', 'stack', 'parallel', 'desc', 'on', 'requires'].includes(key)) continue;
         if (context === 'module' && !['module', 'type', 'typeRecord', 'rule', 'flow', 'func', 'ui', 'math'].includes(key)) continue;
 
@@ -341,7 +347,7 @@ function scanUserDefined(content: string): { types: string[]; functions: string[
       continue;
     }
 
-    const flowMatch = trimmed.match(/^flow\s+(\w+)\s*:/);
+    const flowMatch = trimmed.match(/^flow[?$]*\s+(\w+)[?$]*\s*:/);
     if (flowMatch) {
       flowNames.push(flowMatch[1]);
       continue;
@@ -353,7 +359,7 @@ function scanUserDefined(content: string): { types: string[]; functions: string[
       continue;
     }
 
-    const flowStateMatch = trimmed.match(/^(\w+)\s+>>>\s+(\w+)/);
+    const flowStateMatch = trimmed.match(/^(\w+)[?$]*\s+>>>[?$]*\s+(\w+)[?$]*/);
     if (flowStateMatch) {
       if (!flowStates.includes(flowStateMatch[1])) {
         flowStates.push(flowStateMatch[1]);

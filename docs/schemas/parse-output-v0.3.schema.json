@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mimispec.dev/schemas/parse-output-v0.3.schema.json",
+  "title": "MimiSpec 0.3 parse output",
+  "type": "object",
+  "required": ["schema_version", "results"],
+  "properties": {
+    "schema_version": {
+      "const": "mimispec.parse/0.3"
+    },
+    "results": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/result"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "result": {
+      "type": "object",
+      "required": ["path", "success", "partial", "status", "errors"],
+      "properties": {
+        "path": { "type": "string" },
+        "success": { "type": "boolean" },
+        "partial": { "type": "boolean" },
+        "status": {
+          "enum": ["complete", "partial"]
+        },
+        "ast": {
+          "$ref": "#/$defs/ast"
+        },
+        "render": { "type": "string" },
+        "latex": { "type": "string" },
+        "errors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/error"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": { "partial": { "const": false } },
+            "required": ["partial"]
+          },
+          "then": {
+            "properties": {
+              "success": { "const": true },
+              "status": { "const": "complete" },
+              "errors": { "maxItems": 0 }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "partial": { "const": true } },
+            "required": ["partial"]
+          },
+          "then": {
+            "properties": {
+              "success": { "const": false },
+              "status": { "const": "partial" },
+              "errors": { "minItems": 1 }
+            }
+          }
+        }
+      ]
+    },
+    "ast": {
+      "type": "object",
+      "required": ["schema_version", "items"],
+      "properties": {
+        "schema_version": {
+          "const": "mimispec.ast/0.3"
+        },
+        "imports": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["kind"]
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "error": {
+      "type": "object",
+      "required": ["code", "line", "col", "message"],
+      "properties": {
+        "code": { "type": "string" },
+        "line": { "type": "integer", "minimum": 0 },
+        "col": { "type": "integer", "minimum": 0 },
+        "message": { "type": "string" },
+        "help": { "type": "string" },
+        "suggestion": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

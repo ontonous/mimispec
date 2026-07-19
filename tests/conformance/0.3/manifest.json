@@ -1,0 +1,22 @@
+{
+  "schema_version": "mimispec.conformance/0.3",
+  "parse_cases": [
+    {
+      "name": "ordered-context-and-attachment",
+      "source": "context.mms",
+      "expected": "context.expected.json"
+    },
+    {
+      "name": "event-labelled-flow",
+      "source": "flow.mms",
+      "expected": "flow.expected.json"
+    },
+    {
+      "name": "partial-recovery",
+      "source": "invalid.mms",
+      "expected": "invalid.expected.json"
+    }
+  ],
+  "transition_matrix": "transition-matrix.json",
+  "lsp_transcript": "lsp-transcript.json"
+}

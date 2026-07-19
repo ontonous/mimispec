@@ -6,8 +6,12 @@
 
 - **Syntax highlighting** for `.mms` files (keywords, strings, comments, operators, commitment suffixes)
 - **File icon**: `.mms` files show a MimiSpec icon in the Explorer
-- **Diagnostics**: parse errors from the official `mimispec` CLI shown in the Problems panel
-- **Validation on save / open** — real-time feedback as you edit
+- **Long-lived 0.3 LSP**: diagnostics, semantic tokens, commitment hover,
+  rule/Flow navigation, and actor-aware code actions
+- **Advisory/strict collaboration mode** (`advisory` by default)
+- **0.2.1 fallback**: file validation remains available when the binary has no LSP
+- **Version-aware parser protocol**: understands `mimispec.parse/0.3` and still
+  accepts the unversioned released 0.2.1 envelope
 
 ## Requirements / 前置条件
 
@@ -37,6 +41,7 @@ cargo build --release
 | `mimispec.binaryPath` | `null` | Absolute path to `mimispec` CLI |
 | `mimispec.validateOnSave` | `true` | Validate `.mms` on save |
 | `mimispec.validateOnOpen` | `true` | Validate `.mms` on open |
+| `mimispec.collaborationMode` | `advisory` | `advisory` accepts and reports undeclared edits; `strict` preserves the authoritative revision |
 
 ## Development / 开发
 

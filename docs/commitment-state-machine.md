@@ -1,6 +1,7 @@
 # MimiSpec Commitment State Machine
 
-> Status: normative design target with the semantic API and actor validator under development for MimiSpec `0.3.0`
+> Status: normative 0.3 design; semantic-slot identities, footprints and the
+> actor/patch validator are implemented on the unreleased main development line
 >
 > Current released implementation: `0.2.1`
 
@@ -83,6 +84,60 @@ This contains three independent states:
 
 Keyword, identifier, and value suffixes must retain separate source spans and
 must not be moved between slots by formatting.
+
+### 4.1 Semantic footprint and inheritance
+
+A suffix anchor and its semantic footprint are related but not identical. The
+parser/lossless layer must describe which semantic fields a commitment governs;
+consumers must not infer the footprint by scanning a header string.
+
+| Anchor | Default semantic footprint |
+|--------|----------------------------|
+| keyword | entity existence/kind; unsuffixed fields in the same atomic declaration or header; for a container, its existing child-list topology |
+| identifier | that name/reference and its semantic identity |
+| value | that literal or natural-language value |
+| clause | one `requires` / `ensures` condition and its clause kind; repeated clauses never share one slot |
+| event | one Flow edge's optional event identity, separate from target and guard |
+| attachment | the rule-to-target or comment-to-target relation, not the rule text itself |
+
+The default is refined by these precedence rules:
+
+1. An explicit suffix on a more specific identifier, value, child, or
+   attachment slot overrides an inherited state for that footprint.
+2. Ordinary `$` on an atomic declaration covers its unsuffixed declaration
+   fields. On a container it covers the header and child-list topology, but it
+   does not recursively confirm unsuffixed descendant content.
+3. Strong `$$` covers the existing subtree and effectively confirms/protects
+   unsuffixed descendants.
+4. Explicit `?`, `??`, `$?`, `$??`, `$$?`, or `$$??` on a descendant remains
+   unconfirmed even inside a strong-locked ancestor.
+5. An environment rule outside a locked subtree does not inherit the target's
+   commitment merely because the rule is applicable to it.
+
+For example:
+
+```mimispec
+rule$ "支付必须幂等"       // atomic rule text inherits the ordinary lock
+
+func$ Pay:
+    desc "支付步骤仍可演进" // ordinary container lock does not confirm this body content
+
+module$$ Payment:
+    desc "现有边界已强锁"   // unsuffixed descendant is effectively strong-confirmed
+    desc?? "未来渠道扩展"   // explicit delegation remains open
+```
+
+An inherited/effective commitment is a semantic judgement with an explicit
+ancestor or atomic-declaration basis. It is not serialized as if the author had
+typed another suffix. `Commitment::is_commit_ready()` may remain as a
+compatibility API name, but its normative meaning is only “directly confirmed”.
+
+The unreleased main implementation exposes each parser-proven anchor as a
+revision-local `CommitmentSlotId` with its `owner`, exact anchor/suffix spans and
+`CommitmentFootprintKind`. `collect_semantic_slot_snapshots()` is the
+authoritative collaboration view. The older node summary API is compatibility
+only: consumers must not use a node-wide “strongest suffix” to authorize an
+edit when `func?? Pay$` contains two independent states.
 
 ## 5. Current Meaning Versus Collaboration State
 
@@ -194,8 +249,8 @@ LockChallenge {
     challenged_state
     content_hash
     reason
-    evidence
-    affected_targets
+    basis
+    affected_slots
     suggested_actions
 }
 ```
@@ -204,7 +259,8 @@ The transition is valid only when the protected content hash and protected
 structure hash are unchanged.
 
 An identical challenge rejected by a human must not be repeated until new
-evidence changes the challenge fingerprint.
+information changes the challenge fingerprint. `basis` is explanatory data for
+human review, not a Core Evidence object.
 
 ## 9. Ordinary and Strong Lock
 
@@ -240,6 +296,13 @@ parent or siblings. This preserves safe extensibility inside frozen structure.
 
 Rule attachment and commitment are independent dimensions, but an attached
 rule prelude belongs to the target entity's protected structural boundary.
+An attachment keeps its own identity and hash even when its protection or
+confirmation basis is inherited from a locked atomic rule or target boundary.
+
+Attachment never moves the Rule out of its scope's ordered item sequence. The
+target's `attached_rules()` view is derived from an explicit relation; it is
+not a second authoritative copy of the Rule. This prevents a suffix-only edit
+or formatter from changing narrative order while preserving only tree shape.
 
 ```mimispec
 rule$$? "支付必须幂等"
@@ -250,19 +313,31 @@ The rule is attached to `Pay` according to paragraph semantics. Its content is
 protected, and the strong-lock decision is under review. The attachment remains
 active unless a human-authorized structural edit changes the paragraph.
 
+A paragraph-separated, targetless, or scope-terminal rule has an Environment
+attachment to its current scope. That attachment is equally explicit and must
+not be rewritten as dangling or silently rebound to a later entity.
+
+For malformed source, `UnresolvedByRecovery` may be recorded only together
+with a parser diagnostic and partial-document status. It is not a valid third
+attachment state and does not receive commitment semantics as if lowering had
+succeeded.
+
+Only a physical blank line creates the ParagraphBreak used here. A comment-only
+line is trivia and does not by itself change the attachment relation.
+
 Formatters and structured editors must not change rule attachment as a side
 effect of suffix transitions.
 
-## 11. Commit Readiness
+## 11. Confirmed States
 
-Only final lock states are commit-ready:
+Only final lock states mean that the current intent decision is confirmed:
 
 ```text
 Locked       ($)
 StrongLocked ($$)
 ```
 
-Review and delegated lock states are not commit-ready:
+Review and delegated lock states are not confirmed:
 
 ```text
 $?
@@ -271,30 +346,28 @@ $$?
 $$??
 ```
 
-Commit readiness states that human intent is confirmed. It does not claim that
-an implementation exists, passes tests, or has been formally verified.
+Confirmed means only that the human intent decision is closed at the stated lock
+strength. It does not claim that code exists, tests pass, a theorem is proven,
+or a product is ready. Those are external facts and are outside this state
+machine.
 
-## 12. Commitment and Evidence
+`$?`, `$??`, `$$?`, and `$$??` protect content but remain unconfirmed because
+the lock decision is still under review. A confirmed parent cannot hide an
+explicitly unconfirmed child slot.
 
-Commitment answers:
+The existing API name `is_commit_ready()` may be retained during migration, but
+documentation and new APIs should prefer `is_confirmed()`.
+
+## 12. Commitment and External Facts
+
+Commitment answers only:
 
 > Has the human confirmed this intent and its lock state?
 
-Evidence answers:
-
-> Does a particular target artifact satisfy this intent?
-
-Evidence must be stored separately. Examples include:
-
-- generated;
-- type-checked;
-- tested;
-- formally verified;
-- deployed;
-- drifted.
-
-A `$` Fragment can be unimplemented. A `$$` Fragment can have failed evidence.
-Neither condition changes the authored commitment suffix automatically.
+Parser results, implementation state, tests, runtime observations and formal
+verification are external facts. They may motivate a lock challenge, but they
+are not suffix states and cannot mutate commitment automatically. MimiSpec Core
+does not define an Evidence, materialization or release protocol in 0.3.
 
 ## 13. Document-Level Evolution
 
@@ -314,7 +387,7 @@ Tools should derive work queues from this distribution:
 
 - Decision Queue: `?`, `$?`, `$$?`;
 - Delegation Queue: `??`, `$??`, `$$??`;
-- Materialization Queue: selected `$`, `$$`;
+- Confirmed Intent view: `$`, `$$`;
 - Challenge Queue: AI-originated `$ -> $?` and `$$ -> $$?`.
 
 The document evolves through local transitions. A product-level Draft, Review,
@@ -347,6 +420,11 @@ This prevents consumers from interpreting `$?` as locked uncertain content.
 3. AI lock challenges preserve content and structure.
 4. AI cannot finalize or remove a strong lock.
 5. Question states do not suspend current document meaning.
-6. Commitment and evidence remain separate.
+6. Commitment remains separate from every external implementation or
+   verification fact.
 7. Formatter and round-trip operations preserve suffix slot and rule attachment.
-8. Target profiles consume commitment state but cannot redefine it.
+8. Every repeated description and clause owns an independent suffix slot.
+9. A Flow event slot is distinct from source state, target state and guard.
+10. No external consumer can redefine, infer or automatically mutate a suffix.
+11. Attachment is a relation over one ordered item sequence, never duplicated
+    ownership of Rule content.

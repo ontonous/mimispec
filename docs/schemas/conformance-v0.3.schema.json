@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mimispec.dev/schemas/conformance-v0.3.schema.json",
+  "title": "MimiSpec 0.3 conformance manifest",
+  "type": "object",
+  "required": ["schema_version", "parse_cases", "transition_matrix", "lsp_transcript"],
+  "properties": {
+    "schema_version": { "const": "mimispec.conformance/0.3" },
+    "parse_cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["name", "source", "expected"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "source": { "type": "string", "minLength": 1 },
+          "expected": { "type": "string", "minLength": 1 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "transition_matrix": { "type": "string", "minLength": 1 },
+    "lsp_transcript": { "type": "string", "minLength": 1 }
+  },
+  "additionalProperties": false
+}

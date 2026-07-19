@@ -1,0 +1,46 @@
+{
+  "schema_version": "mimispec.conformance/0.3",
+  "messages": [
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "initialize",
+      "params": { "initializationOptions": { "collaborationMode": "advisory" } }
+    },
+    { "jsonrpc": "2.0", "method": "initialized", "params": {} },
+    {
+      "jsonrpc": "2.0",
+      "method": "textDocument/didOpen",
+      "params": {
+        "textDocument": {
+          "uri": "file:///conformance.mms",
+          "languageId": "mimispec",
+          "version": 1,
+          "text": "desc?? \"家庭账本\"\n"
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 2,
+      "method": "mimispec/documentSnapshot",
+      "params": { "textDocument": { "uri": "file:///conformance.mms" } }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 3,
+      "method": "textDocument/semanticTokens/full",
+      "params": { "textDocument": { "uri": "file:///conformance.mms" } }
+    },
+    { "jsonrpc": "2.0", "id": 4, "method": "shutdown", "params": null },
+    { "jsonrpc": "2.0", "method": "exit", "params": null }
+  ],
+  "expectations": [
+    { "id": 1, "pointer": "/result/capabilities/positionEncoding", "equals": "utf-16" },
+    { "id": 1, "pointer": "/result/mimispec/schemaVersion", "equals": "mimispec.ls/0.3" },
+    { "id": 2, "pointer": "/result/schema_version", "equals": "mimispec.ls/0.3" },
+    { "id": 2, "pointer": "/result/delegation_queue/0/state", "equals": "??" },
+    { "id": 3, "pointer": "/result/data/8", "equals": 14 },
+    { "method": "textDocument/publishDiagnostics", "pointer": "/params/uri", "equals": "file:///conformance.mms" }
+  ]
+}
