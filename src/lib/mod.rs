@@ -13,6 +13,7 @@ pub mod lsp;
 pub mod materialize;
 pub mod parser;
 pub mod profile;
+pub mod provenance;
 pub mod query;
 pub mod render;
 mod render_util;
@@ -66,7 +67,11 @@ pub type ParseFileResult = (
 /// ```
 pub fn parse(source: &str) -> ParseResult {
     match Lexer::new(source).tokenize() {
-        Ok(tokens) => Parser::new(tokens).parse_file(),
+        Ok(tokens) => {
+            let mut result = Parser::new(tokens).parse_file();
+            error::enrich_action_syntax_errors(source, &mut result.errors);
+            result
+        }
         Err(e) => ParseResult::new(
             ast::File {
                 imports: vec![],
@@ -89,7 +94,8 @@ pub fn parse_lossless(source: &str) -> lossless::LosslessParseResult {
     match Lexer::new(&source).tokenize() {
         Ok(tokens) => {
             let mut parser = Parser::new_recording(tokens.clone());
-            let result = parser.parse_file();
+            let mut result = parser.parse_file();
+            error::enrich_action_syntax_errors(&source, &mut result.errors);
             let recorded = parser.take_recorded_commitments();
             let recorded_nodes = parser.take_recorded_nodes();
             let recorded_rules = parser.take_recorded_rules();
@@ -140,6 +146,7 @@ pub fn parse_fragment(source: &str) -> ParseResult {
         Ok(tokens) => {
             let mut parser = Parser::new_recording(tokens.clone());
             let mut result = parser.parse_file();
+            error::enrich_action_syntax_errors(source, &mut result.errors);
             let root_items = parser.take_root_item_tokens();
             let recorded_rules = parser.take_recorded_rules();
             let mut unit_starts = root_items;
@@ -2518,7 +2525,7 @@ math:
 // boundaries; multilingual descriptions; and one cohesive real-world product
 // document."
 //
-// The eight corpus files live under `docs/corpora/` and are the canonical
+// The ten corpus files live under `docs/corpora/` and are the canonical
 // cross-domain intent fixtures. This test embeds them with `include_str!`
 // so a syntax change that breaks any corpus fails CI immediately, with the
 // file name in the panic message. Each corpus must:
@@ -2544,6 +2551,9 @@ mod corpus_acceptance_tests {
     const MULTILINGUAL: &str = include_str!("../../docs/corpora/multilingual.mms");
     const REAL_WORLD_FAMILY_LEDGER: &str =
         include_str!("../../docs/corpora/real-world-family-ledger.mms");
+    const MIMI_KV_REAL_PROJECT: &str = include_str!("../../docs/corpora/mimi-kv-real-project.mms");
+    const MIMICHAT_REAL_PROJECT: &str =
+        include_str!("../../docs/corpora/mimichat-real-project.mms");
 
     fn assert_corpus_round_trips(name: &'static str, src: &'static str) {
         let first = parse(src);
@@ -2672,6 +2682,87 @@ mod corpus_acceptance_tests {
                 DiagnosticClass::Syntax | DiagnosticClass::Attachment
             )
         }));
+    }
+
+    fn assert_real_project_transcription(
+        name: &'static str,
+        src: &'static str,
+        expected_types: usize,
+        expected_flows: usize,
+        expected_funcs: usize,
+        expected_modules: usize,
+    ) {
+        use crate::diagnostics::{analyze_document, DiagnosticClass};
+
+        assert_corpus_round_trips(name, src);
+        let lossless = parse_lossless(src);
+        assert_eq!(lossless.document.render_lossless(), src);
+        assert_eq!(lossless.status, error::ParseStatus::Complete);
+
+        let all_items = crate::query::collect_fragments(&lossless.document.semantic().fragments);
+        for (label, actual, expected) in [
+            (
+                "types",
+                all_items
+                    .iter()
+                    .filter(|item| matches!(item, Fragment::TypeDef { .. }))
+                    .count(),
+                expected_types,
+            ),
+            (
+                "flows",
+                all_items
+                    .iter()
+                    .filter(|item| matches!(item, Fragment::Flow { .. }))
+                    .count(),
+                expected_flows,
+            ),
+            (
+                "functions",
+                all_items
+                    .iter()
+                    .filter(|item| matches!(item, Fragment::Func { .. }))
+                    .count(),
+                expected_funcs,
+            ),
+            (
+                "modules",
+                all_items
+                    .iter()
+                    .filter(|item| matches!(item, Fragment::Module { .. }))
+                    .count(),
+                expected_modules,
+            ),
+        ] {
+            assert_eq!(actual, expected, "{name} lost {label}");
+        }
+
+        let report = analyze_document(&lossless.document, &lossless.errors);
+        assert_eq!(report.summary.commit_ready, 0);
+        assert!(report.decision_queue.len() >= 40);
+        assert!(report.diagnostics.iter().all(|diagnostic| {
+            !matches!(
+                diagnostic.class,
+                DiagnosticClass::Syntax | DiagnosticClass::Attachment
+            )
+        }));
+    }
+
+    #[test]
+    fn corpus_mimi_kv_real_project_transcription_round_trips() {
+        assert_real_project_transcription("mimi-kv-real-project", MIMI_KV_REAL_PROJECT, 4, 2, 7, 2);
+    }
+
+    #[test]
+    fn corpus_mimichat_real_project_transcription_round_trips() {
+        assert_real_project_transcription(
+            "mimichat-real-project",
+            MIMICHAT_REAL_PROJECT,
+            4,
+            2,
+            13,
+            6,
+        );
     }
 }
 

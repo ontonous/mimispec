@@ -16,7 +16,7 @@ use crate::ide::{
     IdeSnapshot, SemanticToken,
 };
 use crate::lossless::{
-    ColumnEncoding, CommitmentSlotId, LosslessDocument, SourceNodeId, SourcePosition,
+    ColumnEncoding, CommitmentSlotId, LineIndex, LosslessDocument, SourceNodeId, SourcePosition,
 };
 use crate::materialize::{plan_materialization, MaterializationPlan};
 use crate::profile::{analyze_generic_profile, analyze_mimi_profile, ProfileAnalysis};
@@ -158,6 +158,8 @@ pub struct DocumentSession {
     unlock_tokens: HashMap<String, SessionUnlockToken>,
     lock_challenges: Vec<LockChallenge>,
     next_nonce: u64,
+    #[cfg(test)]
+    observed_parse_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -194,6 +196,8 @@ impl DocumentSession {
             unlock_tokens: HashMap::new(),
             lock_challenges: Vec::new(),
             next_nonce: 1,
+            #[cfg(test)]
+            observed_parse_count: 1,
         }
     }
 
@@ -274,6 +278,10 @@ impl DocumentSession {
 
     pub fn observe_full(&mut self, source: String) {
         let next_version = self.observed.version.saturating_add(1);
+        #[cfg(test)]
+        {
+            self.observed_parse_count += 1;
+        }
         let candidate = DocumentRevision::parse(next_version, source);
 
         if let Some(pending) = self.pending.take() {
@@ -315,18 +323,15 @@ impl DocumentSession {
     }
 
     pub fn observe_edits(&mut self, edits: &[SessionTextEdit]) -> Result<(), SessionViolation> {
-        let mut revision = self.observed.clone();
+        let mut source = self.observed.source.clone();
+        let mut line_index = self.observed.document.line_index().clone();
         for edit in edits {
-            let source = match apply_text_edits(&revision, std::slice::from_ref(edit)) {
-                Ok(source) => source,
-                Err(violation) => {
-                    self.push_violation(&violation.code, &violation.message);
-                    return Err(violation);
-                }
-            };
-            revision = DocumentRevision::parse(revision.version, source);
+            if let Err(violation) = apply_sequential_text_edit(&mut source, &mut line_index, edit) {
+                self.push_violation(&violation.code, &violation.message);
+                return Err(violation);
+            }
         }
-        self.observe_full(revision.source);
+        self.observe_full(source);
         Ok(())
     }
 
@@ -678,6 +683,47 @@ impl DocumentSession {
     }
 }
 
+fn apply_sequential_text_edit(
+    source: &mut String,
+    line_index: &mut LineIndex,
+    edit: &SessionTextEdit,
+) -> Result<(), SessionViolation> {
+    let Some(range) = edit.range else {
+        *source = edit.text.clone();
+        *line_index = LineIndex::new(source);
+        return Ok(());
+    };
+    let start = line_index
+        .offset(
+            source,
+            SourcePosition {
+                line: range.start.line,
+                column: range.start.character,
+            },
+            ColumnEncoding::Utf16,
+        )
+        .ok_or_else(|| SessionViolation::new("C-INVALID-EDIT", "invalid UTF-16 start position"))?;
+    let end = line_index
+        .offset(
+            source,
+            SourcePosition {
+                line: range.end.line,
+                column: range.end.character,
+            },
+            ColumnEncoding::Utf16,
+        )
+        .ok_or_else(|| SessionViolation::new("C-INVALID-EDIT", "invalid UTF-16 end position"))?;
+    if start > end {
+        return Err(SessionViolation::new(
+            "C-INVALID-EDIT",
+            "edit range start is after its end",
+        ));
+    }
+    line_index.apply_edit(start, end, &edit.text);
+    source.replace_range(start as usize..end as usize, &edit.text);
+    Ok(())
+}
+
 fn advisory_patch_violations(
     before: &LosslessDocument,
     after: &LosslessDocument,
@@ -927,6 +973,40 @@ mod tests {
     }
 
     #[test]
+    fn ai_cannot_self_delegate_a_fresh_slot() {
+        let mut session = DocumentSession::open("file:///fresh.mms", "");
+        let review = session.prepare_edit(DocumentEditRequest {
+            base_version: 1,
+            actor: Actor::Ai,
+            edits: vec![SessionTextEdit {
+                range: None,
+                text: "desc? \"new intent\"\n".into(),
+            }],
+            authorization: HumanAuthorization::default(),
+            unlock_tokens: Vec::new(),
+            challenge_reason: None,
+        });
+        assert!(review.accepted, "{:?}", review.violations);
+
+        let delegated = session.prepare_edit(DocumentEditRequest {
+            base_version: 1,
+            actor: Actor::Ai,
+            edits: vec![SessionTextEdit {
+                range: None,
+                text: "desc?? \"new intent\"\n".into(),
+            }],
+            authorization: HumanAuthorization::default(),
+            unlock_tokens: Vec::new(),
+            challenge_reason: None,
+        });
+        assert!(!delegated.accepted);
+        assert!(delegated
+            .violations
+            .iter()
+            .any(|violation| violation.code == "C-AI-TRANSITION-FORBIDDEN"));
+    }
+
+    #[test]
     fn strong_unlock_token_is_bound_and_single_use() {
         let source = "func$$ Pay:\n    steps:\n        charge payment\n";
         let mut session = DocumentSession::open("file:///pay.mms", source);
@@ -1031,6 +1111,47 @@ mod tests {
             .violations()
             .iter()
             .any(|violation| violation.code == "C-INVALID-EDIT"));
+    }
+
+    #[test]
+    fn batched_utf16_changes_are_sequential_but_parse_only_once() {
+        let mut session = DocumentSession::open("file:///批量.mms", "desc \"甲乙\"\n");
+        let before = session.observed_parse_count;
+        session
+            .observe_edits(&[
+                SessionTextEdit {
+                    range: Some(TextRange {
+                        start: TextPosition {
+                            line: 0,
+                            character: 6,
+                        },
+                        end: TextPosition {
+                            line: 0,
+                            character: 7,
+                        },
+                    }),
+                    text: "家庭".into(),
+                },
+                // This range is relative to the result of the previous edit,
+                // exactly as LSP contentChanges requires.
+                SessionTextEdit {
+                    range: Some(TextRange {
+                        start: TextPosition {
+                            line: 0,
+                            character: 8,
+                        },
+                        end: TextPosition {
+                            line: 0,
+                            character: 9,
+                        },
+                    }),
+                    text: "账本".into(),
+                },
+            ])
+            .unwrap();
+        assert_eq!(session.source(), "desc \"家庭账本\"\n");
+        assert_eq!(session.observed_parse_count, before + 1);
+        assert!(session.errors().is_empty());
     }
 
     #[test]

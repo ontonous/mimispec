@@ -12,6 +12,9 @@ A reference implementation of MimiSpec language support for [Monaco Editor](http
 
 The tokenizer recognizes all nine commitment suffix spellings. Completion is
 heuristic and target-neutral; the canonical Rust parser remains authoritative.
+Free-form Action labels that contain `on`, `desc`, `error`, hyphens, or other
+structural punctuation should use the quoted-action snippet, or be written as
+`desc "..."`. Monaco intentionally does not broaden the bare Action grammar.
 
 ## 快速集成 / Quick Integration
 

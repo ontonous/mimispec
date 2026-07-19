@@ -353,7 +353,7 @@ fn classify_slot(
             SlotSupport::Unsupported("Profile does not support types.".into())
         }
         SourceNodeKind::Func if capabilities.functions => {
-            if !capabilities.contracts && func_has_contracts(document, &slot.header) {
+            if !capabilities.contracts && func_has_contracts(document, slot.node) {
                 SlotSupport::Partial(
                     "Function contracts are present but formal contracts are unsupported.".into(),
                 )
@@ -388,34 +388,22 @@ fn annotate_partial(mut slot: MaterializationSlot) -> MaterializationSlot {
     slot
 }
 
-fn func_has_contracts(document: &LosslessDocument, header: &str) -> bool {
-    document.semantic().fragments.iter().any(|fragment| {
-        if let Fragment::Func { func } = fragment {
-            header_name_matches(header, &func.name.name)
-                && (!func.requires().is_empty()
-                    || !func.ensures().is_empty()
-                    || !func.rules().is_empty())
-        } else {
-            false
-        }
-    })
-}
-
-/// Extract the identifier after `func ` in a lossless header and compare it
-/// against a semantic function name.  This avoids false positives from the
-/// substring check `header.contains(name)` (e.g. "CreateUser" matching "User").
-fn header_name_matches(header: &str, name: &str) -> bool {
-    let after_keyword = header
-        .trim_start()
-        .strip_prefix("func")
-        .unwrap_or(header)
-        .trim_start();
-    let extracted = after_keyword
-        .trim_start()
-        .split(['$', '?', ':', ' ', '\t', '\n', '('])
-        .next()
-        .unwrap_or("");
-    !extracted.is_empty() && extracted == name
+fn func_has_contracts(document: &LosslessDocument, node: crate::lossless::SourceNodeId) -> bool {
+    let Some(node) = document.node(node) else {
+        return false;
+    };
+    document
+        .text(node.spans.core)
+        .unwrap_or_default()
+        .lines()
+        .map(str::trim_start)
+        .any(|line| {
+            ["requires", "ensures", "rule"].iter().any(|keyword| {
+                line.strip_prefix(keyword).is_some_and(|tail| {
+                    tail.starts_with(['$', '?', ':']) || tail.starts_with(char::is_whitespace)
+                })
+            })
+        })
 }
 
 fn document_level_gaps(
@@ -423,7 +411,16 @@ fn document_level_gaps(
     capabilities: &TargetCapabilities,
 ) -> Vec<CapabilityGap> {
     let mut gaps = Vec::new();
-    for fragment in &document.semantic().fragments {
+    collect_document_level_gaps(&document.semantic().fragments, capabilities, &mut gaps);
+    gaps
+}
+
+fn collect_document_level_gaps(
+    items: &[Fragment],
+    capabilities: &TargetCapabilities,
+    gaps: &mut Vec<CapabilityGap>,
+) {
+    for fragment in items {
         match fragment {
             Fragment::Flow { flow } if !capabilities.flows => {
                 gaps.push(CapabilityGap {
@@ -437,6 +434,7 @@ fn document_level_gaps(
                     suggested_action:
                         "Choose a Flow-capable profile such as Mimi, or rewrite as steps.".into(),
                 });
+                collect_document_level_gaps(&flow.items, capabilities, gaps);
             }
             Fragment::Func { func } if !capabilities.formal_verification && func.has_math() => {
                 gaps.push(CapabilityGap {
@@ -447,13 +445,17 @@ fn document_level_gaps(
                     suggested_action: "Keep math as documentation or select a verifying profile."
                         .into(),
                 });
+                collect_document_level_gaps(&func.items, capabilities, gaps);
             }
             Fragment::Func { func }
                 if capabilities.concurrency
                     && func
                         .step_refs()
                         .iter()
-                        .any(|step| matches!(step, Step::Parasteps { .. })) => {}
+                        .any(|step| matches!(step, Step::Parasteps { .. })) =>
+            {
+                collect_document_level_gaps(&func.items, capabilities, gaps);
+            }
             Fragment::Ui { ui } if !capabilities.ui => {
                 gaps.push(CapabilityGap {
                     slot_header: format!("ui {}", ui.name.name),
@@ -463,10 +465,30 @@ fn document_level_gaps(
                     suggested_action: "Route UI fragments to a frontend profile.".into(),
                 });
             }
+            Fragment::Module { module } => {
+                collect_document_level_gaps(&module.items, capabilities, gaps);
+            }
+            Fragment::TypeDef { typedef } => {
+                collect_document_level_gaps(typedef.items(), capabilities, gaps);
+            }
+            Fragment::Flow { flow } => {
+                collect_document_level_gaps(&flow.items, capabilities, gaps);
+            }
+            Fragment::Func { func } => {
+                collect_document_level_gaps(&func.items, capabilities, gaps);
+            }
+            Fragment::Steps { items, .. } => {
+                collect_document_level_gaps(items, capabilities, gaps);
+            }
+            Fragment::FlowEntry { entry } => {
+                collect_document_level_gaps(&entry.items, capabilities, gaps);
+            }
+            Fragment::FlowArm { arm } => {
+                collect_document_level_gaps(&arm.items, capabilities, gaps);
+            }
             _ => {}
         }
     }
-    gaps
 }
 
 /// Ensure unsupported intent is reported rather than dropped from a selection.
@@ -479,7 +501,7 @@ pub fn assert_no_silent_drops(
             .supported_slots
             .iter()
             .chain(analysis.partial_slots.iter())
-            .any(|reported| reported.node == slot.node)
+            .any(|reported| reported.slot == slot.slot)
             || analysis
                 .gaps
                 .iter()
@@ -602,5 +624,33 @@ ui Panel$:
                     || slot.kind == crate::lossless::SourceNodeKind::Ui)
                 || ts.gaps.iter().any(|gap| gap.slot_header.contains("Panel"))
         );
+    }
+
+    #[test]
+    fn nested_capability_audit_uses_exact_nodes_and_reports_residuals() {
+        let source = r#"module App:
+    func$ Sync:
+        requires: source.ready
+        steps:
+            send payload
+
+    flow$ Lifecycle:
+        Pending >>> Complete:
+"#;
+        let doc = parse_lossless(source).document;
+        let generic = analyze_generic_profile(&doc, "nested");
+        assert!(generic.partial_slots.iter().any(|slot| {
+            slot.kind == crate::lossless::SourceNodeKind::Func && slot.header.contains("Sync")
+        }));
+        assert!(generic.gaps.iter().any(|gap| {
+            gap.slot_header.contains("Lifecycle")
+                && gap.reason.to_ascii_lowercase().contains("flow")
+        }));
+        assert!(generic
+            .plan
+            .excluded_unlocked
+            .iter()
+            .any(|slot| slot.header.contains("send payload")));
+        assert!(assert_no_silent_drops(&generic.plan.selection, &generic).is_ok());
     }
 }

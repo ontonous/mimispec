@@ -89,12 +89,29 @@
       {
         "command": "mimispec.validateFile",
         "title": "MimiSpec: Validate Current File"
+      },
+      {
+        "command": "mimispec.refreshQueues",
+        "title": "MimiSpec: Refresh Decision/Delegation Queues"
       }
     ],
+    "views": {
+      "explorer": [
+        {
+          "id": "mimispecQueues",
+          "name": "MimiSpec Queues",
+          "when": "editorLangId == mimispec"
+        }
+      ]
+    },
     "menus": {
       "commandPalette": [
         {
           "command": "mimispec.validateFile",
+          "when": "editorLangId == mimispec"
+        },
+        {
+          "command": "mimispec.refreshQueues",
           "when": "editorLangId == mimispec"
         }
       ]

@@ -7,8 +7,9 @@
 >
 > Main development status (2026-07-19): Core milestones M0-M3, the M4 stdio
 > language service, and the technical M5 stabilization gates are implemented
-> in the working tree. The independent 5-author/25-document usability gate is
-> still incomplete, so Cargo and published release facts remain `0.2.1`.
+> in the working tree. A real-project reverse-transcription trial added two
+> internal usability follow-ups, and the independent 5-author/25-document gate
+> is still incomplete, so Cargo and published release facts remain `0.2.1`.
 
 ## 1. Series Goal
 
@@ -324,7 +325,7 @@ the corrected semantics.
   `partial` booleans ride alongside the versioned `status` field in CLI
   envelopes; `is_commit_ready()` remains as a compatibility alias for
   `is_confirmed()`.
-- Corpus covering: ✅ Eight cross-domain acceptance corpora under
+- Corpus covering: ✅ Ten technical acceptance corpora under
   `docs/corpora/`, each gated by `corpus_acceptance_tests` in
   `src/lib/mod.rs`:
   - plain-language product intent (`plain-product-intent.mms`);
@@ -334,7 +335,12 @@ the corrected semantics.
   - ordered communication (`ordered-communication.mms`);
   - external boundaries (`external-boundaries.mms`);
   - multilingual descriptions (`multilingual.mms`);
-  - cohesive real-world product usability (`real-world-family-ledger.mms`).
+  - cohesive real-world product usability (`real-world-family-ledger.mms`);
+  - MIMI key-value server/client transcription (`mimi-kv-real-project.mms`);
+  - 2,014-line MIMI Actor/chat transcription (`mimichat-real-project.mms`).
+  The two reverse transcriptions are technical fixtures, not independent-author
+  trial evidence; findings are recorded in
+  `docs/0.3-real-project-transcription-report.md`.
 - Parser/formatter fuzzing and property tests. ✅ Implemented in
   `src/lib/mod.rs::property_tests` with a seed-deterministic LCG and seven
   invariants: idempotent render, render determinism, AST JSON versioning,
@@ -343,7 +349,10 @@ the corrected semantics.
   Gated in CI as the `Property & Fuzz Tests` job.
 - Large-file performance and memory baseline. ✅ Measured on release builds
   with `examples/perf_baseline.rs`; deterministic slot-linearity guard added
-  as `stress_tests::stress_slot_count_scales_linearly_with_module_size`.
+  as `stress_tests::stress_slot_count_scales_linearly_with_module_size`. The
+  baseline now also measures both real MIMI transcriptions, QueueTree/IDE
+  snapshot construction, and a 200-change sequential UTF-16 batch that parses
+  only once.
 
   | Module size | Source bytes | parse | render | reparse | parse_lossless | slots |
   |-------------|-------------:|------:|-------:|--------:|---------------:|------:|
@@ -364,6 +373,12 @@ the corrected semantics.
 - Language-neutral conformance suite. ✅ `mimispec conformance check` validates
   parse/AST goldens, lossless attachment/span facts, the commitment transition
   matrix, and an LSP transcript under `mimispec.conformance/0.3`.
+- Internal real-project usability follow-ups. ✅ The `mimi-kv`/`mimichat`
+  trial's two P1 findings now have contextual E0010 guidance, conservative
+  standard-LSP quick fixes, hierarchical QueueTree presentation, VS Code tree
+  navigation, and Human-only atomic queue batching. Flat queue fields and
+  `--flat-queues` remain available for compatibility. This closes the internal
+  technical P1s but does not substitute for independent authors.
 - Independent usability gate. ⏳ The release workflow requires five independent
   authors, 25 final documents across five domains, four successful five-minute
   entries, exact lossless/semantic round-trip, and zero open P0/P1. The
@@ -387,7 +402,9 @@ in the 0.3 language freeze:
 - target profiles and target capability matrices;
 - code generation or implementation synchronization;
 - materialization and release planning;
-- Evidence and provenance protocols;
+- production Evidence/provenance ledgers and target adapters (the experimental
+  Core-external `mimispec.provenance/0.1` hash/locator sidecar may be evaluated
+  without entering the Core freeze);
 - OSE product workflow;
 - target-specific formal verification;
 - target-language-specific Flow, Fault, Actor, Session, or FFI syntax.

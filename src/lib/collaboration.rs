@@ -1,4 +1,3 @@
-use std::cmp::Reverse;
 use std::collections::{hash_map::DefaultHasher, HashMap};
 use std::hash::{Hash, Hasher};
 
@@ -446,12 +445,10 @@ struct DocumentStructureIndex {
 
 impl DocumentStructureIndex {
     fn new(document: &LosslessDocument) -> Self {
-        let parents = index_node_parents(document);
-
         let mut sibling_groups = HashMap::<Option<SourceNodeId>, Vec<SourceNodeId>>::new();
         for node in document.nodes() {
             sibling_groups
-                .entry(parents.get(&node.id).copied().flatten())
+                .entry(document.parent_node(node.id).map(|parent| parent.id))
                 .or_default()
                 .push(node.id);
         }
@@ -464,12 +461,17 @@ impl DocumentStructureIndex {
             });
         }
 
-        let mut children = HashMap::<SourceNodeId, Vec<SourceNodeId>>::new();
-        for (parent, siblings) in &sibling_groups {
-            if let Some(parent) = parent {
-                children.insert(*parent, siblings.clone());
-            }
-        }
+        let children = document
+            .nodes()
+            .iter()
+            .filter_map(|node| {
+                let children = document
+                    .child_nodes(node.id)
+                    .map(|child| child.id)
+                    .collect::<Vec<_>>();
+                (!children.is_empty()).then_some((node.id, children))
+            })
+            .collect::<HashMap<_, _>>();
 
         let mut topology = HashMap::new();
         for node in document.nodes() {
@@ -495,20 +497,18 @@ impl DocumentStructureIndex {
             }
         }
 
-        let mut attachment_parts = HashMap::<SourceNodeId, Vec<String>>::new();
-        for rule in document.rules() {
-            if let Some(target) = rule.target {
-                attachment_parts
-                    .entry(target)
-                    .or_default()
-                    .push(strip_all_commitment_suffixes(
-                        document.text(rule.span).unwrap_or_default(),
-                    ));
-            }
-        }
-        let attachment = attachment_parts
-            .into_iter()
-            .map(|(node, parts)| (node, parts.join("|")))
+        let attachment = document
+            .nodes()
+            .iter()
+            .filter_map(|node| {
+                let parts = document
+                    .rules_for_target(node.id)
+                    .map(|rule| {
+                        strip_all_commitment_suffixes(document.text(rule.span).unwrap_or_default())
+                    })
+                    .collect::<Vec<_>>();
+                (!parts.is_empty()).then_some((node.id, parts.join("|")))
+            })
             .collect();
 
         Self {
@@ -546,40 +546,6 @@ impl DocumentStructureIndex {
             .map(String::as_str)
             .expect("every parser-recorded node has a structural position")
     }
-}
-
-fn index_node_parents(document: &LosslessDocument) -> HashMap<SourceNodeId, Option<SourceNodeId>> {
-    let mut ordered = document.nodes().iter().collect::<Vec<_>>();
-    ordered.sort_by_key(|node| {
-        (
-            node.spans.core.start,
-            Reverse(node.spans.core.end),
-            node.id.0,
-        )
-    });
-
-    let mut active = Vec::<&SourceNode>::new();
-    let mut parents = HashMap::with_capacity(ordered.len());
-    for node in ordered {
-        // Half-open intervals ending at this node's start cannot contain it.
-        // Keeping all other overlapping candidates makes this robust even if
-        // recovery produces equal or partially overlapping source nodes.
-        active.retain(|candidate| candidate.spans.core.end > node.spans.core.start);
-        let parent = active
-            .iter()
-            .copied()
-            .filter(|candidate| {
-                candidate.spans.core.start <= node.spans.core.start
-                    && candidate.spans.core.end >= node.spans.core.end
-                    && (candidate.spans.core.start < node.spans.core.start
-                        || candidate.spans.core.end > node.spans.core.end)
-            })
-            .min_by_key(|candidate| (candidate.spans.core.len(), candidate.id.0))
-            .map(|candidate| candidate.id);
-        parents.insert(node.id, parent);
-        active.push(node);
-    }
-    parents
 }
 
 /// Compatibility node summary derived from parser-proven semantic slots.
@@ -737,14 +703,24 @@ pub fn validate_document_patch(
     }
 
     for (index, slot) in after_slots.iter().enumerate() {
-        if matched_after.contains(&index) || !slot.state.protects_content() {
+        if matched_after.contains(&index) || slot.state == Commitment::None {
             continue;
         }
         match request.actor {
             None => results.push(Err(DocumentPatchViolation::ActorDeclarationRequired)),
-            Some(Actor::Ai) => results.push(Err(DocumentPatchViolation::Transition(
-                TransitionViolation::AiTransitionForbidden,
-            ))),
+            Some(Actor::Ai) => {
+                let transition = TransitionRequest {
+                    actor: Actor::Ai,
+                    from: Commitment::None,
+                    to: slot.state,
+                    effects: TransitionEffects::default(),
+                    authorization: HumanAuthorization::default(),
+                    challenge_reason: request.challenge_reason,
+                };
+                if let Err(violation) = validate_transition(&transition) {
+                    results.push(Err(DocumentPatchViolation::Transition(violation)));
+                }
+            }
             Some(Actor::Human) => {}
         }
     }
@@ -828,11 +804,22 @@ pub fn validate_ai_document_patch(
         }
     }
 
-    // AI cannot create a fresh protected/confirmed slot and thereby bypass the
-    // transition matrix simply because no matching slot existed before.
+    // Fresh slots still start at `None` and must pass the same matrix. In
+    // particular, AI may open a review with `?`, but may not self-delegate
+    // with `??` or create any lock-family state.
     for (index, slot) in after_slots.iter().enumerate() {
-        if !matched_after.contains(&index) && slot.state.protects_content() {
-            results.push(Err(TransitionViolation::AiTransitionForbidden));
+        if matched_after.contains(&index) || slot.state == Commitment::None {
+            continue;
+        }
+        if let Err(violation) = validate_transition(&TransitionRequest {
+            actor: Actor::Ai,
+            from: Commitment::None,
+            to: slot.state,
+            effects: TransitionEffects::default(),
+            authorization: HumanAuthorization::default(),
+            challenge_reason,
+        }) {
+            results.push(Err(violation));
         }
     }
     results
@@ -1546,7 +1533,6 @@ mod tests {
         );
         assert!(result.errors.is_empty(), "{:?}", result.errors);
 
-        let indexed = index_node_parents(&result.document);
         for node in result.document.nodes() {
             let exhaustive = result
                 .document
@@ -1561,7 +1547,10 @@ mod tests {
                 })
                 .min_by_key(|candidate| candidate.spans.core.len())
                 .map(|candidate| candidate.id);
-            assert_eq!(indexed.get(&node.id).copied().flatten(), exhaustive);
+            assert_eq!(
+                result.document.parent_node(node.id).map(|parent| parent.id),
+                exhaustive
+            );
         }
     }
 
@@ -1609,6 +1598,34 @@ mod tests {
         assert!(results
             .iter()
             .any(|result| matches!(result, Err(TransitionViolation::AiTransitionForbidden))));
+    }
+
+    #[test]
+    fn ai_patch_validates_the_state_of_every_fresh_slot() {
+        let before = crate::parse_lossless("").document;
+        let review = crate::parse_lossless("desc? \"new intent\"\n").document;
+        let delegated = crate::parse_lossless("desc?? \"new intent\"\n").document;
+
+        let allowed = validate_ai_document_patch(&before, &review, None);
+        assert!(allowed.iter().all(Result::is_ok), "{allowed:?}");
+
+        let forbidden = validate_ai_document_patch(&before, &delegated, None);
+        assert!(forbidden
+            .iter()
+            .any(|result| matches!(result, Err(TransitionViolation::AiTransitionForbidden))));
+
+        let request = DocumentPatchRequest {
+            actor: Some(Actor::Ai),
+            authorization: HumanAuthorization::default(),
+            challenge_reason: None,
+        };
+        let forbidden = validate_document_patch(&before, &delegated, &request);
+        assert!(forbidden.iter().any(|result| matches!(
+            result,
+            Err(DocumentPatchViolation::Transition(
+                TransitionViolation::AiTransitionForbidden
+            ))
+        )));
     }
 
     #[test]

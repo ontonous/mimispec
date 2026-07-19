@@ -88,7 +88,8 @@ mimispec path/to/file.mms --ast           # 输出 AST
 mimispec path/to/file.mms --json          # 输出 JSON（供 IDE 使用）
 mimispec path/to/file.mms --render        # 渲染回源码
 mimispec path/to/file.mms --latex         # 渲染数学为 LaTeX
-mimispec diagnose path/to/file.mms        # 决策/委托队列 + 意图诊断
+mimispec diagnose path/to/file.mms        # 按 scope 分组的队列 + 意图诊断
+mimispec diagnose --flat-queues path/to/file.mms  # 兼容的平铺队列
 mimispec path/to/file.mms --diagnostics   # 同上
 mimispec materialize path/to/file.mms --scope payments-v1  # 临时的已确认槽位计划
 mimispec profile path/to/file.mms --target mimi --scope payments-v1
@@ -97,13 +98,14 @@ mimispec workflow path/to/file.mms --scope payments-v1
 mimispec lsp --stdio                       # 长驻 LSP 3.17 服务
 mimispec conformance check                # 验证 mimispec.conformance/0.3
 mimispec usability check                  # 查看独立 RC 试用进度
+mimispec provenance check sidecar.json --source-root /project  # 实验性 hash/locator 审计
 echo "func Hello: steps:\n    say hi" | mimispec - --ast  # 标准输入
 mimispec *.mms --json                     # 多文件
 ```
 
 > 说明：当前 crates.io 发布版本仍是 `0.2.1`。无损解析、协作校验与 `diagnose`
 > 属于 `main` 上推进中的 `0.3.x` 能力，尚不是已发布契约。仅存在于 `main` 的
-> `materialize`、`profile` 与 `workflow` 是 0.3 Core 路线之外的临时研究接口。
+> `materialize`、`profile`、`provenance` 与 `workflow` 是 0.3 Core 路线之外的临时研究接口。
 
 ### 作为库使用
 

@@ -8,6 +8,10 @@
 - **File icon**: `.mms` files show a MimiSpec icon in the Explorer
 - **Long-lived 0.3 LSP**: diagnostics, semantic tokens, commitment hover,
   rule/Flow navigation, and actor-aware code actions
+- **Decision/Delegation tree**: source-scope grouping with direct navigation;
+  exact flat queues remain available on the wire
+- **Safe Action recovery**: quoted-label and `desc "..."` quick fixes use
+  standard WorkspaceEdits and stay disabled for structural lines
 - **Advisory/strict collaboration mode** (`advisory` by default)
 - **0.2.1 fallback**: file validation remains available when the binary has no LSP
 - **Version-aware parser protocol**: understands `mimispec.parse/0.3` and still

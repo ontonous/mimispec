@@ -28,6 +28,29 @@ interface JsonOutput {
     results: JsonResult[];
 }
 
+interface ByteSpan { start: number; end: number; }
+interface QueueItemWire {
+    slot: number;
+    state: string;
+    anchor: string;
+    header: string;
+    span: ByteSpan;
+}
+interface QueueScopeWire {
+    scope_path: string[];
+    header: string;
+    node?: number;
+    span?: ByteSpan;
+    decision_count: number;
+    delegation_count: number;
+    children: QueueScopeWire[];
+    items: QueueItemWire[];
+}
+interface DocumentSnapshotWire {
+    schema_version: string;
+    queue_tree?: { root: QueueScopeWire };
+}
+
 const PARSE_SCHEMA = 'mimispec.parse/0.3';
 const LANG = 'mimispec';
 const CFG = 'mimispec';
@@ -36,6 +59,7 @@ let client: LanguageClient | undefined;
 let diags: vscode.DiagnosticCollection | undefined;
 let chan: vscode.OutputChannel;
 let legacyMode = false;
+let queueProvider: QueueTreeProvider | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
     chan = vscode.window.createOutputChannel('MimiSpec');
@@ -49,6 +73,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     if (await supportsLanguageServer(bin)) {
         await startLanguageClient(context, bin);
+        queueProvider = new QueueTreeProvider();
+        context.subscriptions.push(vscode.window.registerTreeDataProvider('mimispecQueues', queueProvider));
+        context.subscriptions.push(vscode.commands.registerCommand('mimispec.refreshQueues', () => queueProvider?.refresh()));
+        context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(() => queueProvider?.refresh()));
+        context.subscriptions.push(vscode.workspace.onDidChangeTextDocument((event) => {
+            if (event.document.languageId === LANG) queueProvider?.refresh();
+        }));
     } else {
         legacyMode = true;
         chan.appendLine('MimiSpec 0.3 LSP is unavailable; using the reduced 0.2.1 file-validation fallback.');
@@ -67,6 +98,86 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             void vscode.window.showInformationMessage('MimiSpec live language-server validation is active.');
         }
     }));
+}
+
+type QueueTreeEntry =
+    | { kind: 'scope'; value: QueueScopeWire }
+    | { kind: 'item'; value: QueueItemWire };
+
+class QueueTreeProvider implements vscode.TreeDataProvider<QueueTreeEntry> {
+    private readonly changed = new vscode.EventEmitter<QueueTreeEntry | undefined | void>();
+    readonly onDidChangeTreeData = this.changed.event;
+    private root: QueueScopeWire | undefined;
+    private uri: vscode.Uri | undefined;
+
+    refresh(): void {
+        this.root = undefined;
+        this.changed.fire();
+    }
+
+    getTreeItem(entry: QueueTreeEntry): vscode.TreeItem {
+        if (entry.kind === 'scope') {
+            const scope = entry.value;
+            const item = new vscode.TreeItem(
+                scope.header,
+                scope.children.length || scope.items.length
+                    ? vscode.TreeItemCollapsibleState.Collapsed
+                    : vscode.TreeItemCollapsibleState.None,
+            );
+            item.description = `${scope.decision_count} decision · ${scope.delegation_count} delegation`;
+            item.tooltip = scope.scope_path.join(' / ') || '<document>';
+            return item;
+        }
+        const queue = entry.value;
+        const item = new vscode.TreeItem(`[${queue.state || 'none'}] ${queue.anchor}`);
+        item.description = queue.header.trim();
+        item.tooltip = `slot ${queue.slot}: ${queue.header.trim()}`;
+        if (this.uri) {
+            item.command = {
+                command: 'vscode.open',
+                title: 'Go to MimiSpec queue item',
+                arguments: [this.uri, { selection: rangeFromByteSpan(this.uri, queue.span) }],
+            };
+        }
+        return item;
+    }
+
+    async getChildren(entry?: QueueTreeEntry): Promise<QueueTreeEntry[]> {
+        if (!entry) {
+            await this.load();
+            return this.root ? [{ kind: 'scope', value: this.root }] : [];
+        }
+        if (entry.kind === 'item') return [];
+        return [
+            ...entry.value.children.map((value): QueueTreeEntry => ({ kind: 'scope', value })),
+            ...entry.value.items.map((value): QueueTreeEntry => ({ kind: 'item', value })),
+        ];
+    }
+
+    private async load(): Promise<void> {
+        if (this.root || !client) return;
+        const document = vscode.window.activeTextEditor?.document;
+        if (!document || document.languageId !== LANG) return;
+        this.uri = document.uri;
+        try {
+            const snapshot = await client.sendRequest<DocumentSnapshotWire>(
+                'mimispec/documentSnapshot',
+                { textDocument: { uri: document.uri.toString() } },
+            );
+            if (snapshot.schema_version === 'mimispec.ls/0.3') this.root = snapshot.queue_tree?.root;
+        } catch (error) {
+            chan.appendLine(`Unable to refresh MimiSpec queues: ${String(error)}`);
+        }
+    }
+}
+
+function rangeFromByteSpan(uri: vscode.Uri, span: ByteSpan): vscode.Range {
+    const document = vscode.workspace.textDocuments.find((candidate) => candidate.uri.toString() === uri.toString());
+    if (!document) return new vscode.Range(0, 0, 0, 0);
+    const bytes = Buffer.from(document.getText(), 'utf8');
+    const start = bytes.subarray(0, Math.min(span.start, bytes.length)).toString('utf8').length;
+    const end = bytes.subarray(0, Math.min(span.end, bytes.length)).toString('utf8').length;
+    return new vscode.Range(document.positionAt(start), document.positionAt(end));
 }
 
 async function startLanguageClient(context: vscode.ExtensionContext, bin: string): Promise<void> {

@@ -78,6 +78,23 @@
       "properties": { "uri": { "type": "string" } },
       "additionalProperties": false
     },
+    "queueBatchRequest": {
+      "type": "object",
+      "required": ["uri", "base_version", "actor", "slot_ids", "target"],
+      "properties": {
+        "uri": { "type": "string" },
+        "base_version": { "type": "integer", "minimum": 1 },
+        "actor": { "const": "human" },
+        "slot_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "integer", "minimum": 0, "maximum": 4294967295 }
+        },
+        "target": { "enum": ["none", "?", "$"] }
+      },
+      "additionalProperties": false
+    },
     "unlockTokenRequest": {
       "type": "object",
       "required": ["uri", "base_version", "actor", "slot"],
@@ -137,7 +154,9 @@
         "violations": { "type": "array", "items": { "$ref": "#/$defs/violation" } },
         "token": { "type": "object" },
         "session": { "type": "object" },
-        "workspace_edit": { "type": "object" }
+        "workspace_edit": { "type": "object" },
+        "target": { "enum": ["none", "?", "$"] },
+        "slot_ids": { "type": "array", "items": { "type": "integer", "minimum": 0 } }
       },
       "additionalProperties": false
     }
@@ -146,6 +165,7 @@
     { "$ref": "#/$defs/documentEditRequest" },
     { "$ref": "#/$defs/documentEditResponse" },
     { "$ref": "#/$defs/snapshotRequest" },
+    { "$ref": "#/$defs/queueBatchRequest" },
     { "$ref": "#/$defs/unlockTokenRequest" },
     { "$ref": "#/$defs/adoptObservedRequest" },
     { "$ref": "#/$defs/restoreAuthoritativeRequest" },

@@ -46,7 +46,8 @@ fn real_stdio_process_completes_lsp_lifecycle() {
         json!({ "jsonrpc": "2.0", "method": "initialized", "params": {} }),
         json!({ "jsonrpc": "2.0", "method": "textDocument/didOpen", "params": { "textDocument": { "uri": "file:///stdio.mms", "languageId": "mimispec", "version": 1, "text": "desc?? \"stdio test\"\n" } } }),
         json!({ "jsonrpc": "2.0", "id": 2, "method": "mimispec/documentSnapshot", "params": { "textDocument": { "uri": "file:///stdio.mms" } } }),
-        json!({ "jsonrpc": "2.0", "id": 3, "method": "shutdown", "params": null }),
+        json!({ "jsonrpc": "2.0", "id": 3, "method": "mimispec/prepareQueueBatch", "params": { "uri": "file:///stdio.mms", "base_version": 1, "actor": "human", "slot_ids": [0], "target": "?" } }),
+        json!({ "jsonrpc": "2.0", "id": 4, "method": "shutdown", "params": null }),
         json!({ "jsonrpc": "2.0", "method": "exit", "params": null }),
     ] {
         input.extend(frame(message));
@@ -68,5 +69,13 @@ fn real_stdio_process_completes_lsp_lifecycle() {
             && message["result"]["delegation_queue"]
                 .as_array()
                 .is_some_and(|queue| queue.len() == 1)
+            && message["result"]["queue_tree"]["root"]["delegation_count"] == 1
+    }));
+    assert!(messages.iter().any(|message| {
+        message["id"] == 3
+            && message["result"]["accepted"] == true
+            && message["result"]["workspace_edit"]["changes"]["file:///stdio.mms"]
+                .as_array()
+                .is_some_and(|edits| edits.len() == 1)
     }));
 }

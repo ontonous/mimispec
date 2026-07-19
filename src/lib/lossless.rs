@@ -1,5 +1,5 @@
 use std::cmp::Reverse;
-use std::collections::{BTreeSet, BinaryHeap};
+use std::collections::{BTreeSet, BinaryHeap, HashMap};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -162,7 +162,7 @@ pub struct RuleGroupSyntax {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub struct SourceNodeId(pub u32);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceNodeKind {
     Rule,
@@ -268,7 +268,7 @@ pub struct LineIndex {
 }
 
 impl LineIndex {
-    fn new(source: &str) -> Self {
+    pub(crate) fn new(source: &str) -> Self {
         let mut starts = vec![0];
         for (index, byte) in source.bytes().enumerate() {
             if byte == b'\n' {
@@ -276,6 +276,43 @@ impl LineIndex {
             }
         }
         Self { starts }
+    }
+
+    /// Update line starts after one byte-range edit without reparsing syntax.
+    pub(crate) fn apply_edit(&mut self, start: u32, end: u32, replacement: &str) {
+        debug_assert!(start <= end);
+        let removed = end - start;
+        let inserted = u32::try_from(replacement.len()).expect("document too large");
+        let delta = i64::from(inserted) - i64::from(removed);
+        let mut next = self
+            .starts
+            .iter()
+            .copied()
+            .filter(|line_start| *line_start <= start)
+            .collect::<Vec<_>>();
+        next.extend(
+            replacement
+                .bytes()
+                .enumerate()
+                .filter(|(_, byte)| *byte == b'\n')
+                .map(|(index, _)| {
+                    start
+                        .checked_add(u32::try_from(index + 1).expect("document too large"))
+                        .expect("document too large")
+                }),
+        );
+        next.extend(
+            self.starts
+                .iter()
+                .copied()
+                .filter(|line_start| *line_start > end)
+                .map(|line_start| {
+                    u32::try_from(i64::from(line_start) + delta).expect("valid shifted line start")
+                }),
+        );
+        next.sort_unstable();
+        next.dedup();
+        self.starts = next;
     }
 
     pub fn position(
@@ -359,6 +396,143 @@ pub struct LosslessDocument {
     rules: Vec<RuleOccurrence>,
     comments: Vec<CommentOccurrence>,
     line_index: LineIndex,
+    structure: DocumentStructureIndex,
+}
+
+/// Revision-local structural lookup tables built once with a lossless document.
+///
+/// The index is deliberately not serialized: all IDs and relationships are
+/// derived from parser-recorded spans and must be rebuilt for every revision.
+#[derive(Debug, Clone, Default)]
+struct DocumentStructureIndex {
+    parents: Vec<Option<SourceNodeId>>,
+    children: Vec<Vec<SourceNodeId>>,
+    nodes_by_kind: HashMap<SourceNodeKind, Vec<SourceNodeId>>,
+    slots_by_owner: Vec<Vec<CommitmentSlotId>>,
+    rules_by_target: Vec<Vec<RuleOccurrenceId>>,
+    scope_paths: Vec<Vec<SourceNodeId>>,
+}
+
+impl DocumentStructureIndex {
+    fn build(
+        nodes: &[SourceNode],
+        slots: &[CommitmentSlotSyntax],
+        rules: &[RuleOccurrence],
+    ) -> Self {
+        let mut parents = vec![None; nodes.len()];
+        let mut ordered = nodes.iter().collect::<Vec<_>>();
+        ordered.sort_by_key(|node| {
+            (
+                node.spans.core.start,
+                Reverse(node.spans.core.end),
+                node.id.0,
+            )
+        });
+
+        let mut active = Vec::<&SourceNode>::new();
+        for node in ordered {
+            active.retain(|candidate| candidate.spans.core.end > node.spans.core.start);
+            let parent = active
+                .iter()
+                .copied()
+                .filter(|candidate| {
+                    candidate.spans.core.start <= node.spans.core.start
+                        && candidate.spans.core.end >= node.spans.core.end
+                        && (candidate.spans.core.start < node.spans.core.start
+                            || candidate.spans.core.end > node.spans.core.end)
+                })
+                .min_by_key(|candidate| (candidate.spans.core.len(), candidate.id.0))
+                .map(|candidate| candidate.id);
+            if let Some(entry) = parents.get_mut(node.id.0 as usize) {
+                *entry = parent;
+            }
+            active.push(node);
+        }
+
+        let mut children = vec![Vec::new(); nodes.len()];
+        let mut roots = Vec::new();
+        for node in nodes {
+            match parents.get(node.id.0 as usize).copied().flatten() {
+                Some(parent) => {
+                    if let Some(entry) = children.get_mut(parent.0 as usize) {
+                        entry.push(node.id);
+                    }
+                }
+                None => roots.push(node.id),
+            }
+        }
+        let source_order = |id: &SourceNodeId| {
+            let node = &nodes[id.0 as usize];
+            (node.spans.core.start, node.spans.core.end, node.id.0)
+        };
+        roots.sort_by_key(source_order);
+        for item in &mut children {
+            item.sort_by_key(source_order);
+        }
+
+        let mut nodes_by_kind = HashMap::<SourceNodeKind, Vec<SourceNodeId>>::new();
+        for node in nodes {
+            nodes_by_kind.entry(node.kind).or_default().push(node.id);
+        }
+        for item in nodes_by_kind.values_mut() {
+            item.sort_by_key(source_order);
+        }
+
+        let mut slots_by_owner = vec![Vec::new(); nodes.len()];
+        for slot in slots.iter().filter(|slot| slot.semantic_slot) {
+            if let Some(owner) = slot.owner {
+                if let Some(entry) = slots_by_owner.get_mut(owner.0 as usize) {
+                    entry.push(slot.id);
+                }
+            }
+        }
+        for item in &mut slots_by_owner {
+            item.sort_by_key(|id| {
+                let slot = &slots[id.0 as usize];
+                (slot.anchor_span.start, slot.suffix_span.start, slot.id.0)
+            });
+        }
+
+        let mut rules_by_target = vec![Vec::new(); nodes.len()];
+        for rule in rules {
+            if let Some(target) = rule.target {
+                if let Some(entry) = rules_by_target.get_mut(target.0 as usize) {
+                    entry.push(rule.id);
+                }
+            }
+        }
+        for item in &mut rules_by_target {
+            item.sort_by_key(|id| {
+                let rule = &rules[id.0 as usize];
+                (rule.span.start, rule.span.end, rule.id.0)
+            });
+        }
+
+        let mut scope_paths = vec![Vec::new(); nodes.len()];
+        let mut traversal = roots.into_iter().rev().collect::<Vec<_>>();
+        while let Some(id) = traversal.pop() {
+            let node = &nodes[id.0 as usize];
+            let mut path = parents[id.0 as usize]
+                .and_then(|parent| scope_paths.get(parent.0 as usize).cloned())
+                .unwrap_or_default();
+            if node.kind.is_scope_container() {
+                path.push(id);
+            }
+            scope_paths[id.0 as usize] = path;
+            if let Some(nested) = children.get(id.0 as usize) {
+                traversal.extend(nested.iter().rev().copied());
+            }
+        }
+
+        Self {
+            parents,
+            children,
+            nodes_by_kind,
+            slots_by_owner,
+            rules_by_target,
+            scope_paths,
+        }
+    }
 }
 
 impl LosslessDocument {
@@ -416,6 +590,73 @@ impl LosslessDocument {
 
     pub fn node(&self, id: SourceNodeId) -> Option<&SourceNode> {
         self.nodes.get(id.0 as usize).filter(|node| node.id == id)
+    }
+
+    /// Immediate structural parent in this immutable document revision.
+    pub fn parent_node(&self, id: SourceNodeId) -> Option<&SourceNode> {
+        let parent = self
+            .structure
+            .parents
+            .get(id.0 as usize)
+            .copied()
+            .flatten()?;
+        self.node(parent)
+    }
+
+    /// Immediate structural children in source order for this revision.
+    pub fn child_nodes(&self, id: SourceNodeId) -> impl Iterator<Item = &SourceNode> {
+        self.structure
+            .children
+            .get(id.0 as usize)
+            .into_iter()
+            .flatten()
+            .filter_map(|child| self.node(*child))
+    }
+
+    /// Parser-proven semantic commitment slots owned by a node, in source order.
+    pub fn commitment_slots_for_owner(
+        &self,
+        id: SourceNodeId,
+    ) -> impl Iterator<Item = &CommitmentSlotSyntax> {
+        self.structure
+            .slots_by_owner
+            .get(id.0 as usize)
+            .into_iter()
+            .flatten()
+            .filter_map(|slot| self.commitment_slot(*slot))
+    }
+
+    /// Container path from the outermost scope through the node's nearest scope.
+    ///
+    /// The node itself is included when it is a scope container. Returned IDs
+    /// are revision-local and must not be persisted across edits.
+    pub fn scope_path(&self, id: SourceNodeId) -> Option<&[SourceNodeId]> {
+        self.node(id)?;
+        self.structure
+            .scope_paths
+            .get(id.0 as usize)
+            .map(Vec::as_slice)
+    }
+
+    pub(crate) fn nodes_of_kind(&self, kind: SourceNodeKind) -> impl Iterator<Item = &SourceNode> {
+        self.structure
+            .nodes_by_kind
+            .get(&kind)
+            .into_iter()
+            .flatten()
+            .filter_map(|id| self.node(*id))
+    }
+
+    pub(crate) fn rules_for_target(
+        &self,
+        id: SourceNodeId,
+    ) -> impl Iterator<Item = &RuleOccurrence> {
+        self.structure
+            .rules_by_target
+            .get(id.0 as usize)
+            .into_iter()
+            .flatten()
+            .filter_map(|rule| self.rule(*rule))
     }
 
     pub fn movable_span(&self, id: SourceNodeId) -> Option<ByteSpan> {
@@ -603,6 +844,19 @@ impl SourceNodeKind {
                 | Self::Placeholder
         )
     }
+
+    pub fn is_scope_container(self) -> bool {
+        matches!(
+            self,
+            Self::Module
+                | Self::TypeDef
+                | Self::Flow
+                | Self::Func
+                | Self::Ui
+                | Self::Steps
+                | Self::UiNode
+        )
+    }
 }
 
 fn splice_move(source: &str, chunk: ByteSpan, insert_at: u32) -> String {
@@ -671,6 +925,7 @@ pub(crate) fn build_document(
     };
     let rules = map_recorded_rules(&token_spans, recorded_rules, &nodes);
     let comments = attach_comments(&source, &pieces, &nodes, &paragraph_breaks);
+    let structure = DocumentStructureIndex::build(&nodes, &commitment_slots, &rules);
     LosslessDocument {
         source,
         semantic,
@@ -682,6 +937,7 @@ pub(crate) fn build_document(
         rules,
         comments,
         line_index,
+        structure,
     }
 }
 
@@ -2254,5 +2510,57 @@ type Status?: Active | Paid
             after.document.text(rule.span) == Some("rule \"environment only\"")
                 && rule.attachment == RuleAttachment::Environment
         }));
+    }
+
+    #[test]
+    fn structural_index_exposes_revision_local_hierarchy_slots_and_rules() {
+        let source = r#"module App:
+    rule "must report failure"
+    func Load?:
+        steps:
+            desc?? "读取文件"
+"#;
+        let parsed = parse_lossless(source);
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let document = &parsed.document;
+        let module = document
+            .nodes_of_kind(SourceNodeKind::Module)
+            .next()
+            .expect("module node")
+            .id;
+        let func = document
+            .nodes_of_kind(SourceNodeKind::Func)
+            .next()
+            .expect("func node")
+            .id;
+        let desc = document
+            .commitment_slots()
+            .iter()
+            .find(|slot| slot.semantic_slot && slot.value == Commitment::QuestionQuestion)
+            .and_then(|slot| slot.owner)
+            .expect("delegated desc owner");
+
+        assert_eq!(document.parent_node(func).map(|node| node.id), Some(module));
+        assert_eq!(document.parent_node(desc).map(|node| node.id), Some(func));
+        assert!(document.child_nodes(module).any(|node| node.id == func));
+        assert_eq!(document.scope_path(func), Some([module, func].as_slice()));
+        assert_eq!(document.scope_path(desc), Some([module, func].as_slice()));
+
+        let func_slots = document
+            .commitment_slots_for_owner(func)
+            .collect::<Vec<_>>();
+        assert!(func_slots
+            .iter()
+            .any(|slot| slot.value == Commitment::Question));
+        let desc_slots = document
+            .commitment_slots_for_owner(desc)
+            .collect::<Vec<_>>();
+        assert!(desc_slots
+            .iter()
+            .any(|slot| slot.value == Commitment::QuestionQuestion));
+
+        let attached = document.rules_for_target(func).collect::<Vec<_>>();
+        assert_eq!(attached.len(), 1);
+        assert_eq!(attached[0].attachment, RuleAttachment::Attached);
     }
 }

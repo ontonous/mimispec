@@ -64,6 +64,11 @@ enum Commands {
         #[command(subcommand)]
         command: UsabilityCommand,
     },
+    /// Check experimental Core-external provenance sidecars
+    Provenance {
+        #[command(subcommand)]
+        command: ProvenanceCommand,
+    },
     /// Parse .mms file(s) and show diagnostics
     Parse {
         /// .mms file(s) to parse; use - for stdin
@@ -80,6 +85,9 @@ enum Commands {
         /// .mms file(s) to analyze; use - for stdin
         #[arg(default_value = "-")]
         files: Vec<PathBuf>,
+        /// Preserve the 0.3 compatibility view with ungrouped queue items
+        #[arg(long)]
+        flat_queues: bool,
     },
     /// Plan materialization from commit-ready locked slots
     Materialize {
@@ -132,6 +140,18 @@ enum UsabilityCommand {
         /// Exit unsuccessfully unless every RC usability requirement is met
         #[arg(long)]
         require_complete: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum ProvenanceCommand {
+    /// Validate hashes, safe paths, exact slot locators, and drift
+    Check {
+        /// Path to a mimispec.provenance/0.1 JSON sidecar
+        manifest: PathBuf,
+        /// Explicit root containing every MMS/source path referenced by the sidecar
+        #[arg(long)]
+        source_root: PathBuf,
     },
 }
 
@@ -348,7 +368,7 @@ fn run_parse(files: &[PathBuf], ast: bool, json: bool, render: bool, latex: bool
     }
 }
 
-fn run_diagnose(files: &[PathBuf], json: bool) {
+fn run_diagnose(files: &[PathBuf], json: bool, flat_queues: bool) {
     let mut reports = Vec::new();
     let mut any_syntax_error = false;
 
@@ -374,7 +394,7 @@ fn run_diagnose(files: &[PathBuf], json: bool) {
                 "report": report,
             }));
         } else {
-            print_diagnose_report(path, &report);
+            print_diagnose_report(path, &report, flat_queues);
         }
     }
 
@@ -437,6 +457,48 @@ fn run_materialize(files: &[PathBuf], scope: &str, json: bool) {
 
     if any_error {
         std::process::exit(1);
+    }
+}
+
+fn run_provenance_check(manifest: &Path, source_root: &Path, json: bool) {
+    match mimispec::provenance::check_manifest_path(manifest, source_root) {
+        Ok(report) => {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&report).unwrap_or_else(|error| {
+                        format!("{{\"error\":\"JSON serialization failed: {error}\"}}")
+                    })
+                );
+            } else {
+                println!(
+                    "provenance: valid={} checked_links={} schema={}",
+                    report.valid, report.checked_links, report.schema_version
+                );
+                for finding in &report.findings {
+                    println!(
+                        "  - {}{}: {}",
+                        finding.code,
+                        finding
+                            .link_index
+                            .map(|index| format!(" [link {index}]"))
+                            .unwrap_or_default(),
+                        finding.message
+                    );
+                }
+            }
+            if !report.valid {
+                std::process::exit(1);
+            }
+        }
+        Err(error) => {
+            if json {
+                println!("{}", serde_json::json!({ "error": error }));
+            } else {
+                eprintln!("Provenance check failed: {error}");
+            }
+            std::process::exit(1);
+        }
     }
 }
 
@@ -644,7 +706,11 @@ fn print_materialize_plan(path: &Path, plan: &mimispec::materialize::Materializa
     println!();
 }
 
-fn print_diagnose_report(path: &Path, report: &mimispec::diagnostics::DocumentDiagnostics) {
+fn print_diagnose_report(
+    path: &Path,
+    report: &mimispec::diagnostics::DocumentDiagnostics,
+    flat_queues: bool,
+) {
     println!("== {} ==", path.display());
     println!(
         "summary: slots={} commit_ready={} decision={} delegation={}",
@@ -653,17 +719,24 @@ fn print_diagnose_report(path: &Path, report: &mimispec::diagnostics::DocumentDi
         report.decision_queue.len(),
         report.delegation_queue.len()
     );
-    if !report.decision_queue.is_empty() {
+    if flat_queues && !report.decision_queue.is_empty() {
         println!("decision queue:");
         for item in &report.decision_queue {
             println!("  - [{}] {}", item.state, item.header.trim());
         }
     }
-    if !report.delegation_queue.is_empty() {
+    if flat_queues && !report.delegation_queue.is_empty() {
         println!("delegation queue:");
         for item in &report.delegation_queue {
             println!("  - [{}] {}", item.state, item.header.trim());
         }
+    }
+    if !flat_queues
+        && (report.queue_tree.root.decision_count > 0
+            || report.queue_tree.root.delegation_count > 0)
+    {
+        println!("queues by scope:");
+        print_queue_scope(&report.queue_tree.root, 1);
     }
     if !report.diagnostics.is_empty() {
         println!("diagnostics:");
@@ -678,6 +751,20 @@ fn print_diagnose_report(path: &Path, report: &mimispec::diagnostics::DocumentDi
         }
     }
     println!();
+}
+
+fn print_queue_scope(scope: &mimispec::diagnostics::QueueScopeNode, depth: usize) {
+    let indent = "  ".repeat(depth);
+    println!(
+        "{indent}{} [decision={} delegation={}]",
+        scope.header, scope.decision_count, scope.delegation_count
+    );
+    for item in &scope.items {
+        println!("{indent}  - [{}] {}", item.state, item.anchor);
+    }
+    for child in &scope.children {
+        print_queue_scope(child, depth + 1);
+    }
 }
 
 fn run_build(dir: &Path) {
@@ -849,8 +936,9 @@ fn main() {
                     if cli.json {
                         println!(
                             "{}",
-                                serde_json::to_string_pretty(&report)
-                                    .unwrap_or_else(|e| format!("{{\"error\": \"usability report serialization failed: {e}\"}}"))
+                            serde_json::to_string_pretty(&report).unwrap_or_else(|e| format!(
+                                "{{\"error\": \"usability report serialization failed: {e}\"}}"
+                            ))
                         );
                     } else {
                         println!(
@@ -875,14 +963,20 @@ fn main() {
                 }
             },
         },
+        Some(Commands::Provenance { command }) => match command {
+            ProvenanceCommand::Check {
+                manifest,
+                source_root,
+            } => run_provenance_check(manifest, source_root, cli.json),
+        },
         Some(Commands::Parse { files }) => {
             run_parse(files, cli.ast, cli.json, cli.render, cli.latex);
         }
         Some(Commands::Build { dir }) => {
             run_build(dir);
         }
-        Some(Commands::Diagnose { files }) => {
-            run_diagnose(files, cli.json);
+        Some(Commands::Diagnose { files, flat_queues }) => {
+            run_diagnose(files, cli.json, *flat_queues);
         }
         Some(Commands::Materialize { files, scope }) => {
             run_materialize(files, scope, cli.json);
@@ -899,7 +993,7 @@ fn main() {
         }
         None => {
             if cli.diagnostics {
-                run_diagnose(&cli.files, cli.json);
+                run_diagnose(&cli.files, cli.json, false);
             } else {
                 // Flat args = parse behavior (backward compatible)
                 run_parse(&cli.files, cli.ast, cli.json, cli.render, cli.latex);

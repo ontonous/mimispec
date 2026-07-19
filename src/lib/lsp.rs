@@ -5,8 +5,9 @@ use std::io::{self, BufRead, BufReader, Write};
 
 use serde_json::{json, Map, Value};
 
+use crate::ast::{LockIntent, ReviewIntent};
 use crate::collaboration::{collect_semantic_slot_snapshots, Actor, HumanAuthorization};
-use crate::diagnostics::Severity;
+use crate::diagnostics::{syntax_quick_fixes, Severity};
 use crate::ide::{navigation_at_position, NavigationKind, SemanticTokenKind};
 use crate::lossless::{ByteSpan, ColumnEncoding, SourcePosition};
 use crate::session::{
@@ -150,6 +151,7 @@ impl LanguageServer {
             "textDocument/references" => vec![self.references(id, params)],
             "textDocument/codeAction" => vec![self.code_actions(id, params)],
             "mimispec/documentSnapshot" => vec![self.document_snapshot(id, params)],
+            "mimispec/prepareQueueBatch" => vec![self.prepare_queue_batch(id, params)],
             "mimispec/applyDocumentEdit" => vec![self.apply_document_edit(id, params)],
             "mimispec/issueUnlockToken" => vec![self.issue_unlock_token(id, params)],
             "mimispec/adoptObservedRevision" => vec![self.adopt_observed(id, params)],
@@ -387,19 +389,30 @@ impl LanguageServer {
         ) else {
             return success(id, json!([]));
         };
-        let Some(node) = session
+        let mut actions = syntax_quick_fixes(session.source(), session.errors())
+            .into_iter()
+            .filter(|fix| fix.span.start <= offset && offset <= fix.span.end)
+            .map(|fix| {
+                json!({
+                    "title": fix.title,
+                    "kind": "quickfix",
+                    "edit": workspace_edit_for_spans(uri, session, &[(fix.span, fix.replacement)]),
+                    "data": {
+                        "schemaVersion": LANGUAGE_SERVICE_SCHEMA_VERSION,
+                        "uri": uri,
+                        "syntaxRecovery": true
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        if let Some(node) = session
             .document()
             .nodes()
             .iter()
             .filter(|node| node.spans.core.start <= offset && offset <= node.spans.core.end)
             .min_by_key(|node| node.spans.core.len())
-        else {
-            return success(id, json!([]));
-        };
-        let actions = session
-            .code_actions(node.id)
-            .into_iter()
-            .map(|action| {
+        {
+            actions.extend(session.code_actions(node.id).into_iter().map(|action| {
                 let mut value = json!({
                     "title": action.title,
                     "kind": "quickfix",
@@ -418,8 +431,8 @@ impl LanguageServer {
                         json!({ "reason": action.reason.unwrap_or_else(|| "not allowed".into()) });
                 }
                 value
-            })
-            .collect::<Vec<_>>();
+            }));
+        }
         success(id, Value::Array(actions))
     }
 
@@ -442,10 +455,197 @@ impl LanguageServer {
                 "session": session.snapshot(),
                 "decision_queue": session.diagnostics().decision_queue,
                 "delegation_queue": session.diagnostics().delegation_queue,
+                "queue_tree": session.diagnostics().queue_tree,
                 "confirmed_intent": confirmed,
                 "lock_challenges": session.lock_challenges()
             }),
         )
+    }
+
+    fn prepare_queue_batch(&mut self, id: Option<Value>, params: Value) -> Value {
+        let Some(uri) = document_uri(&params) else {
+            return rpc_error(id, -32602, "missing document URI");
+        };
+        let Some(authoritative_version) = self
+            .sessions
+            .get(uri)
+            .map(DocumentSession::authoritative_version)
+        else {
+            return rpc_error(id, -32002, "document is not open");
+        };
+        let Some(base_version) = parse_base_version(&params) else {
+            return success(
+                id,
+                wire_rejection(
+                    authoritative_version,
+                    "C-INVALID-EDIT",
+                    "base_version is required and must be a positive integer",
+                ),
+            );
+        };
+        if base_version != authoritative_version {
+            return success(
+                id,
+                wire_rejection(
+                    authoritative_version,
+                    "C-STALE-REVISION",
+                    "base_version does not match the current authoritative revision",
+                ),
+            );
+        }
+        if params.get("actor").and_then(Value::as_str) != Some("human") {
+            return success(
+                id,
+                wire_rejection(
+                    authoritative_version,
+                    "C-ACTOR-REQUIRED",
+                    "queue batches may only be prepared by actor: human",
+                ),
+            );
+        }
+        let Some(target_text) = params.get("target").and_then(Value::as_str) else {
+            return success(
+                id,
+                wire_rejection(
+                    authoritative_version,
+                    "C-INVALID-EDIT",
+                    "target is required and must be none, ?, or $",
+                ),
+            );
+        };
+        let replacement = match target_text {
+            "none" => "",
+            "?" => "?",
+            "$" => "$",
+            _ => {
+                return success(
+                    id,
+                    wire_rejection(
+                        authoritative_version,
+                        "C-INVALID-EDIT",
+                        "target must be one of none, ?, or $",
+                    ),
+                );
+            }
+        };
+        let Some(raw_slots) = params.get("slot_ids").and_then(Value::as_array) else {
+            return success(
+                id,
+                wire_rejection(
+                    authoritative_version,
+                    "C-INVALID-EDIT",
+                    "slot_ids is required and must be a non-empty array",
+                ),
+            );
+        };
+        if raw_slots.is_empty() {
+            return success(
+                id,
+                wire_rejection(
+                    authoritative_version,
+                    "C-INVALID-EDIT",
+                    "slot_ids must not be empty",
+                ),
+            );
+        }
+        let mut slot_ids = Vec::with_capacity(raw_slots.len());
+        let mut unique = std::collections::HashSet::new();
+        for raw in raw_slots {
+            let Some(slot) = raw.as_u64().and_then(|slot| u32::try_from(slot).ok()) else {
+                return success(
+                    id,
+                    wire_rejection(
+                        authoritative_version,
+                        "C-INVALID-EDIT",
+                        "slot_ids must contain only unsigned 32-bit integers",
+                    ),
+                );
+            };
+            if !unique.insert(slot) {
+                return success(
+                    id,
+                    wire_rejection(
+                        authoritative_version,
+                        "C-INVALID-EDIT",
+                        "slot_ids must not contain duplicates",
+                    ),
+                );
+            }
+            slot_ids.push(crate::lossless::CommitmentSlotId(slot));
+        }
+
+        let Some(session) = self.sessions.get_mut(uri) else {
+            return rpc_error(id, -32002, "document is not open");
+        };
+        let document = session.authoritative_document();
+        let mut edits = Vec::with_capacity(slot_ids.len());
+        for slot_id in &slot_ids {
+            let Some(slot) = document
+                .commitment_slot(*slot_id)
+                .filter(|slot| slot.semantic_slot)
+            else {
+                return success(
+                    id,
+                    wire_rejection(
+                        authoritative_version,
+                        "C-INVALID-EDIT",
+                        "every slot_id must identify a current authoritative semantic slot",
+                    ),
+                );
+            };
+            if slot.value.review_intent() == ReviewIntent::None {
+                return success(
+                    id,
+                    wire_rejection(
+                        authoritative_version,
+                        "C-INVALID-TRANSITION",
+                        "queue batches accept only current review or delegation slots",
+                    ),
+                );
+            }
+            if slot.value.lock_intent() == LockIntent::StrongLocked {
+                return success(
+                    id,
+                    wire_rejection(
+                        authoritative_version,
+                        "C-STRONG-UNLOCK-REQUIRED",
+                        "strong-lock-family slots cannot participate in a queue batch",
+                    ),
+                );
+            }
+            let Some(range) =
+                text_range_for_span(document, session.authoritative_source(), slot.suffix_span)
+            else {
+                return success(
+                    id,
+                    wire_rejection(
+                        authoritative_version,
+                        "C-INVALID-EDIT",
+                        "slot suffix could not be represented as a UTF-16 range",
+                    ),
+                );
+            };
+            edits.push(SessionTextEdit {
+                range: Some(range),
+                text: replacement.into(),
+            });
+        }
+
+        let response = session.prepare_edit(DocumentEditRequest {
+            base_version,
+            actor: Actor::Human,
+            edits: edits.clone(),
+            authorization: HumanAuthorization::default(),
+            unlock_tokens: Vec::new(),
+            challenge_reason: None,
+        });
+        let mut value = serde_json::to_value(&response).unwrap_or(Value::Null);
+        if response.accepted {
+            value["target"] = json!(target_text);
+            value["slot_ids"] = json!(slot_ids.iter().map(|slot| slot.0).collect::<Vec<_>>());
+            value["workspace_edit"] = workspace_edit(uri, session, &edits);
+        }
+        success(id, value)
     }
 
     fn apply_document_edit(&mut self, id: Option<Value>, params: Value) -> Value {
@@ -473,11 +673,16 @@ impl LanguageServer {
                 ),
             );
         };
-        let base_version = params
-            .get("base_version")
-            .or_else(|| params.get("baseVersion"))
-            .and_then(Value::as_u64)
-            .unwrap_or(0);
+        let Some(base_version) = parse_base_version(&params) else {
+            return success(
+                id,
+                wire_rejection(
+                    authoritative_version,
+                    "C-INVALID-EDIT",
+                    "base_version is required and must be a positive integer",
+                ),
+            );
+        };
         let (edits, edit_errors): (Vec<SessionTextEdit>, Vec<&'static str>) = params
             .get("edits")
             .and_then(Value::as_array)
@@ -494,31 +699,33 @@ impl LanguageServer {
                 )
             })
             .unwrap_or_default();
-        let authorization = HumanAuthorization {
-            modify_protected: params
-                .pointer("/authorization/modify_protected")
-                .or_else(|| params.pointer("/authorization/modifyProtected"))
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
-            unlock_strong_lock: false,
+        let authorization = match parse_authorization(&params) {
+            Ok(authorization) => authorization,
+            Err(message) => {
+                return success(
+                    id,
+                    wire_rejection(authoritative_version, "C-INVALID-EDIT", message),
+                );
+            }
         };
-        let unlock_tokens = params
-            .get("unlock_tokens")
-            .or_else(|| params.get("unlockTokens"))
-            .and_then(Value::as_array)
-            .map(|tokens| {
-                tokens
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(str::to_string)
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        let challenge_reason = params
-            .get("challenge_reason")
-            .or_else(|| params.get("challengeReason"))
-            .and_then(Value::as_str)
-            .map(str::to_string);
+        let unlock_tokens = match parse_string_array(&params, "unlock_tokens") {
+            Ok(tokens) => tokens,
+            Err(message) => {
+                return success(
+                    id,
+                    wire_rejection(authoritative_version, "C-INVALID-EDIT", message),
+                );
+            }
+        };
+        let challenge_reason = match parse_optional_string(&params, "challenge_reason") {
+            Ok(reason) => reason,
+            Err(message) => {
+                return success(
+                    id,
+                    wire_rejection(authoritative_version, "C-INVALID-EDIT", message),
+                );
+            }
+        };
         let Some(session) = self.sessions.get_mut(uri) else {
             return rpc_error(id, -32002, "document is not open");
         };
@@ -567,10 +774,7 @@ impl LanguageServer {
             .get("actor")
             .and_then(Value::as_str)
             .and_then(parse_actor);
-        let base_version = params
-            .get("base_version")
-            .or_else(|| params.get("baseVersion"))
-            .and_then(Value::as_u64);
+        let base_version = parse_base_version(&params);
         let slot = params
             .get("slot")
             .and_then(Value::as_u64)
@@ -642,29 +846,34 @@ impl LanguageServer {
         let Some(session) = self.sessions.get_mut(uri) else {
             return rpc_error(id, -32002, "document is not open");
         };
-        let base_version = params
-            .get("base_version")
-            .or_else(|| params.get("baseVersion"))
-            .and_then(Value::as_u64)
-            .unwrap_or(0);
-        let authorization = HumanAuthorization {
-            modify_protected: params
-                .pointer("/authorization/modify_protected")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
-            unlock_strong_lock: false,
+        let Some(base_version) = parse_base_version(&params) else {
+            return success(
+                id,
+                wire_rejection(
+                    session.authoritative_version(),
+                    "C-INVALID-EDIT",
+                    "base_version is required and must be a positive integer",
+                ),
+            );
         };
-        let tokens = params
-            .get("unlock_tokens")
-            .and_then(Value::as_array)
-            .map(|tokens| {
-                tokens
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(str::to_string)
-                    .collect::<Vec<String>>()
-            })
-            .unwrap_or_default();
+        let authorization = match parse_authorization(&params) {
+            Ok(authorization) => authorization,
+            Err(message) => {
+                return success(
+                    id,
+                    wire_rejection(session.authoritative_version(), "C-INVALID-EDIT", message),
+                );
+            }
+        };
+        let tokens = match parse_string_array(&params, "unlock_tokens") {
+            Ok(tokens) => tokens,
+            Err(message) => {
+                return success(
+                    id,
+                    wire_rejection(session.authoritative_version(), "C-INVALID-EDIT", message),
+                );
+            }
+        };
         match actor {
             Some(actor) => {
                 match session.adopt_observed(base_version, actor, authorization, &tokens) {
@@ -707,10 +916,16 @@ impl LanguageServer {
         let Some(session) = self.sessions.get_mut(uri) else {
             return rpc_error(id, -32002, "document is not open");
         };
-        let base_version = params
-            .get("base_version")
-            .and_then(Value::as_u64)
-            .unwrap_or(0);
+        let Some(base_version) = parse_base_version(&params) else {
+            return success(
+                id,
+                wire_rejection(
+                    session.authoritative_version(),
+                    "C-INVALID-EDIT",
+                    "base_version is required and must be a positive integer",
+                ),
+            );
+        };
         let actor = params
             .get("actor")
             .and_then(Value::as_str)
@@ -852,11 +1067,17 @@ fn document_uri(params: &Value) -> Option<&str> {
 }
 
 fn text_document_position(params: &Value) -> Option<(&str, TextPosition)> {
+    let line = params
+        .pointer("/position/line")
+        .or_else(|| params.pointer("/range/start/line"))?;
+    let character = params
+        .pointer("/position/character")
+        .or_else(|| params.pointer("/range/start/character"))?;
     Some((
         document_uri(params)?,
         TextPosition {
-            line: u32::try_from(params.pointer("/position/line")?.as_u64()?).ok()?,
-            character: u32::try_from(params.pointer("/position/character")?.as_u64()?).ok()?,
+            line: u32::try_from(line.as_u64()?).ok()?,
+            character: u32::try_from(character.as_u64()?).ok()?,
         },
     ))
 }
@@ -914,6 +1135,57 @@ fn parse_text_edit(value: &Value) -> Result<SessionTextEdit, &'static str> {
     Ok(SessionTextEdit { range, text })
 }
 
+fn parse_authorization(params: &Value) -> Result<HumanAuthorization, &'static str> {
+    let authorization = params
+        .get("authorization")
+        .and_then(Value::as_object)
+        .ok_or("authorization is required and must be an object")?;
+    let modify_protected = authorization
+        .get("modify_protected")
+        .and_then(Value::as_bool)
+        .ok_or("authorization.modify_protected is required and must be boolean")?;
+    if authorization.keys().any(|key| key != "modify_protected") {
+        return Err("authorization contains an unsupported field");
+    }
+    Ok(HumanAuthorization {
+        modify_protected,
+        unlock_strong_lock: false,
+    })
+}
+
+fn parse_base_version(params: &Value) -> Option<u64> {
+    params
+        .get("base_version")
+        .and_then(Value::as_u64)
+        .filter(|version| *version > 0)
+}
+
+fn parse_string_array(params: &Value, field: &'static str) -> Result<Vec<String>, &'static str> {
+    let values = params
+        .get(field)
+        .and_then(Value::as_array)
+        .ok_or("unlock_tokens is required and must be an array")?;
+    if !values.iter().all(Value::is_string) {
+        return Err("unlock_tokens must contain only strings");
+    }
+    Ok(values
+        .iter()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect())
+}
+
+fn parse_optional_string(
+    params: &Value,
+    field: &'static str,
+) -> Result<Option<String>, &'static str> {
+    match params.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) => Ok(Some(value.clone())),
+        Some(_) => Err("challenge_reason must be a string or null"),
+    }
+}
+
 fn parse_actor(actor: &str) -> Option<Actor> {
     match actor.to_ascii_lowercase().as_str() {
         "human" => Some(Actor::Human),
@@ -948,6 +1220,48 @@ fn span_range(session: &DocumentSession, span: ByteSpan) -> Value {
         }),
         _ => zero_range(),
     }
+}
+
+fn text_range_for_span(
+    document: &crate::lossless::LosslessDocument,
+    source: &str,
+    span: ByteSpan,
+) -> Option<TextRange> {
+    let start = document
+        .line_index()
+        .position(source, span.start, ColumnEncoding::Utf16)?;
+    let end = document
+        .line_index()
+        .position(source, span.end, ColumnEncoding::Utf16)?;
+    Some(TextRange {
+        start: TextPosition {
+            line: start.line,
+            character: start.column,
+        },
+        end: TextPosition {
+            line: end.line,
+            character: end.column,
+        },
+    })
+}
+
+fn workspace_edit_for_spans(
+    uri: &str,
+    session: &DocumentSession,
+    edits: &[(ByteSpan, String)],
+) -> Value {
+    let edits = edits
+        .iter()
+        .map(|(span, replacement)| {
+            json!({
+                "range": span_range(session, *span),
+                "newText": replacement
+            })
+        })
+        .collect::<Vec<_>>();
+    let mut changes = Map::new();
+    changes.insert(uri.into(), Value::Array(edits));
+    json!({ "changes": changes })
 }
 
 fn zero_range() -> Value {
@@ -1151,5 +1465,163 @@ mod tests {
         );
         assert_eq!(response(4)["result"]["accepted"], true);
         assert!(response(4)["result"]["workspace_edit"].is_object());
+    }
+
+    #[test]
+    fn custom_requests_reject_missing_frozen_fields() {
+        let uri = "file:///required-fields.mms";
+        let replacement = json!({ "range": null, "text": "desc \"updated\"\n" });
+        let responses = run_json_transcript(&[
+            json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {} }),
+            json!({ "jsonrpc": "2.0", "method": "textDocument/didOpen", "params": { "textDocument": { "uri": uri, "version": 1, "languageId": "mimispec", "text": "desc \"draft\"\n" } } }),
+            json!({ "jsonrpc": "2.0", "id": 2, "method": "mimispec/applyDocumentEdit", "params": { "uri": uri, "base_version": 1, "actor": "human", "edits": [replacement.clone()], "unlock_tokens": [] } }),
+            json!({ "jsonrpc": "2.0", "id": 3, "method": "mimispec/applyDocumentEdit", "params": { "uri": uri, "base_version": 1, "actor": "human", "edits": [replacement.clone()], "authorization": { "modify_protected": false } } }),
+            json!({ "jsonrpc": "2.0", "id": 4, "method": "mimispec/applyDocumentEdit", "params": { "uri": uri, "actor": "human", "edits": [replacement], "authorization": { "modify_protected": false }, "unlock_tokens": [] } }),
+            json!({ "jsonrpc": "2.0", "id": 5, "method": "mimispec/adoptObservedRevision", "params": { "uri": uri, "base_version": 1, "actor": "human" } }),
+            json!({ "jsonrpc": "2.0", "id": 6, "method": "mimispec/adoptObservedRevision", "params": { "uri": uri, "base_version": 1, "actor": "human", "authorization": { "modify_protected": false } } }),
+            json!({ "jsonrpc": "2.0", "id": 7, "method": "mimispec/restoreAuthoritativeRevision", "params": { "uri": uri, "actor": "human" } }),
+            json!({ "jsonrpc": "2.0", "id": 8, "method": "mimispec/issueUnlockToken", "params": { "uri": uri, "actor": "human", "slot": 0 } }),
+            json!({ "jsonrpc": "2.0", "id": 9, "method": "shutdown", "params": null }),
+            json!({ "jsonrpc": "2.0", "method": "exit", "params": null }),
+        ])
+        .unwrap();
+
+        for id in 2..=8 {
+            let response = responses
+                .iter()
+                .find(|message| message["id"] == id)
+                .unwrap();
+            assert_eq!(
+                response["result"]["violations"][0]["code"], "C-INVALID-EDIT",
+                "request {id} unexpectedly passed frozen-field validation: {response}"
+            );
+        }
+    }
+
+    #[test]
+    fn syntax_code_actions_return_standard_workspace_edits() {
+        let uri = "file:///action-recovery.mms";
+        let mut server = LanguageServer::default();
+        server.handle(json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/didOpen",
+            "params": { "textDocument": {
+                "uri": uri,
+                "version": 1,
+                "languageId": "mimispec",
+                "text": "func Work:\n    steps:\n        bind and listen on\n"
+            }}
+        }));
+        let response = server.handle(json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "textDocument/codeAction",
+            "params": {
+                "textDocument": { "uri": uri },
+                "range": {
+                    "start": { "line": 2, "character": 10 },
+                    "end": { "line": 2, "character": 10 }
+                },
+                "position": { "line": 2, "character": 10 },
+                "context": { "diagnostics": [] }
+            }
+        }));
+        let actions = response[0]["result"].as_array().unwrap();
+        let syntax = actions
+            .iter()
+            .filter(|action| action.pointer("/data/syntaxRecovery") == Some(&Value::Bool(true)))
+            .collect::<Vec<_>>();
+        assert_eq!(syntax.len(), 2, "{actions:?}");
+        assert!(syntax.iter().all(|action| action["edit"]["changes"][uri]
+            .as_array()
+            .is_some_and(|edits| edits.len() == 1)));
+    }
+
+    #[test]
+    fn queue_batch_is_human_atomic_slot_precise_and_confirmable() {
+        let uri = "file:///队列.mms";
+        let source = "desc?? \"需要 AI 完善\"\nfunc? Work: ...\nrule$$? \"强锁审阅\"\n";
+        let mut server = LanguageServer::default();
+        server.handle(json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/didOpen",
+            "params": { "textDocument": {
+                "uri": uri, "version": 1, "languageId": "mimispec", "text": source
+            }}
+        }));
+        let session = server.sessions.get(uri).unwrap();
+        let ordinary = session
+            .diagnostics()
+            .decision_queue
+            .iter()
+            .chain(&session.diagnostics().delegation_queue)
+            .filter(|item| item.state.lock_intent() != LockIntent::StrongLocked)
+            .map(|item| item.slot.0)
+            .collect::<Vec<_>>();
+        let strong = session
+            .diagnostics()
+            .decision_queue
+            .iter()
+            .find(|item| item.state.lock_intent() == LockIntent::StrongLocked)
+            .unwrap()
+            .slot
+            .0;
+        assert_eq!(ordinary.len(), 2);
+
+        let request = |id: u64, actor: &str, base: u64, slots: Vec<u32>| {
+            json!({
+                "jsonrpc": "2.0", "id": id, "method": "mimispec/prepareQueueBatch",
+                "params": {
+                    "uri": uri, "base_version": base, "actor": actor,
+                    "slot_ids": slots, "target": "$"
+                }
+            })
+        };
+        let stale = server.handle(request(1, "human", 99, ordinary.clone()));
+        assert_eq!(
+            stale[0]["result"]["violations"][0]["code"],
+            "C-STALE-REVISION"
+        );
+        let ai = server.handle(request(2, "ai", 1, ordinary.clone()));
+        assert_eq!(ai[0]["result"]["violations"][0]["code"], "C-ACTOR-REQUIRED");
+        let duplicate = server.handle(request(3, "human", 1, vec![ordinary[0], ordinary[0]]));
+        assert_eq!(duplicate[0]["result"]["accepted"], false);
+        let unknown = server.handle(request(4, "human", 1, vec![u32::MAX]));
+        assert_eq!(unknown[0]["result"]["accepted"], false);
+        let mixed = server.handle(request(5, "human", 1, vec![ordinary[0], strong]));
+        assert_eq!(
+            mixed[0]["result"]["violations"][0]["code"],
+            "C-STRONG-UNLOCK-REQUIRED"
+        );
+        assert!(server
+            .sessions
+            .get(uri)
+            .unwrap()
+            .pending_transaction_id()
+            .is_none());
+
+        let accepted = server.handle(request(6, "human", 1, ordinary.clone()));
+        assert_eq!(accepted[0]["result"]["accepted"], true, "{accepted:?}");
+        assert!(accepted[0]["result"]["transaction_id"].is_string());
+        assert_eq!(
+            accepted[0]["result"]["workspace_edit"]["changes"][uri]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+
+        let confirmed_source = "desc$ \"需要 AI 完善\"\nfunc$ Work: ...\nrule$$? \"强锁审阅\"\n";
+        server.handle(json!({
+            "jsonrpc": "2.0", "method": "textDocument/didChange",
+            "params": {
+                "textDocument": { "uri": uri, "version": 2 },
+                "contentChanges": [{ "text": confirmed_source }]
+            }
+        }));
+        let session = server.sessions.get(uri).unwrap();
+        assert_eq!(session.authoritative_version(), 2);
+        assert!(session.pending_transaction_id().is_none());
+        assert_eq!(session.authoritative_source(), confirmed_source);
     }
 }

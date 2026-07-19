@@ -1,8 +1,9 @@
 use serde::Serialize;
 
 use crate::ast::Commitment;
-use crate::collaboration::{collect_slot_snapshots, protected_hashes, ContentHash};
-use crate::lossless::{ByteSpan, LosslessDocument, SourceNodeId, SourceNodeKind};
+use crate::collaboration::{collect_semantic_slot_snapshots, ContentHash};
+use crate::lossless::{ByteSpan, CommitmentSlotId, LosslessDocument, SourceNodeId, SourceNodeKind};
+use crate::provenance::{resolve_locator_identity, slot_locator, SlotLocator};
 
 /// How a materialization slot entered the current plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -19,7 +20,9 @@ pub enum Provenance {
 /// One locked (or intentionally open) slot considered for materialization.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MaterializationSlot {
+    pub slot: CommitmentSlotId,
     pub node: SourceNodeId,
+    pub locator: SlotLocator,
     pub kind: SourceNodeKind,
     pub header: String,
     pub state: Commitment,
@@ -41,7 +44,8 @@ pub struct CommitSelection {
 /// Evidence never changes commitment. `$`/`$$` remain human intent only.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct EvidenceRecord {
-    pub slot: SourceNodeId,
+    pub slot: CommitmentSlotId,
+    pub locator: SlotLocator,
     pub kind: EvidenceKind,
     pub status: EvidenceStatus,
     pub summary: String,
@@ -79,7 +83,8 @@ pub struct MaterializationPlan {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DriftFinding {
-    pub slot: SourceNodeId,
+    pub slot: CommitmentSlotId,
+    pub locator: SlotLocator,
     pub expected_hash: ContentHash,
     pub observed_hash: ContentHash,
     pub message: String,
@@ -96,23 +101,9 @@ pub fn select_commit_ready(
     include_unresolved: bool,
 ) -> CommitSelection {
     let mut slots = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    for snapshot in collect_slot_snapshots(document) {
+    for snapshot in collect_semantic_slot_snapshots(document) {
         let commit_ready = snapshot.state.is_commit_ready();
         if !commit_ready && !include_unresolved {
-            continue;
-        }
-        // Prefer top-level Fragment kinds for materialization selection/display.
-        if !snapshot.kind.is_top_level_fragment() {
-            continue;
-        }
-        let identity = format!(
-            "{:?}:{}:{:?}",
-            snapshot.kind,
-            strip_suffixes(&snapshot.header),
-            snapshot.state
-        );
-        if !seen.insert(identity) {
             continue;
         }
         let provenance = if commit_ready {
@@ -124,18 +115,20 @@ pub fn select_commit_ready(
         } else {
             Provenance::Unresolved
         };
-        let span = document
-            .node(snapshot.node)
-            .map(|node| node.spans.full)
-            .unwrap_or(ByteSpan::new(0, 0));
+        let span = ByteSpan {
+            start: snapshot.anchor_span.start,
+            end: snapshot.suffix_span.end.max(snapshot.anchor_span.end),
+        };
         slots.push(MaterializationSlot {
+            slot: snapshot.slot,
             node: snapshot.node,
+            locator: slot_locator(document, &snapshot),
             kind: snapshot.kind,
             header: snapshot.header,
             state: snapshot.state,
             provenance,
             commit_ready,
-            content_hash: snapshot.hashes.content,
+            content_hash: snapshot.protected_hash,
             span,
         });
     }
@@ -162,7 +155,8 @@ pub fn plan_materialization(
         .slots
         .iter()
         .map(|slot| EvidenceRecord {
-            slot: slot.node,
+            slot: slot.slot,
+            locator: slot.locator.clone(),
             kind: EvidenceKind::Parsed,
             status: EvidenceStatus::Passed,
             summary: format!("selected {} as commit-ready", slot.header.trim()),
@@ -202,18 +196,11 @@ pub fn detect_drift(baseline: &CommitSelection, current: &LosslessDocument) -> V
         if !slot.commit_ready {
             continue;
         }
-        let Some(current_hashes) = protected_hashes(current, slot.node).or_else(|| {
-            // Node IDs are revision-local; fall back to kind+header identity.
-            collect_slot_snapshots(current)
-                .into_iter()
-                .find(|candidate| {
-                    candidate.kind == slot.kind
-                        && strip_suffixes(&candidate.header) == strip_suffixes(&slot.header)
-                })
-                .map(|candidate| candidate.hashes)
-        }) else {
+        let matches = resolve_locator_identity(current, &slot.locator);
+        let Some(current_slot) = matches.first() else {
             findings.push(DriftFinding {
-                slot: slot.node,
+                slot: slot.slot,
+                locator: slot.locator.clone(),
                 expected_hash: slot.content_hash,
                 observed_hash: ContentHash(0),
                 message: format!(
@@ -223,11 +210,26 @@ pub fn detect_drift(baseline: &CommitSelection, current: &LosslessDocument) -> V
             });
             continue;
         };
-        if current_hashes.content != slot.content_hash {
+        if matches.len() > 1 {
             findings.push(DriftFinding {
-                slot: slot.node,
+                slot: slot.slot,
+                locator: slot.locator.clone(),
                 expected_hash: slot.content_hash,
-                observed_hash: current_hashes.content,
+                observed_hash: ContentHash(0),
+                message: format!(
+                    "locked slot `{}` locator is ambiguous across {} current slots",
+                    slot.header.trim(),
+                    matches.len()
+                ),
+            });
+            continue;
+        }
+        if current_slot.protected_hash != slot.content_hash {
+            findings.push(DriftFinding {
+                slot: slot.slot,
+                locator: slot.locator.clone(),
+                expected_hash: slot.content_hash,
+                observed_hash: current_slot.protected_hash,
                 message: format!(
                     "locked slot `{}` content drifted from selected hash",
                     slot.header.trim()
@@ -255,30 +257,6 @@ pub fn validate_plan(plan: &MaterializationPlan) -> Result<(), String> {
         }
     }
     Ok(())
-}
-
-fn strip_suffixes(header: &str) -> String {
-    header
-        .split_inclusive(|ch: char| {
-            ch.is_whitespace() || matches!(ch, ':' | '(' | ')' | '[' | ']' | ',' | '|')
-        })
-        .map(|part| {
-            let (token, sep) = match part.chars().last() {
-                Some(ch)
-                    if ch.is_whitespace()
-                        || matches!(ch, ':' | '(' | ')' | '[' | ']' | ',' | '|') =>
-                {
-                    (&part[..part.len() - ch.len_utf8()], ch.to_string())
-                }
-                _ => (part, String::new()),
-            };
-            let stripped = ["$$??", "$??", "$$?", "$?", "$$", "$", "??", "?"]
-                .into_iter()
-                .find_map(|suffix| token.strip_suffix(suffix))
-                .unwrap_or(token);
-            format!("{stripped}{sep}")
-        })
-        .collect()
 }
 
 #[cfg(test)]
@@ -341,7 +319,7 @@ func Draft??:
     #[test]
     fn drift_detection_flags_changed_locked_content() {
         let before = parse_lossless(
-            r#"func Pay$:
+            r#"func Pay$$:
     steps:
         charge payment
 "#,
@@ -349,7 +327,7 @@ func Draft??:
         .document;
         let selection = select_commit_ready(&before, "pay", false);
         let after = parse_lossless(
-            r#"func Pay$:
+            r#"func Pay$$:
     steps:
         charge twice
 "#,
@@ -360,6 +338,36 @@ func Draft??:
         assert!(findings
             .iter()
             .any(|finding| finding.expected_hash != finding.observed_hash));
+    }
+
+    #[test]
+    fn drift_detection_does_not_reuse_revision_local_ids_after_reorder() {
+        let before = parse_lossless(
+            r#"func Pay$:
+    steps:
+        charge payment
+
+func Refund$:
+    steps:
+        issue refund
+"#,
+        )
+        .document;
+        let selection = select_commit_ready(&before, "payments", false);
+        let reordered = parse_lossless(
+            r#"func Refund$:
+    steps:
+        issue refund
+
+func Pay$:
+    steps:
+        charge payment
+"#,
+        )
+        .document;
+
+        let findings = detect_drift(&selection, &reordered);
+        assert!(findings.is_empty(), "{findings:?}");
     }
 
     #[test]
@@ -379,5 +387,21 @@ func Draft??:
         assert_eq!(slot.provenance, Provenance::TargetDerived);
         assert!(!slot.commit_ready);
         assert!(!slot.state.is_commit_ready());
+    }
+
+    #[test]
+    fn independent_slots_on_one_node_are_selected_and_reported_separately() {
+        let doc = parse_lossless("func$ Pay?: ...\n").document;
+        let plan = plan_materialization(&doc, "exact-slots");
+        assert_eq!(plan.selection.slots.len(), 1);
+        let selected = &plan.selection.slots[0];
+        assert_eq!(selected.state, Commitment::Locked);
+        assert!(plan.excluded_unlocked.iter().any(|slot| {
+            slot.node == selected.node
+                && slot.slot != selected.slot
+                && slot.state == Commitment::Question
+        }));
+        assert_eq!(plan.evidence[0].slot, selected.slot);
+        assert_eq!(plan.evidence[0].locator, selected.locator);
     }
 }

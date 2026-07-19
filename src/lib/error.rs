@@ -373,6 +373,70 @@ impl ParseError {
     }
 }
 
+/// Add author-facing guidance for action lines that collide with structural
+/// keywords or punctuation. This preserves the grammar and the stable E0010
+/// code while making the parser's recovery intent explicit.
+pub(crate) fn enrich_action_syntax_errors(source: &str, errors: &mut [ParseError]) {
+    let lines = source.lines().collect::<Vec<_>>();
+    for error in errors
+        .iter_mut()
+        .filter(|error| error.code == ErrorCode::E0010)
+    {
+        let Some(line) = error.line.checked_sub(1).and_then(|line| lines.get(line)) else {
+            continue;
+        };
+        let text = line.trim();
+        if text.is_empty() || text.starts_with("//") {
+            continue;
+        }
+
+        let starts_with_structural = [
+            "error",
+            "desc",
+            "if",
+            "else",
+            "for",
+            "while",
+            "parasteps",
+            "on",
+        ]
+        .iter()
+        .any(|keyword| {
+            text == *keyword
+                || text
+                    .strip_prefix(keyword)
+                    .is_some_and(|tail| tail.starts_with(|ch: char| !is_ident_continue(ch)))
+        });
+        let embedded_keyword = text
+            .split_whitespace()
+            .skip(1)
+            .any(|word| matches!(word, "on" | "desc"));
+        let hyphenated_prose = text.contains('-') && !text.contains("->");
+        if !starts_with_structural && !embedded_keyword && !hyphenated_prose {
+            continue;
+        }
+
+        let reason = if text.starts_with("error") && !text.starts_with("error \"") {
+            "`error` at the start of a step is structural and requires a quoted message"
+        } else if embedded_keyword {
+            "`on` and `desc` inside an action line are structural step clauses"
+        } else if hyphenated_prose {
+            "a hyphen in an unquoted action is parsed as an operator, not prose"
+        } else {
+            "the first word is a structural step keyword, not an unquoted action label"
+        };
+        let escaped = text.replace('\\', "\\\\").replace('"', "\\\"");
+        error.help = Some(format!(
+            "{reason}; quote the whole action label or use `desc \"...\"` for natural language"
+        ));
+        error.suggestion = Some(format!("desc \"{escaped}\""));
+    }
+}
+
+fn is_ident_continue(ch: char) -> bool {
+    ch.is_alphanumeric() || ch == '_'
+}
+
 impl std::fmt::Display for ParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(

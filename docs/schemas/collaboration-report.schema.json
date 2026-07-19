@@ -31,6 +31,7 @@
       "type": "array",
       "items": { "$ref": "#/$defs/queueItem" }
     },
+    "queue_tree": { "$ref": "#/$defs/queueTree" },
     "diagnostics": {
       "type": "array",
       "items": { "$ref": "#/$defs/diagnostic" }
@@ -41,6 +42,41 @@
   },
   "additionalProperties": true,
   "$defs": {
+    "queueTree": {
+      "type": "object",
+      "required": ["root"],
+      "properties": { "root": { "$ref": "#/$defs/queueScope" } },
+      "additionalProperties": false
+    },
+    "queueScope": {
+      "type": "object",
+      "required": ["scope_path", "header", "node", "span", "decision_count", "delegation_count", "children", "items"],
+      "properties": {
+        "scope_path": { "type": "array", "items": { "type": "string" } },
+        "header": { "type": "string" },
+        "node": { "type": ["integer", "null"], "minimum": 0 },
+        "span": {
+          "oneOf": [
+            { "$ref": "#/$defs/byteSpan" },
+            { "type": "null" }
+          ]
+        },
+        "decision_count": { "type": "integer", "minimum": 0 },
+        "delegation_count": { "type": "integer", "minimum": 0 },
+        "children": { "type": "array", "items": { "$ref": "#/$defs/queueScope" } },
+        "items": { "type": "array", "items": { "$ref": "#/$defs/queueItem" } }
+      },
+      "additionalProperties": false
+    },
+    "byteSpan": {
+      "type": "object",
+      "required": ["start", "end"],
+      "properties": {
+        "start": { "type": "integer", "minimum": 0 },
+        "end": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
     "queueItem": {
       "type": "object",
       "required": ["slot", "node", "state", "anchor", "footprint", "header", "span"],
@@ -72,15 +108,7 @@
           ]
         },
         "header": { "type": "string" },
-        "span": {
-          "type": "object",
-          "required": ["start", "end"],
-          "properties": {
-            "start": { "type": "integer", "minimum": 0 },
-            "end": { "type": "integer", "minimum": 0 }
-          },
-          "additionalProperties": false
-        },
+        "span": { "$ref": "#/$defs/byteSpan" },
         "review_target": { "type": "string" }
       },
       "additionalProperties": true

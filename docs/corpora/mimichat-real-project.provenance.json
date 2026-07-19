@@ -1,0 +1,27 @@
+{
+  "schema_version": "mimispec.provenance/0.1",
+  "mms": {
+    "path": "mimispec/mimispec/docs/corpora/mimichat-real-project.mms",
+    "revision_sha256": "f15f968939aac1395f68f81b12acae5f649478e09c198923e72b3148d8a247de"
+  },
+  "source": {
+    "language": "mimi",
+    "path": "mimi/mimi/projects/mimichat/src/main.mimi",
+    "revision_sha256": "2e9d40ce570e7134ef621e5003f3cbe2b2c1a63258c38b32a838c4895a3b1a75"
+  },
+  "links": [
+    {
+      "source_symbol": "main",
+      "slot": {
+        "scope_path": [],
+        "node_kind": "desc",
+        "anchor_kind": "keyword",
+        "footprint": "entitykind",
+        "owner_slot_ordinal": 0,
+        "protected_sha256": "84cb3b3507de89d85866a172aa387056146c2a9a20efec2e84d9922584a8f0e5"
+      },
+      "relation": "observed_from",
+      "note": "The chat-system overview is traceable to the MIMI source without changing its review commitment."
+    }
+  ]
+}

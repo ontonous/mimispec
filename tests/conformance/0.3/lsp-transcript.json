@@ -29,10 +29,22 @@
     {
       "jsonrpc": "2.0",
       "id": 3,
+      "method": "mimispec/prepareQueueBatch",
+      "params": {
+        "uri": "file:///conformance.mms",
+        "base_version": 1,
+        "actor": "human",
+        "slot_ids": [0],
+        "target": "?"
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 4,
       "method": "textDocument/semanticTokens/full",
       "params": { "textDocument": { "uri": "file:///conformance.mms" } }
     },
-    { "jsonrpc": "2.0", "id": 4, "method": "shutdown", "params": null },
+    { "jsonrpc": "2.0", "id": 5, "method": "shutdown", "params": null },
     { "jsonrpc": "2.0", "method": "exit", "params": null }
   ],
   "expectations": [
@@ -40,7 +52,10 @@
     { "id": 1, "pointer": "/result/mimispec/schemaVersion", "equals": "mimispec.ls/0.3" },
     { "id": 2, "pointer": "/result/schema_version", "equals": "mimispec.ls/0.3" },
     { "id": 2, "pointer": "/result/delegation_queue/0/state", "equals": "??" },
-    { "id": 3, "pointer": "/result/data/8", "equals": 14 },
+    { "id": 2, "pointer": "/result/queue_tree/root/delegation_count", "equals": 1 },
+    { "id": 3, "pointer": "/result/accepted", "equals": true },
+    { "id": 3, "pointer": "/result/workspace_edit/changes/file:~1~1~1conformance.mms/0/newText", "equals": "?" },
+    { "id": 4, "pointer": "/result/data/8", "equals": 14 },
     { "method": "textDocument/publishDiagnostics", "pointer": "/params/uri", "equals": "file:///conformance.mms" }
   ]
 }

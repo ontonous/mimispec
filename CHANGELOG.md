@@ -117,13 +117,51 @@
   fixture. Each is gated by `corpus_acceptance_tests` in
   `src/lib/mod.rs`, which asserts clean parse, Complete status, round-trip
   AST equivalence, and 0.3 schema version on every corpus.
+- Added real-project `mimi-kv` and `mimichat` MMS transcriptions plus an
+  end-to-end usability report covering parser/lossless results, review-queue
+  scaling, authoring friction, provenance, and deferred Mimi Profile gaps.
 - Added `docs/0.3-usability-report.md`, recording the real-world family-ledger
   trial, its automated contract, and the remaining 0.3.4/release gaps.
 - Extended `docs/migration-0.2-to-0.3.md` with a "Tooling and Tests" section
   pointing migrants at the property/fuzz gate, perf baseline, corpus, and
   API-stability documents.
+- Added a revision-local `LosslessDocument` structure index and Tier-2
+  `parent_node`, `child_nodes`, `commitment_slots_for_owner`, and `scope_path`
+  queries; collaboration, diagnostics, queues, and materialization reuse it.
+- Added contextual Action E0010 guidance and Tier-3 `SyntaxQuickFix` values.
+  LSP quick fixes use standard `WorkspaceEdit` and avoid automatic rewrites of
+  transitions, assignments, and structural blocks.
+- Added compatible hierarchical `QueueTree` snapshots, grouped CLI diagnose
+  output with `--flat-queues`, a VS Code queue tree, and Human-only atomic
+  `mimispec/prepareQueueBatch` transactions for exact current suffix slots.
+- Added optional finite-capacity LRU behavior to `ImportCache` via
+  `with_capacity`, plus `len`, `is_empty`, and `clear`; the default remains
+  unlimited and mtime-aware.
+- Added experimental Core-external `mimispec.provenance/0.1` sidecars,
+  SHA-256/`SlotLocator` drift checks, path confinement under `--source-root`,
+  and real `mimi-kv`/`mimichat` provenance fixtures. No target command is run
+  and provenance never changes commitment.
+- Refactored experimental Materialize/Profile/Evidence selection to exact
+  `CommitmentSlotId + SlotLocator` values. Only exact `$`/`$$` slots are
+  selected; open residual slots on the same node remain explicit.
 
 ### Fixed
+- Fixed `DocumentSession::observe_edits` reparsing after every LSP change; a
+  batch now applies sequential UTF-16 changes to text/LineIndex and parses once.
+- Fixed intent-gap diagnostics skipping nested Contexts and matching duplicate
+  names by substring. Complete documents now use source-order kind/scope
+  correspondence and conservative boundary-action hints; Partial documents
+  skip heuristics.
+- Fixed the Flow intent-gap heuristic treating a `Kicked`/`踢出` transition as
+  if no forced-removal failure path existed.
+- Fixed experimental materialization drift checks reusing revision-local node
+  IDs after Fragment reorder and comparing unrelated locked slots.
+- Fixed frozen language-service custom requests silently defaulting omitted
+  `base_version`, `authorization`, and `unlock_tokens`; malformed or missing
+  required fields now return `C-INVALID-EDIT` before policy evaluation.
+- Fixed document-level patch validation allowing AI to self-delegate a newly
+  created semantic slot with `??`; every fresh non-empty state now passes the
+  same `none -> state` transition matrix as an existing slot.
 - Fixed multiple direct descriptions and repeated clauses being ignored,
   reclassified, or silently overwritten.
 - Fixed root clauses degrading into Action Steps.

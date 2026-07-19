@@ -89,7 +89,8 @@ mimispec path/to/file.mms --ast           # dump AST
 mimispec path/to/file.mms --json          # JSON output (for IDE)
 mimispec path/to/file.mms --render        # render back to source
 mimispec path/to/file.mms --latex         # render math to LaTeX
-mimispec diagnose path/to/file.mms        # decision/delegation queues + intent diagnostics
+mimispec diagnose path/to/file.mms        # scope-grouped queues + intent diagnostics
+mimispec diagnose --flat-queues path/to/file.mms  # compatible flat queue view
 mimispec path/to/file.mms --diagnostics   # same as diagnose
 mimispec materialize path/to/file.mms --scope payments-v1  # provisional confirmed-slot plan
 mimispec profile path/to/file.mms --target mimi --scope payments-v1
@@ -98,6 +99,7 @@ mimispec workflow path/to/file.mms --scope payments-v1
 mimispec lsp --stdio                       # long-lived LSP 3.17 server
 mimispec conformance check                # verify mimispec.conformance/0.3
 mimispec usability check                  # report independent RC trial progress
+mimispec provenance check sidecar.json --source-root /project  # experimental hash/locator audit
 echo "func Hello: steps:\n    say hi" | mimispec - --ast  # stdin
 mimispec *.mms --json                     # multiple files
 ```
@@ -105,7 +107,7 @@ mimispec *.mms --json                     # multiple files
 > Note: the current crates.io release is still `0.2.1`. Lossless parsing,
 > collaboration validation, and `diagnose` are under development on `main` for
 > the `0.3.x` series and are not yet a published release contract. The
-> main-only `materialize`, `profile`, and `workflow` commands are provisional
+> main-only `materialize`, `profile`, `provenance`, and `workflow` commands are provisional
 > research surfaces outside the 0.3 Core-language roadmap.
 
 ### Library Usage

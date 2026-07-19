@@ -197,6 +197,11 @@ explicitly open descendant slot authorizes local elaboration.
 AI may recommend other transitions, but recommendations do not change the
 source state until a human authorizes them.
 
+A newly created semantic slot is validated as a transition from `none` too.
+Therefore AI may create a fresh `?` review slot, but it may not create a fresh
+`??` delegation or any lock-family state merely because that slot had no prior
+revision identity.
+
 ### 7.2 AI-Forbidden Transitions
 
 AI must not perform:
@@ -389,6 +394,13 @@ Tools should derive work queues from this distribution:
 - Delegation Queue: `??`, `$??`, `$$??`;
 - Confirmed Intent view: `$`, `$$`;
 - Challenge Queue: AI-originated `$ -> $?` and `$$ -> $$?`.
+
+Flat queues are the compatibility view. Tools may derive a source-ordered
+scope tree, but every exact semantic slot must occur once and parent summaries
+must not rewrite child state. A Human batch operation may resolve current
+review/delegation slots to `none`, `?`, or `$` only after validating the whole
+suffix-only candidate atomically. AI batches, `$$` targets, strong-lock
+weakening, stale/unknown IDs, and partial success are forbidden.
 
 The document evolves through local transitions. A product-level Draft, Review,
 or Release label is only a summary, not the language state itself.

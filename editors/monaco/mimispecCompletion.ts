@@ -52,14 +52,14 @@ const SNIPPETS: Record<string, { label: string; detail: string; insertText: stri
   func: {
     label: 'func',
     detail: '函数模板',
-    insertText: 'func ${1:name}(${2:params}):\n    requires: ${3:condition}\n    ensures: ${4:result}\n    steps:\n        ${5:action} >>> done',
-    documentation: '完整函数模板：参数、前置条件、后置条件、执行步骤',
+    insertText: 'func ${1:name}(${2:params}):\n    requires: ${3:condition}\n    ensures: ${4:result}\n    steps:\n        "${5:action}" >>> done',
+    documentation: '完整函数模板；包含空格、连字符或 on/desc/error 等结构词的动作标签应整体加引号',
   },
   funcSimple: {
     label: 'func (simple)',
     detail: '简单函数',
-    insertText: 'func ${1:name}:\n    steps:\n        ${2:action} >>> done',
-    documentation: '无参函数模板',
+    insertText: 'func ${1:name}:\n    steps:\n        "${2:action}" >>> done',
+    documentation: '无参函数模板；自由动作标签默认加引号，避免与结构关键字冲突',
   },
   type: {
     label: 'type (enum)',
@@ -100,8 +100,20 @@ const SNIPPETS: Record<string, { label: string; detail: string; insertText: stri
   steps: {
     label: 'steps',
     detail: '步骤块',
-    insertText: 'steps:\n    ${1:action} >>> done',
-    documentation: '函数执行步骤块',
+    insertText: 'steps:\n    "${1:action}" >>> done',
+    documentation: '函数执行步骤块；自由文本动作应加引号，或使用 desc "..."',
+  },
+  actionQuoted: {
+    label: 'action (quoted)',
+    detail: '安全的动作标签',
+    insertText: '"${1:动作标签}"',
+    documentation: '将动作标签整体加引号；适合包含连字符、on、desc、error 等结构词的文本',
+  },
+  actionDesc: {
+    label: 'action (natural language desc)',
+    detail: '自然语言步骤',
+    insertText: 'desc "${1:自然语言步骤}"',
+    documentation: '用 desc 明确表达自然语言步骤，不会被解释为控制块或赋值',
   },
   parasteps: {
     label: 'parasteps',
@@ -206,7 +218,7 @@ export function createMimiSpecCompletionProvider(monacoInstance: typeof monaco):
 
       for (const [key, snippet] of Object.entries(SNIPPETS)) {
         if (context === 'root' && key !== 'importDirective') continue;
-        if (context === 'steps' && !['if', 'for', 'while', 'on', 'steps', 'parasteps', 'desc'].includes(key)) continue;
+        if (context === 'steps' && !['if', 'for', 'while', 'on', 'steps', 'parasteps', 'desc', 'actionQuoted', 'actionDesc'].includes(key)) continue;
         if (context === 'func' && !['func', 'funcSimple', 'requires', 'ensures', 'math', 'steps', 'desc'].includes(key)) continue;
         if (context === 'type' && !['type', 'typeRecord', 'rule', 'math'].includes(key)) continue;
         if (context === 'flow' && !['flow', 'flowAnonymous', 'flowState', 'rule', 'desc', 'requires', 'ensures'].includes(key)) continue;

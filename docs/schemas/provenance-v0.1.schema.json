@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mimispec.dev/schemas/provenance-v0.1.schema.json",
+  "title": "Experimental MimiSpec provenance sidecar",
+  "type": "object",
+  "required": ["schema_version", "mms", "source", "links"],
+  "properties": {
+    "schema_version": { "const": "mimispec.provenance/0.1" },
+    "mms": { "$ref": "#/$defs/artifact" },
+    "source": {
+      "allOf": [
+        { "$ref": "#/$defs/artifact" },
+        {
+          "type": "object",
+          "required": ["language"],
+          "properties": { "language": { "type": "string", "minLength": 1 } }
+        }
+      ]
+    },
+    "links": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/link" }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "required": ["path", "revision_sha256"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "revision_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "span": {
+      "type": "object",
+      "required": ["start", "end"],
+      "properties": {
+        "start": { "type": "integer", "minimum": 0 },
+        "end": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "locator": {
+      "type": "object",
+      "required": ["scope_path", "node_kind", "anchor_kind", "footprint", "owner_slot_ordinal", "protected_sha256"],
+      "properties": {
+        "scope_path": { "type": "array", "items": { "type": "string" } },
+        "node_kind": { "type": "string", "minLength": 1 },
+        "anchor_kind": { "type": "string", "minLength": 1 },
+        "footprint": { "type": "string", "minLength": 1 },
+        "owner_slot_ordinal": { "type": "integer", "minimum": 0 },
+        "protected_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      },
+      "additionalProperties": false
+    },
+    "link": {
+      "type": "object",
+      "required": ["slot", "relation", "note"],
+      "properties": {
+        "source_symbol": { "type": "string" },
+        "source_span": { "$ref": "#/$defs/span" },
+        "slot": { "$ref": "#/$defs/locator" },
+        "relation": { "enum": ["observed_from", "inferred_from", "confirmed_against"] },
+        "note": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

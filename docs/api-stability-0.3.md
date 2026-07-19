@@ -104,12 +104,16 @@ and migration note.
 These modules expose public types whose *names and field shapes* are stable
 for 0.3.x, but whose internal algorithms and helper methods may evolve:
 
-- `resolver::Resolver`, `cache::IncrementalCache`, `symbol::SymbolTable`,
+- `resolver::Resolver`, `cache::ImportCache`, `symbol::SymbolTable`,
   `query::FileQuery` / `FragmentIter` — the cross-file resolution and query
-  API. Field shapes are frozen; cache eviction policy is not yet specified
-  (see "Known Gaps" in `AGENTS.md`).
+  API. `ImportCache::new()` remains unlimited; additive `with_capacity`,
+  `len`, `is_empty`, and `clear` provide optional LRU-bounded operation while
+  preserving `get(&self)` and mtime validation.
 - `lossless::Document` — the source-preserving document. Public methods
   listed in `src/lib/lossless.rs` are frozen; new methods may be added.
+  `parent_node`, `child_nodes`, `commitment_slots_for_owner`, and `scope_path`
+  expose its revision-local shared structure index. `SourceNodeId` values and
+  returned scope paths must never be persisted across revisions.
 - `collaboration::validate_document_patch` / `validate_ai_document_patch` and the
   `CommitmentSlotId` / `LockChallenge` types — the patch validator contract
   is frozen; internal heuristics may improve.
@@ -130,6 +134,9 @@ from the 0.3 Core freeze:
   the frozen wire protocol, but the Rust representation may evolve.
 - `diagnostics` — intent conflict/gap heuristics. Diagnostic *categories*
   are documented in `docs/0.3.x-design-zh.md`; their Rust types may evolve.
+- `provenance` — Core-external `mimispec.provenance/0.1` sidecars and
+  `SlotLocator`. This protocol remains experimental and cannot alter Core
+  commitment or count as target verification.
 
 ## 2. What Counts as a Breaking Change
 
@@ -157,7 +164,7 @@ The following are **not** breaking changes within 0.3.x:
 
 The frozen API surface is exercised by:
 
-- `cargo test --lib` — all 206 tests, including `property_tests` and
+- `cargo test --lib` — all 233 tests, including `property_tests` and
   `multilingual_tests` which assert round-trip, JSON schema version, and
   Unicode-content invariants.
 - `cargo test --release stress_tests` — large-file slot-linearity guard.

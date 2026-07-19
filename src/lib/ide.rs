@@ -2,7 +2,7 @@ use serde::Serialize;
 
 use crate::ast::Commitment;
 use crate::collaboration::{validate_transition, Actor, TransitionEffects, TransitionRequest};
-use crate::diagnostics::{analyze_document, DocumentDiagnostics, QueueItem};
+use crate::diagnostics::{analyze_document, DocumentDiagnostics, QueueItem, QueueTree};
 use crate::error::ParseError;
 use crate::lossless::{
     ByteSpan, ColumnEncoding, CommitmentAnchorKind, CommitmentSlotSyntax, LosslessDocument,
@@ -86,6 +86,8 @@ pub struct IdeSnapshot {
     pub semantic_tokens: Vec<SemanticToken>,
     pub decision_queue: Vec<QueueItem>,
     pub delegation_queue: Vec<QueueItem>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub queue_tree: Option<QueueTree>,
     pub diagnostics: DocumentDiagnostics,
 }
 
@@ -117,6 +119,7 @@ pub fn ide_snapshot(document: &LosslessDocument, errors: &[ParseError]) -> IdeSn
         semantic_tokens: semantic_tokens(document),
         decision_queue: diagnostics.decision_queue.clone(),
         delegation_queue: diagnostics.delegation_queue.clone(),
+        queue_tree: Some(diagnostics.queue_tree.clone()),
         diagnostics,
     }
 }

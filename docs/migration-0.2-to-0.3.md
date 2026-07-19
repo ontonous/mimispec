@@ -195,7 +195,7 @@ exact indentation, or source spelling must remain unchanged.
 The consolidated 0.3.0 M5 milestone provides a stabilization toolchain that
 migration consumers can rely on before the independent RC trial completes:
 
-- `cargo test --lib` — 206 tests, including the families below.
+- `cargo test --lib` — 233 tests, including the families below.
 - `cargo test --release stress_tests` — large-file slot-linearity guard.
 - `cargo test --release property_tests` — seven seed-deterministic
   property/fuzz invariants: idempotent render, render determinism, AST JSON
@@ -205,7 +205,7 @@ migration consumers can rely on before the independent RC trial completes:
 - `cargo run --release --example perf_baseline` — measures parse/render/
   lossless timings for 500/1000/2000-func modules. Published budget numbers
   live in `docs/roadmap-0.3.x.md` §10.
-- `docs/corpora/` — eight cross-domain acceptance corpora
+- `docs/corpora/` — ten technical acceptance corpora
   (`corpus_acceptance_tests` in `src/lib/mod.rs`):
   - `plain-product-intent.mms` — five-minute entry, no named wrapper;
   - `state-transitions.mms` — anonymous/named Flow, event labels, open-world;
@@ -216,7 +216,11 @@ migration consumers can rely on before the independent RC trial completes:
   - `multilingual.mms` — Simplified/Traditional Chinese, Japanese, Korean,
     Arabic, Cyrillic, emoji+Latin;
   - `real-world-family-ledger.mms` — cohesive product intent, data, Flow,
-    functions, UI, lossless preservation, diagnostics, and JSON usability.
+    functions, UI, lossless preservation, diagnostics, and JSON usability;
+  - `mimi-kv-real-project.mms` — reverse transcription of a TCP/JSON key-value
+    server and client from the sibling MIMI checkout;
+  - `mimichat-real-project.mms` — reverse transcription of a 2,014-line
+    Actor/concurrency/chat project, including unresolved production questions.
 - `docs/api-stability-0.3.md` — the Tier 1/2/3 public API freeze. Tier 1
   (parser entry points, result types, AST shape, `AST_SCHEMA_VERSION`, and
   `ErrorCode` assignments) is frozen for the remainder of 0.3.x.
